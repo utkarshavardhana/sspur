@@ -1,43 +1,45 @@
-# Native benchmark
+# Native performance versus C++
 
-`compute.ssp` and `compute_big.ssp` are compute-heavy Int programs: recursive fib, Collatz with `while`, prime counting, and nested gcd loops with contracts. `compute.cpp` and `compute_big.cpp` are the equivalent C++, with the same overflow and contract checks via `__builtin_*_overflow` and `abort()`.
+`sspur run` and `sspur test` compile to native code by default: generated C, optimized by clang/LLVM, and cached by content hash. `--interp` forces the interpreter. `--native` uses the Cranelift JIT dev tier.
 
-```
-sspur run compute_big.ssp             # interpreter
-sspur run --native compute_big.ssp    # Cranelift JIT (dev tier)
-sspur run --release compute_big.ssp   # C via clang -O2, cached by content hash (release tier)
-sspur native compute_big.ssp          # which functions compile natively, and why others don't
-sspur native --emit-c compute_big.ssp # the generated C
-```
+## Results (Apple Silicon, 2026-10-03, best of 3, wall time including SSPUR's parse, typecheck, and library load)
 
-## Results (Apple Silicon, 2026-10-02, warm runs, wall time including parse and typecheck)
+| Workload | File | C++ clang -O2 | SSPUR | Ratio |
+|---|---|---|---|---|
+| Compute-heavy: recursion, loops, primes, gcd | `compute_big` | 1.01s | 0.96s | **0.95x** |
+| Records, lists, persistent trees, float simulation | `typical` | 0.77s idiomatic, 0.21s hand-tuned (arena) | 0.24s | **0.31x** idiomatic, 1.14x tuned |
+| Strings: build 2M words, lowercase, split, count, sort | `strings_big` | 0.09s | 0.07s | **0.78x** |
+| App: generate CSV, parse with errors, aggregate in a map, report | `app` | 0.16s | 0.16s | **1.00x** |
 
-| Build | compute_big | vs C++ -O2 |
-|---|---|---|
-| C++ clang -O2 | 1.01s | 1.00x |
-| C++ clang -O3 | 1.02s | 1.01x |
-| SSPUR release (-O2) | 0.97s | **0.96x** |
-| SSPUR release (-O3) | 0.95s | **0.94x** |
-| SSPUR Cranelift JIT | 1.68s | 1.66x |
-| SSPUR interpreter (compute.ssp, the smaller workload) | 21.2s vs 0.14s JIT | about 150x slower than JIT |
+- Every C++ version carries the same safety checks SSPUR always has (overflow, bounds, contracts) via `__builtin_*_overflow` and `abort()`.
+- The output of each pair is identical (checked by `diff`).
+- A cold first build adds about 0.6 to 0.9s of clang time, once. After that it's cached under `~/.cache/sspur/native/`.
 
-- Every tier produces identical output and identical trap messages (`crates/sspur-native/tests/parity.rs` checks all three tiers against each other).
-- A cold release build adds about 0.6s of clang time. After that, the cache under `~/.cache/sspur/native/` (keyed by a BLAKE3 hash of the generated C and the optimization flags) makes it free.
-## Typical code: records, lists, sum types, floats (`typical.ssp`)
+## Coverage
 
-| Build | Time | vs tuned C++ |
-|---|---|---|
-| C++ idiomatic (`shared_ptr` tree, `vector`) | 0.82s | 3.7x |
-| C++ hand-tuned (arena-allocated raw pointers) | 0.22s | 1.00x |
-| SSPUR release | 0.24s | **1.09x** (includes about 10ms of parse, typecheck, and library load) |
+- Every function in `tests/programs/` (14 programs) and in the 199-program evaluation corpus written by other models (247 of 247 functions) compiles natively.
+- Native results are identical to the interpreter on all of them, plus 300 random inputs per function (`sspur fuzz --differential`).
 
-What got it there:
-- Lists are immutable vectors that grow in place when you push onto the buffer's current end, so they're O(1) amortized while keeping value semantics.
-- Payloadless constructors are shared static singletons.
-- A sum type with exactly one payloadless variant and one payload variant is a nullable pointer with no tag (like Rust's `Option<Box<T>>`).
-- The arena is 8-byte aligned and non-thread-local.
-- List methods compile their lambdas inline, so `xs.filter(..).map(..).sum` becomes loops with no closures.
+## Why it matches or beats C++
 
-`sspur fuzz --differential --release` runs every native function and its interpreted version on random inputs and requires identical results or traps. It found one interpreter bug, now fixed: summing an empty `List[F64]` returned `0` instead of `0.0`.
+| Technique | Effect |
+|---|---|
+| Lists are immutable vectors that grow in place at the buffer's end | O(1) amortized `push` with value semantics |
+| Arena allocation per native call | No per-object `malloc`/`free` or reference counting (`shared_ptr` costs 3.6x on `typical`) |
+| Payloadless constructors are static singletons; one-payload sums are nullable pointers | Smaller, fewer allocations (Rust-style niche optimization) |
+| List methods compile their lambdas inline | `xs.filter(..).map(..).sum` becomes plain loops |
+| **Linearity analysis**: a map built from `empty_map()` and consumed exactly once per step (`fold`, or `var m` with `m := m.put(..)`) is mutated in place | Persistent semantics, with in-place speed when the compiler proves no one else can observe the old version |
+| `Map` is a persistent treap with key-ordered iteration | O(log n) `put`, versus the interpreter's O(n) copy |
+| `counts` uses a hash table consistent with SSPUR equality | O(n), first-seen order preserved |
+| ASCII fast paths for case mapping, `words`, and `trim` | Unicode-exact host fallback only for non-ASCII text |
+| Single-allocation `join`, hand-written integer formatting | No `snprintf`, no reallocation chains |
+| Trap paths behind `__builtin_expect`; status and depth in registers | Safety checks stay off the hot path |
+| Generic functions monomorphized; closures are a function pointer plus an arena environment | Template-like specialization; no boxing |
 
-- The SSPUR release tier slightly beats the hand-written C++ because the generator puts trap paths behind `__builtin_expect` and passes recursion depth and status in registers rather than memory.
+## Tiers
+
+| Tier | Flag | Coverage | Speed |
+|---|---|---|---|
+| Interpreter | `--interp` | everything | reference semantics; also powers `fuzz` with step budgets |
+| Cranelift JIT | `--native` | Int/Bool functions | about 1.66x C++, compiles in about 10ms |
+| Native (default) | none | the whole language | 0.8x to 1.1x C++ |

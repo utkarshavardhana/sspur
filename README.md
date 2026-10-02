@@ -8,6 +8,7 @@ SSPUR is not text. A program is a typed, content-addressed graph of definitions.
 
 - **Phase 1 (design):** done.
 - **Phase 2 (compiler core):** done. Models that only read the spec score 30/30 (Opus) and 25/30 (Haiku) on held-out tasks.
+- **Phase 4 (native):** programs compile to native code by default, from 0.78x to 1.0x of C++ runtime on compute, string, and app benchmarks (`bench/native/`).
 - **Phase 3 (agent loop):** mostly done. Content-addressed codebase, atomic typechecked transactions, a query API with context packs, an MCP server, and contract-driven fuzzing all work.
 
 ## Quick start

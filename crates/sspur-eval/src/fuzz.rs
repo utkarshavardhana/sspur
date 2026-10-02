@@ -222,9 +222,9 @@ impl Interp {
             "Bool" => Value::Bool(rng.chance(50)),
             "Unit" => Value::Unit,
             "Str" => {
-                const CHARS: &[u8] = b"abcxyz AZ09-_.,";
+                const CHARS: &[char] = &['a', 'b', 'c', 'x', 'y', 'z', ' ', 'A', 'Z', '0', '9', '-', '_', '.', ',', 'é', 'ß', '"', '\\', '\n', '日'];
                 let len = if rng.chance(15) { 0 } else { rng.below(9) };
-                Value::str(&(0..len).map(|_| CHARS[rng.below(CHARS.len() as u64) as usize] as char).collect::<String>())
+                Value::str(&(0..len).map(|_| CHARS[rng.below(CHARS.len() as u64) as usize]).collect::<String>())
             }
             "List" => {
                 let len = if deep { 0 } else { rng.below(7) };

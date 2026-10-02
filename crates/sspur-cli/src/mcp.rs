@@ -1,4 +1,4 @@
-use crate::{interp, REFERENCE};
+use crate::{default_interp, interp, REFERENCE};
 use serde_json::{json, Value as Json};
 use sspur_eval::fuzz::Options;
 use sspur_store::{query::Ctx, Store, Tx};
@@ -53,12 +53,12 @@ fn call(store: &Store, name: &str, a: &Json) -> (String, bool) {
         "sspur_export" => (loaded.src.clone(), false),
         _ if loaded.check.has_errors() => (serde_json::to_string(&loaded.check.diags).unwrap(), true),
         "sspur_test" => {
-            let results: Vec<Json> = interp(&loaded).run_tests().into_iter().map(|(n, r)| json!({"test": n, "ok": r.is_ok(), "error": r.err()})).collect();
+            let results: Vec<Json> = default_interp(&loaded).run_tests().into_iter().map(|(n, r)| json!({"test": n, "ok": r.is_ok(), "error": r.err()})).collect();
             let failed = results.iter().any(|r| r["ok"] == false);
             (serde_json::to_string(&results).unwrap(), failed)
         }
         "sspur_run" => {
-            let it = interp(&loaded);
+            let it = default_interp(&loaded);
             *it.output.borrow_mut() = Some(vec![]);
             let r = it.run_main();
             let out = it.output.borrow_mut().take().unwrap_or_default();

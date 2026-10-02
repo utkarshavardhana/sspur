@@ -1171,7 +1171,10 @@ impl Parser {
                 rest = &rest[i + close + 1..];
                 continue;
             };
-            reset_spans(&mut e, span);
+            let base = span.start + 2 + (s.len() - rest.len() + i) as u32;
+            crate::visit::walk_expr_mut(&mut e, &mut |x| {
+                x.span = Span { start: x.span.start + base, end: x.span.end + base };
+            });
             if !lit.is_empty() {
                 parts.push(StrPart::Lit(std::mem::take(&mut lit)));
             }
@@ -1207,6 +1210,3 @@ pub fn has_placeholder(e: &Expr) -> bool {
     found
 }
 
-fn reset_spans(e: &mut Expr, span: Span) {
-    crate::visit::walk_expr_mut(e, &mut |x| x.span = span);
-}

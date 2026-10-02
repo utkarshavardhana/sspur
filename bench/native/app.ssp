@@ -1,0 +1,35 @@
+type Sale = {region: Str, product: Str, qty: Int, cents: Int}
+type Stat = {orders: Int, units: Int, revenue: Int}
+type ParseErr = BadLine{line: Str}
+
+fn gen(n: Int) -> Str
+= do
+  regions = ["north", "south", "east", "west", "central"]
+  products = ["apple", "pear", "fig", "kiwi", "plum", "lime", "date"]
+  var lines = []
+  for i in 0..n
+    lines := lines.push("{regions[i % 5]},{products[(i * 7) % 7 + 0]}-{i % 13},{i % 9 + 1},{(i * 37) % 1000 + 99}")
+  lines.join("\n")
+
+fn parse(line: Str) -> Sale ! fail[ParseErr]
+= do
+  parts = line.split(",")
+  if parts.len != 4 then raise BadLine{line}
+  qty = parts[2].to_int.ok_or(BadLine{line})
+  cents = parts[3].to_int.ok_or(BadLine{line})
+  {region: parts[0], product: parts[1], qty, cents}
+
+fn add(m: Map[Str, Stat], s: Sale) -> Map[Str, Stat]
+= do
+  key = "{s.region}/{s.product}"
+  old = m.get(key).or({orders: 0, units: 0, revenue: 0})
+  m.put(key, {orders: old.orders + 1, units: old.units + s.qty, revenue: old.revenue + s.qty * s.cents})
+
+fn report(text: Str) -> Str ! fail[ParseErr]
+= do
+  stats = text.split("\n").map(parse).fold(empty_map(), add)
+  top = stats.items.sort_by((-_.1.revenue, _.0)).take(3)
+  top.map(p => "{p.0}: {p.1.orders} orders, {p.1.units} units, ${p.1.revenue / 100}").join("\n")
+
+fn main() -> Unit ! log, fail[ParseErr]
+= log(report(gen(400000)))

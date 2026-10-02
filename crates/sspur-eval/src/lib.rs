@@ -204,12 +204,21 @@ impl Interp {
                 }
             if n.has(&f.name)
                 && let Some(nargs) = args.iter().map(to_nval).collect::<Option<Vec<_>>>()
-                && let Some(r) = n.call_rich(&f.name, &nargs)
             {
-                return match r {
-                    Ok(v) => Ok(from_nval(v)),
-                    Err(msg) => trap(msg),
-                };
+                fn emit_hook(ctx: *const (), s: &str) {
+                    let it = unsafe { &*(ctx as *const Interp) };
+                    it.emit(s.to_string());
+                }
+                sspur_native::set_log_hook(Some((emit_hook, self as *const Interp as *const ())));
+                let r = n.call_rich(&f.name, &nargs);
+                sspur_native::set_log_hook(None);
+                if let Some(r) = r {
+                    return match r {
+                        Ok(v) => Ok(from_nval(v)),
+                        Err(sspur_native::NativeError::Trap(msg)) => trap(msg),
+                        Err(sspur_native::NativeError::Raise(v)) => Err(Ctrl::Raise(from_nval(v))),
+                    };
+                }
             }
         }
         let globals = self.globals.clone();
@@ -727,6 +736,10 @@ pub fn to_nval(v: &Value) -> Option<sspur_native::nval::NVal> {
         Value::Int(n) => NVal::Int(*n),
         Value::Bool(b) => NVal::Bool(*b),
         Value::Float(x) => NVal::Float(*x),
+        Value::Str(s) => NVal::Str(s.to_string()),
+        Value::New(n, x) => NVal::New(n.to_string(), Box::new(to_nval(x)?)),
+        Value::Wrap(k, x) => NVal::Wrap(k.to_string(), Box::new(to_nval(x)?)),
+        Value::Guess(x, c) => NVal::Guess(Box::new(to_nval(x)?), *c),
         Value::Record(n, fs) => NVal::Rec(n.to_string(), nfields(fs)?),
         Value::Variant(n, fs) => NVal::Variant(
             n.to_string(),
@@ -736,6 +749,7 @@ pub fn to_nval(v: &Value) -> Option<sspur_native::nval::NVal> {
             },
         ),
         Value::List(xs) => NVal::List(xs.iter().map(to_nval).collect::<Option<_>>()?),
+        Value::Map(m) => NVal::Map(m.iter().map(|(k, v)| Some((to_nval(k)?, to_nval(v)?))).collect::<Option<_>>()?),
         Value::Tuple(xs) => NVal::Tuple(xs.iter().map(to_nval).collect::<Option<_>>()?),
         Value::Opt(o) => NVal::Opt(match o {
             Some(x) => Some(Box::new(to_nval(x)?)),
@@ -753,9 +767,14 @@ pub fn from_nval(v: sspur_native::nval::NVal) -> Value {
         NVal::Int(n) => Value::Int(n),
         NVal::Bool(b) => Value::Bool(b),
         NVal::Float(x) => Value::Float(x),
+        NVal::Str(s) => Value::str(&s),
+        NVal::New(n, x) => Value::New(n.as_str().into(), Rc::new(from_nval(*x))),
+        NVal::Wrap(k, x) => Value::Wrap(k.as_str().into(), Rc::new(from_nval(*x))),
+        NVal::Guess(x, c) => Value::Guess(Rc::new(from_nval(*x)), c),
         NVal::Rec(n, fs) => Value::Record(n.as_str().into(), fields(fs)),
         NVal::Variant(n, fs) => Value::Variant(n.as_str().into(), fs.map(fields)),
         NVal::List(xs) => Value::list(xs.into_iter().map(from_nval).collect()),
+        NVal::Map(kv) => Value::Map(Rc::new(kv.into_iter().map(|(k, v)| (from_nval(k), from_nval(v))).collect())),
         NVal::Tuple(xs) => Value::Tuple(Rc::new(xs.into_iter().map(from_nval).collect())),
         NVal::Opt(o) => Value::Opt(o.map(|x| Rc::new(from_nval(*x)))),
     }

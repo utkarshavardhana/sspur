@@ -62,3 +62,28 @@ fn integer_overflow_traps_instead_of_wrapping() {
     let results = Interp::new(&m, out.record_types, out.user_methods).run_tests();
     assert_eq!(results[0].1.as_ref().unwrap_err(), "integer overflow");
 }
+
+#[test]
+fn native_release_matches_interpreter_on_every_suite_program() {
+    if std::process::Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    big_stack(|| {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "ssp") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).unwrap();
+            let module = parse(&src).unwrap();
+            let out = check(&module);
+            let interp = Interp::new(&module, out.record_types.clone(), out.user_methods.clone()).run_tests();
+            let mut native = Interp::new(&module, out.record_types.clone(), out.user_methods.clone());
+            let compiled = sspur_native::cgen::compile_release(&module, &out, "-O2").unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert!(compiled.skipped.is_empty(), "{}: not native: {:?}", path.display(), compiled.skipped);
+            native.set_native(compiled);
+            assert_eq!(interp, native.run_tests(), "{}", path.display());
+        }
+    });
+}

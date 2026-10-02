@@ -174,7 +174,7 @@ Notes: `first`, `last`, `get`, `min`, `max`, and `find` return `Opt`. `counts` r
 
 ## CLI and agent tools
 
-`sspur check|run|test|fuzz|hash|fmt [file]`. With no file, these operate on the codebase in `.sspur/`.
+`sspur check|run|test|fuzz|hash|fmt [file]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter.
 
 `sspur fuzz` turns contracts into property tests. It generates inputs that satisfy `pre` and `where`, then reports shrunk counterexamples for any `post` violation or trap.
 

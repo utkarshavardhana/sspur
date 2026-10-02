@@ -17,7 +17,9 @@ const USAGE: &str = "usage:
   sspur apply [tx.json|-]               apply a transaction of ops
   sspur q <query> [target] [--budget N] query the codebase (list sig body callers callees effects find pack why impact holes diag log)
   sspur log | export | spec | mcp
-  sspur check|run|test|fuzz|hash|fmt [file.ssp] [--json] [--cases N] [--seed N] [--edge] [--write] [--full]";
+  sspur check|run|test|fuzz|hash|fmt|native [file.ssp] [--json] [--cases N] [--seed N] [--edge] [--write] [--full]
+  run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
+  --O3 raises the optimization level; fuzz --differential compares native against the interpreter";
 
 fn main() -> ExitCode {
     std::thread::Builder::new().stack_size(1 << 29).spawn(real_main).unwrap().join().unwrap()
@@ -318,7 +320,10 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
 
 fn native_interp(l: &Loaded, args: &Args) -> Interp {
     let mut it = interp(l);
-    if args.has("--release") {
+    if args.has("--interp") {
+        return it;
+    }
+    if !args.has("--native") {
         let opt = if args.has("--O3") { "-O3" } else { "-O2" };
         match sspur_native::cgen::compile_release(&l.module, &l.check, opt) {
             Ok(c) => {
@@ -326,10 +331,13 @@ fn native_interp(l: &Loaded, args: &Args) -> Interp {
                 it.set_native(c);
                 return it;
             }
-            Err(e) => eprintln!("release build failed, falling back to the Cranelift tier: {e}"),
+            Err(e) => {
+                eprintln!("native build failed, interpreting: {e}");
+                return it;
+            }
         }
     }
-    if args.has("--native") || args.has("--release") {
+    if args.has("--native") {
         match sspur_native::compile(&l.module) {
             Ok(c) => {
                 c.set_max_depth(1_000_000);
@@ -339,6 +347,10 @@ fn native_interp(l: &Loaded, args: &Args) -> Interp {
         }
     }
     it
+}
+
+pub fn default_interp(l: &Loaded) -> Interp {
+    native_interp(l, &Args { pos: vec![], flags: vec![] })
 }
 
 pub fn interp(l: &Loaded) -> Interp {

@@ -8,24 +8,32 @@ pub enum NVal {
     Int(i64),
     Bool(bool),
     Float(f64),
+    Str(String),
     Rec(String, Vec<(String, NVal)>),
     Variant(String, Option<Vec<(String, NVal)>>),
     List(Vec<NVal>),
+    Map(Vec<(NVal, NVal)>),
     Opt(Option<Box<NVal>>),
     Tuple(Vec<NVal>),
+    New(String, Box<NVal>),
+    Wrap(String, Box<NVal>),
+    Guess(Box<NVal>, f64),
 }
 
 #[derive(Clone, Default)]
 pub struct Layouts {
-    pub records: HashMap<String, (Vec<String>, Vec<(String, Type)>)>,
-    pub sums: HashMap<String, (Vec<String>, Vec<(String, Option<Vec<(String, Type)>>)>)>,
+    pub records: sspur_check::RecordTable,
+    pub sums: sspur_check::SumTable,
+    pub newtypes: HashMap<String, Type>,
 }
 
 impl Layouts {
     pub fn from_check(c: &CheckOutput) -> Self {
-        Layouts { records: c.records.clone(), sums: c.sums.clone() }
+        Layouts { records: c.records.clone(), sums: c.sums.clone(), newtypes: c.newtypes.clone() }
     }
 }
+
+pub type Variants = Vec<(String, Option<Vec<(String, Type)>>)>;
 
 pub fn subst(t: &Type, params: &[String], args: &[Type]) -> Type {
     match t {
@@ -42,7 +50,7 @@ impl Layouts {
         Some(fs.iter().map(|(n, t)| (n.clone(), subst(t, ps, args))).collect())
     }
 
-    pub fn sum_variants(&self, name: &str, args: &[Type]) -> Option<Vec<(String, Option<Vec<(String, Type)>>)>> {
+    pub fn sum_variants(&self, name: &str, args: &[Type]) -> Option<Variants> {
         let (ps, vs) = self.sums.get(name)?;
         Some(vs.iter().map(|(v, fs)| (v.clone(), fs.as_ref().map(|fs| fs.iter().map(|(n, t)| (n.clone(), subst(t, ps, args))).collect()))).collect())
     }
@@ -53,6 +61,21 @@ impl Layouts {
             (NVal::Int(n), _) => out.push(*n),
             (NVal::Bool(b), _) => out.push(i64::from(*b)),
             (NVal::Float(x), _) => out.push(x.to_bits() as i64),
+            (NVal::Str(s), _) => {
+                let b = s.as_bytes();
+                out.push(b.len() as i64);
+                for chunk in b.chunks(8) {
+                    let mut w = [0u8; 8];
+                    w[..chunk.len()].copy_from_slice(chunk);
+                    out.push(i64::from_le_bytes(w));
+                }
+            }
+            (NVal::New(_, x), Type::Con(n, _)) => self.encode(x, self.newtypes.get(n)?, out)?,
+            (NVal::Wrap(_, x), Type::Con(_, a)) => self.encode(x, a.first()?, out)?,
+            (NVal::Guess(x, c), Type::Con(_, a)) => {
+                self.encode(x, a.first()?, out)?;
+                out.push(c.to_bits() as i64);
+            }
             (NVal::Tuple(xs), Type::Tuple(ts)) => {
                 for (x, t) in xs.iter().zip(ts) {
                     self.encode(x, t, out)?;
@@ -62,6 +85,13 @@ impl Layouts {
                 out.push(xs.len() as i64);
                 for x in xs {
                     self.encode(x, &a[0], out)?;
+                }
+            }
+            (NVal::Map(kv), Type::Con(n, a)) if n == "Map" => {
+                out.push(kv.len() as i64);
+                for (k, v) in kv {
+                    self.encode(k, &a[0], out)?;
+                    self.encode(v, &a[1], out)?;
                 }
             }
             (NVal::Opt(o), Type::Con(n, a)) if n == "Opt" => match o {
@@ -103,6 +133,15 @@ impl Layouts {
                 "Int" => NVal::Int(next()?),
                 "Bool" => NVal::Bool(next()? != 0),
                 "F64" => NVal::Float(f64::from_bits(next()? as u64)),
+                "Str" => {
+                    let len = next()? as usize;
+                    let mut bytes = Vec::with_capacity(len);
+                    for _ in 0..len.div_ceil(8) {
+                        bytes.extend_from_slice(&next()?.to_le_bytes());
+                    }
+                    bytes.truncate(len);
+                    NVal::Str(String::from_utf8(bytes).ok()?)
+                }
                 "Unit" => {
                     next()?;
                     NVal::Unit
@@ -115,6 +154,24 @@ impl Layouts {
                     }
                     NVal::List(xs)
                 }
+                "Map" => {
+                    let len = next()?;
+                    let mut kv = Vec::new();
+                    for _ in 0..len {
+                        let k = self.decode(words, pos, &a[0])?;
+                        let v = self.decode(words, pos, &a[1])?;
+                        kv.push((k, v));
+                    }
+                    NVal::Map(kv)
+                }
+                "Secret" | "Pii" | "Untrusted" => NVal::Wrap(n.clone(), Box::new(self.decode(words, pos, &a[0])?)),
+                "Guess" => {
+                    let v = self.decode(words, pos, &a[0])?;
+                    let c = f64::from_bits(*words.get(*pos)? as u64);
+                    *pos += 1;
+                    NVal::Guess(Box::new(v), c)
+                }
+                _ if self.newtypes.contains_key(n) => NVal::New(n.clone(), Box::new(self.decode(words, pos, &self.newtypes[n].clone())?)),
                 "Opt" => {
                     if next()? == 0 {
                         NVal::Opt(None)
@@ -176,6 +233,7 @@ impl fmt::Display for NVal {
             NVal::Int(n) => write!(f, "{n}"),
             NVal::Bool(b) => write!(f, "{b}"),
             NVal::Float(x) => write!(f, "{x:?}"),
+            NVal::Str(s) => write!(f, "{s:?}"),
             NVal::Rec(n, fs) => {
                 write!(f, "{n}")?;
                 fields(f, fs)
@@ -195,6 +253,21 @@ impl fmt::Display for NVal {
                 }
                 write!(f, "]")
             }
+            NVal::Map(kv) => {
+                write!(f, "{{")?;
+                for (i, (k, v)) in kv.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{k}: {v}")?;
+                }
+                write!(f, "}}")
+            }
+            NVal::New(n, v) => write!(f, "{n}({v})"),
+            NVal::Wrap(k, _) if k == "Secret" => write!(f, "<secret>"),
+            NVal::Wrap(k, _) if k == "Pii" => write!(f, "<redacted>"),
+            NVal::Wrap(_, v) => write!(f, "untrusted({v})"),
+            NVal::Guess(v, c) => write!(f, "guess({v}, {c})"),
             NVal::Opt(None) => write!(f, "none"),
             NVal::Opt(Some(x)) => write!(f, "some({x})"),
             NVal::Tuple(xs) => {

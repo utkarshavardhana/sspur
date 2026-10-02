@@ -1,0 +1,13 @@
+fn top_words(text: Str, k: Int) -> List[(Str, Int)]
+= text.lower.words.counts.sort_by((-_.1, _.0)).take(k)
+
+fn build(n: Int) -> Str
+= do
+  words = ["alpha", "beta", "gamma", "delta", "Alpha", "omega", "beta", "pi"]
+  var parts = []
+  for i in 0..n
+    parts := parts.push(words[(i * 7 + i / 3) % 8])
+  parts.join(" ")
+
+fn main() -> Unit ! log
+= log("{top_words(build(200000), 3)}")

@@ -27,6 +27,10 @@ pub(crate) const T_INDEX: i64 = 8;
 pub(crate) const T_UNWRAP: i64 = 9;
 pub(crate) const T_NOMATCH: i64 = 10;
 pub(crate) const T_REFINE: i64 = 11;
+pub(crate) const T_MSG: i64 = 12;
+pub(crate) const T_REPEAT: i64 = 13;
+pub(crate) const T_RAISE: i64 = 100;
+pub(crate) const T_GUESS: i64 = 14;
 
 #[repr(C)]
 struct Status {
@@ -37,12 +41,104 @@ struct Status {
     limit: i64,
     rbuf: *mut i64,
     rlen: i64,
+    err: *mut u8,
+    err_type: i64,
 }
 
 impl Default for Status {
     fn default() -> Self {
-        Status { code: 0, func: 0, clause: 0, value: 0, limit: 0, rbuf: std::ptr::null_mut(), rlen: 0 }
+        Status { code: 0, func: 0, clause: 0, value: 0, limit: 0, rbuf: std::ptr::null_mut(), rlen: 0, err: std::ptr::null_mut(), err_type: 0 }
     }
+}
+
+#[repr(C)]
+pub(crate) struct HostApi {
+    fmt_f64: extern "C" fn(f64, *mut u8) -> i64,
+    fmt_f64_display: extern "C" fn(f64, *mut u8) -> i64,
+    str_op: extern "C" fn(i64, *const u8, i64, *mut u8, i64) -> i64,
+    str_class: extern "C" fn(i64, *const u8, i64) -> i64,
+    str_spans: extern "C" fn(i64, *const u8, i64, *mut i64, i64) -> i64,
+    log: extern "C" fn(*const u8, i64),
+}
+
+unsafe fn host_str<'a>(p: *const u8, len: i64) -> &'a str {
+    if len == 0 {
+        return "";
+    }
+    unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(p, len as usize)) }
+}
+
+unsafe fn host_write(s: &str, out: *mut u8, cap: i64) -> i64 {
+    let n = s.len().min(cap.max(0) as usize);
+    unsafe { std::ptr::copy_nonoverlapping(s.as_ptr(), out, n) };
+    n as i64
+}
+
+extern "C" fn host_fmt_f64(x: f64, out: *mut u8) -> i64 {
+    unsafe { host_write(&format!("{x:?}"), out, 64) }
+}
+
+extern "C" fn host_fmt_f64_display(x: f64, out: *mut u8) -> i64 {
+    unsafe { host_write(&format!("{x}"), out, 400) }
+}
+
+extern "C" fn host_str_op(op: i64, p: *const u8, len: i64, out: *mut u8, cap: i64) -> i64 {
+    let s = unsafe { host_str(p, len) };
+    let r = match op {
+        1 => s.to_lowercase(),
+        2 => s.to_uppercase(),
+        _ => format!("{s:?}"),
+    };
+    unsafe { host_write(&r, out, cap) }
+}
+
+extern "C" fn host_str_class(_op: i64, p: *const u8, len: i64) -> i64 {
+    let s = unsafe { host_str(p, len) };
+    i64::from(!s.is_empty() && s.chars().all(char::is_alphabetic))
+}
+
+extern "C" fn host_str_spans(op: i64, p: *const u8, len: i64, out: *mut i64, cap: i64) -> i64 {
+    let s = unsafe { host_str(p, len) };
+    let base = s.as_ptr() as usize;
+    let mut spans: Vec<i64> = Vec::new();
+    if op == 2 {
+        let t = s.trim();
+        spans.push((t.as_ptr() as usize - base) as i64);
+        spans.push(t.len() as i64);
+    } else {
+        for w in s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()) {
+            spans.push((w.as_ptr() as usize - base) as i64);
+            spans.push(w.len() as i64);
+        }
+    }
+    let n = spans.len().min(cap.max(0) as usize);
+    unsafe { std::ptr::copy_nonoverlapping(spans.as_ptr(), out, n) };
+    n as i64
+}
+
+pub type LogHook = (fn(*const (), &str), *const ());
+
+thread_local! {
+    static LOG_HOOK: std::cell::Cell<Option<LogHook>> = const { std::cell::Cell::new(None) };
+}
+
+extern "C" fn host_log(p: *const u8, len: i64) {
+    let s = unsafe { host_str(p, len) };
+    match LOG_HOOK.with(|h| h.get()) {
+        Some((f, ctx)) => f(ctx, s),
+        None => println!("{s}"),
+    }
+}
+
+pub fn set_log_hook(hook: Option<LogHook>) {
+    LOG_HOOK.with(|h| h.set(hook));
+}
+
+pub(crate) static HOST: HostApi = HostApi { fmt_f64: host_fmt_f64, fmt_f64_display: host_fmt_f64_display, str_op: host_str_op, str_class: host_str_class, str_spans: host_str_spans, log: host_log };
+
+pub enum NativeError {
+    Trap(String),
+    Raise(NVal),
 }
 
 pub(crate) struct RichFn {
@@ -82,6 +178,7 @@ struct Inner {
     layouts: Layouts,
     refines: Vec<(String, String, Type)>,
     free: Option<unsafe extern "C" fn(*mut i64)>,
+    err_types: Vec<Type>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -135,7 +232,7 @@ impl Compiled {
         self.inner.ptrs.contains_key(name) || self.inner.rich.contains_key(name)
     }
 
-    pub fn call_rich(&self, name: &str, args: &[NVal]) -> Option<Result<NVal, String>> {
+    pub fn call_rich(&self, name: &str, args: &[NVal]) -> Option<Result<NVal, NativeError>> {
         let f = self.inner.rich.get(name)?;
         if f.params.len() != args.len() {
             return None;
@@ -150,8 +247,18 @@ impl Compiled {
         let mut out_len: i64 = 0;
         let entry = unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut Status, *mut *mut i64, *mut i64) -> i64>(f.ptr) };
         let code = entry(words.as_ptr(), &mut st, &mut out, &mut out_len);
+        if code == T_RAISE {
+            let t = self.inner.err_types.get(st.err_type as usize)?;
+            let slice = unsafe { std::slice::from_raw_parts(st.rbuf, st.rlen as usize) };
+            let mut pos = 0;
+            let v = self.inner.layouts.decode(slice, &mut pos, t);
+            if let Some(free) = self.inner.free {
+                unsafe { free(st.rbuf) };
+            }
+            return Some(Err(NativeError::Raise(v?)));
+        }
         if code != 0 {
-            return Some(Err(self.message(&st)));
+            return Some(Err(NativeError::Trap(self.message(&st))));
         }
         let slice = unsafe { std::slice::from_raw_parts(out, out_len as usize) };
         let mut pos = 0;
@@ -159,7 +266,7 @@ impl Compiled {
         if let Some(free) = self.inner.free {
             unsafe { free(out) };
         }
-        Some(v.ok_or_else(|| "native result could not be decoded".to_string()))
+        Some(v.ok_or_else(|| NativeError::Trap("native result could not be decoded".to_string())))
     }
 
     fn decode_rbuf(&self, st: &Status, t: &Type) -> Option<String> {
@@ -202,6 +309,16 @@ impl Compiled {
             (T_INDEX, _) => format!("index {} out of bounds for list of length {}", st.value, st.clause),
             (T_UNWRAP, _) => "unwrapped none with .get; check with is_some, match on some/none, or use .or(default)".into(),
             (T_NOMATCH, _) => "no match arm".into(),
+            (T_REPEAT, _) => "repeat count must be >= 0".into(),
+            (T_GUESS, _) => format!("guess confidence {} is outside [0, 1]", f64::from_bits(st.value as u64)),
+            (T_MSG, _) if !st.rbuf.is_null() => {
+                let bytes = unsafe { std::slice::from_raw_parts(st.rbuf as *const u8, st.rlen as usize) };
+                let m = String::from_utf8_lossy(bytes).into_owned();
+                if let Some(free) = self.inner.free {
+                    unsafe { free(st.rbuf) };
+                }
+                m
+            }
             (T_REFINE, _) => {
                 let (ctx, expr, t) = &self.inner.refines[st.clause as usize];
                 let v = self.decode_rbuf(st, t).unwrap_or_else(|| scalar_display(t, st.value));
@@ -393,7 +510,7 @@ pub(crate) fn assemble(defs: Vec<FnDef>, ptrs: HashMap<String, (*const u8, usize
         max_depth: std::cell::Cell::new(DEFAULT_MAX_DEPTH),
         functions,
         skipped,
-        inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich: HashMap::new(), layouts: Layouts::default(), refines: vec![], free: None }),
+        inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich: HashMap::new(), layouts: Layouts::default(), refines: vec![], free: None, err_types: vec![] }),
     }
 }
 
@@ -407,6 +524,7 @@ pub(crate) fn assemble_rich(
     layouts: Layouts,
     refines: Vec<(String, String, Type)>,
     free: unsafe extern "C" fn(*mut i64),
+    err_types: Vec<Type>,
 ) -> Compiled {
     let index: HashMap<String, usize> = defs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
     let mut functions: Vec<String> = rich.keys().cloned().collect();
@@ -415,7 +533,7 @@ pub(crate) fn assemble_rich(
         max_depth: std::cell::Cell::new(DEFAULT_MAX_DEPTH),
         functions,
         skipped,
-        inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich, layouts, refines, free: Some(free) }),
+        inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich, layouts, refines, free: Some(free), err_types }),
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::nval::Layouts;
-use crate::{assemble_rich, Compiled, RichFn, T_DEPTH, T_DIV_ZERO, T_INDEX, T_NOMATCH, T_OVERFLOW, T_POST, T_PRE, T_REFINE, T_UNWRAP};
+use crate::{assemble_rich, Compiled, RichFn, T_DEPTH, T_DIV_ZERO, T_INDEX, T_NOMATCH, T_OVERFLOW, T_POST, T_GUESS, T_MSG, T_PRE, T_RAISE, T_REFINE, T_REPEAT, T_UNWRAP};
 use sspur_check::{expr_key, CheckOutput, Type};
 use sspur_syntax::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -8,12 +8,16 @@ use std::path::PathBuf;
 use std::process::Command;
 
 type G<T = String> = Result<T, String>;
+type Scope = HashMap<String, (String, Type)>;
+type Fields = Vec<(String, Type)>;
+type FieldRefines = HashMap<String, Vec<(String, Option<Expr>, Option<String>)>>;
 
 const PRELUDE: &str = r#"#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-typedef struct { int64_t code, func, clause, value, limit; int64_t* rbuf; int64_t rlen; } Status;
+typedef struct { int64_t code, func, clause, value, limit; int64_t* rbuf; int64_t rlen; void* err; int64_t err_type; } Status;
+#include <stdio.h>
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 #define TRAPV(c, cl, val) do { st->code = (c); st->func = FIDX; st->clause = (cl); st->value = (int64_t)(val); return (RRT){.code = (c)}; } while (0)
 typedef struct Blk { struct Blk* next; size_t used, cap; } Blk;
@@ -43,15 +47,15 @@ static RawL raw_alloc(int64_t cap, size_t es) {
     h[0] = cap; h[1] = 0;
     return (RawL){0, (void*)(h + 2), h};
 }
-static int64_t raw_offset(RawL l, size_t es) { return ((char*)l.data - (char*)(l.hdr + 2)) / (int64_t)es; }
-static RawL raw_reserve(RawL l, int64_t extra, size_t es) {
+static inline int64_t raw_offset(RawL l, size_t es) { return ((char*)l.data - (char*)(l.hdr + 2)) / (int64_t)es; }
+static inline __attribute__((always_inline)) RawL raw_reserve(RawL l, int64_t extra, size_t es) {
     if (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0]) return l;
     RawL n = raw_alloc((l.len + extra) * 2, es);
     if (l.len) memcpy(n.data, l.data, (size_t)l.len * es);
     n.len = l.len; n.hdr[1] = l.len;
     return n;
 }
-static RawL raw_push(RawL l, const void* v, size_t es) {
+static inline __attribute__((always_inline)) RawL raw_push(RawL l, const void* v, size_t es) {
     RawL r = raw_reserve(l, 1, es);
     memcpy((char*)r.data + (size_t)r.len * es, v, es);
     r.len += 1; r.hdr[1] = raw_offset(r, es) + r.len;
@@ -94,6 +98,10 @@ static RawL raw_sorted(RawL l, size_t es, int (*cmp)(const void*, const void*)) 
 static inline int64_t dbits(double x) { int64_t b; memcpy(&b, &x, 8); return b; }
 static inline double bitsd(int64_t b) { double x; memcpy(&x, &b, 8); return x; }
 static inline int64_t dkey(double x) { int64_t b = dbits(x); b ^= (int64_t)(((uint64_t)(b >> 63)) >> 1); return b; }
+static uint64_t sspur_prio_state = 0x9E3779B97F4A7C15ULL;
+static inline uint64_t sspur_prio(void) { uint64_t z = (sspur_prio_state += 0x9E3779B97F4A7C15ULL); z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL; z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL; return z ^ (z >> 31); }
+static inline uint64_t hmix(uint64_t h) { h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL; h ^= h >> 33; return h; }
+static inline uint64_t hash_I(int64_t v) { return hmix((uint64_t)v); }
 static inline int cmp_I(int64_t a, int64_t b) { return (a > b) - (a < b); }
 static inline int cmp_D(double a, double b) { int64_t x = dkey(a), y = dkey(b); return (x > y) - (x < y); }
 static inline int64_t f2i(double x) {
@@ -119,6 +127,137 @@ static void buf_push(Buf* b, int64_t w) {
     b->data[b->len++] = w;
 }
 void sspur_buf_free(int64_t* p) { free(p); }
+typedef struct { int64_t len; const char* p; } Str;
+typedef struct {
+    int64_t (*fmt_f64)(double x, char* out);
+    int64_t (*fmt_f64_display)(double x, char* out);
+    int64_t (*str_op)(int64_t op, const char* p, int64_t len, char* out, int64_t cap);
+    int64_t (*str_class)(int64_t op, const char* p, int64_t len);
+    int64_t (*str_spans)(int64_t op, const char* p, int64_t len, int64_t* out, int64_t cap);
+    void (*log)(const char* p, int64_t len);
+} HostApi;
+static HostApi host_;
+void sspur_set_host(const HostApi* h) { host_ = *h; }
+typedef struct { char* p; int64_t len, cap; } SB;
+static void sb_put(SB* b, const char* s, int64_t n) {
+    if (n <= 0) return;
+    if (b->len + n > b->cap) { int64_t nc = (b->cap + n) * 2 + 16; char* np = (char*)sspur_alloc((size_t)nc); if (b->len) memcpy(np, b->p, (size_t)b->len); b->p = np; b->cap = nc; }
+    memcpy(b->p + b->len, s, (size_t)n); b->len += n;
+}
+static Str sb_done(SB* b) { return (Str){b->len, b->p}; }
+static void sb_int(SB* b, int64_t v) {
+    char t[24]; int n = 0; uint64_t u = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
+    do { t[23 - n++] = (char)('0' + u % 10); u /= 10; } while (u);
+    if (v < 0) t[23 - n++] = '-';
+    sb_put(b, t + 24 - n, n);
+}
+static void sb_f64(SB* b, double v) { char t[64]; int64_t n = host_.fmt_f64(v, t); sb_put(b, t, n); }
+static void sb_f64d(SB* b, double v) { char t[400]; int64_t n = host_.fmt_f64_display(v, t); sb_put(b, t, n); }
+static void sb_strq(SB* b, Str s) { int64_t cap = s.len * 10 + 8; char* o = (char*)sspur_alloc((size_t)cap); int64_t n = host_.str_op(3, s.p, s.len, o, cap); sb_put(b, o, n); }
+static inline Str str_lit(const char* p, int64_t n) { return (Str){n, p}; }
+static inline uint64_t hash_S(Str s) { uint64_t h = 1469598103934665603ULL; for (int64_t i = 0; i < s.len; i++) { h ^= (unsigned char)s.p[i]; h *= 1099511628211ULL; } return hmix(h ^ (uint64_t)s.len); }
+static inline uint64_t hash_D(double v) { return hmix((uint64_t)dkey(v)); }
+static inline int cmp_S(Str a, Str b) { int64_t n = a.len < b.len ? a.len : b.len; int c = n ? memcmp(a.p, b.p, (size_t)n) : 0; if (c) return c < 0 ? -1 : 1; return cmp_I(a.len, b.len); }
+static Str str_cat(Str a, Str b) { if (!b.len) return a; if (!a.len) return b; char* p = (char*)sspur_alloc((size_t)(a.len + b.len)); memcpy(p, a.p, (size_t)a.len); memcpy(p + a.len, b.p, (size_t)b.len); return (Str){a.len + b.len, p}; }
+static int64_t utf8_len(Str s) { int64_t n = 0; for (int64_t i = 0; i < s.len; i++) if (((unsigned char)s.p[i] & 0xC0) != 0x80) n++; return n; }
+static int64_t utf8_next(Str s, int64_t i) { i++; while (i < s.len && ((unsigned char)s.p[i] & 0xC0) == 0x80) i++; return i; }
+static int64_t utf8_byte_at(Str s, int64_t k) { int64_t i = 0, c = 0; while (i < s.len && c < k) { i = utf8_next(s, i); c++; } return i; }
+static Str str_take(Str s, int64_t n) { if (n < 0) n = 0; return (Str){utf8_byte_at(s, n), s.p}; }
+static Str str_drop(Str s, int64_t n) { if (n < 0) n = 0; int64_t b = utf8_byte_at(s, n); return (Str){s.len - b, s.p + b}; }
+static int64_t str_find(Str h, Str n, int64_t from) { if (n.len == 0) return from; for (int64_t i = from; i + n.len <= h.len; i++) if (memcmp(h.p + i, n.p, (size_t)n.len) == 0) return i; return -1; }
+static int64_t str_starts(Str s, Str p) { return p.len <= s.len && (p.len == 0 || memcmp(s.p, p.p, (size_t)p.len) == 0); }
+static int64_t str_ends(Str s, Str p) { return p.len <= s.len && (p.len == 0 || memcmp(s.p + s.len - p.len, p.p, (size_t)p.len) == 0); }
+static int str_ascii(Str s) { for (int64_t i = 0; i < s.len; i++) if ((unsigned char)s.p[i] >= 0x80) return 0; return 1; }
+static Str str_case(Str s, int64_t op) {
+    if (str_ascii(s)) {
+        char* o = (char*)sspur_alloc((size_t)s.len + 1);
+        for (int64_t i = 0; i < s.len; i++) { char c = s.p[i]; o[i] = op == 1 ? (c >= 'A' && c <= 'Z' ? c + 32 : c) : (c >= 'a' && c <= 'z' ? c - 32 : c); }
+        return (Str){s.len, o};
+    }
+    int64_t cap = s.len * 12 + 16; char* o = (char*)sspur_alloc((size_t)cap); int64_t n = host_.str_op(op, s.p, s.len, o, cap); return (Str){n, o};
+}
+static inline int ascii_ws(unsigned char c) { return c == ' ' || (c >= 9 && c <= 13); }
+static Str str_trim(Str s) {
+    int64_t a = 0, b = s.len;
+    while (a < b && ascii_ws((unsigned char)s.p[a])) a++;
+    while (b > a && ascii_ws((unsigned char)s.p[b - 1])) b--;
+    if ((a < b && ((unsigned char)s.p[a] >= 0x80 || (unsigned char)s.p[b - 1] >= 0x80))) { int64_t sp[2] = {0, 0}; host_.str_spans(2, s.p, s.len, sp, 2); return (Str){sp[1], s.p + sp[0]}; }
+    return (Str){b - a, s.p + a};
+}
+static Str str_rev(Str s) { if (!s.len) return s; char* o = (char*)sspur_alloc((size_t)s.len); int64_t w = s.len; for (int64_t i = 0; i < s.len;) { int64_t j = utf8_next(s, i); w -= j - i; memcpy(o + w, s.p + i, (size_t)(j - i)); i = j; } return (Str){s.len, o}; }
+static Str str_repeat(Str s, int64_t n) { if (!s.len || !n) return (Str){0, s.p}; char* o = (char*)sspur_alloc((size_t)(s.len * n)); for (int64_t i = 0; i < n; i++) memcpy(o + i * s.len, s.p, (size_t)s.len); return (Str){s.len * n, o}; }
+static Str str_replace(Str s, Str from, Str to) {
+    SB b = {0};
+    if (from.len == 0) { sb_put(&b, to.p, to.len); for (int64_t i = 0; i < s.len;) { int64_t j = utf8_next(s, i); sb_put(&b, s.p + i, j - i); sb_put(&b, to.p, to.len); i = j; } return sb_done(&b); }
+    int64_t i = 0;
+    for (;;) { int64_t k = str_find(s, from, i); if (k < 0) break; sb_put(&b, s.p + i, k - i); sb_put(&b, to.p, to.len); i = k + from.len; }
+    sb_put(&b, s.p + i, s.len - i);
+    return sb_done(&b);
+}
+static RawL str_split(Str s, Str sep) {
+    RawL r = raw_alloc(4, sizeof(Str));
+    if (sep.len == 0) {
+        Str e = {0, s.p}; r = raw_push(r, &e, sizeof(Str));
+        for (int64_t i = 0; i < s.len;) { int64_t j = utf8_next(s, i); Str c = {j - i, s.p + i}; r = raw_push(r, &c, sizeof(Str)); i = j; }
+        Str e2 = {0, s.p + s.len}; return raw_push(r, &e2, sizeof(Str));
+    }
+    int64_t i = 0;
+    for (;;) { int64_t k = str_find(s, sep, i); if (k < 0) break; Str part = {k - i, s.p + i}; r = raw_push(r, &part, sizeof(Str)); i = k + sep.len; }
+    Str last = {s.len - i, s.p + i};
+    return raw_push(r, &last, sizeof(Str));
+}
+static RawL str_chars(Str s) { RawL r = raw_alloc(s.len, sizeof(Str)); for (int64_t i = 0; i < s.len;) { int64_t j = utf8_next(s, i); Str c = {j - i, s.p + i}; r = raw_push(r, &c, sizeof(Str)); i = j; } return r; }
+static inline int ascii_alnum(unsigned char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+static RawL str_words(Str s) {
+    if (str_ascii(s)) {
+        RawL r = raw_alloc(s.len / 4 + 4, sizeof(Str));
+        int64_t i = 0;
+        while (i < s.len) {
+            while (i < s.len && !ascii_alnum((unsigned char)s.p[i])) i++;
+            int64_t st = i;
+            while (i < s.len && ascii_alnum((unsigned char)s.p[i])) i++;
+            if (i > st) { Str w = {i - st, s.p + st}; r = raw_push(r, &w, sizeof(Str)); }
+        }
+        return r;
+    }
+    int64_t cap = s.len * 2 + 2; int64_t* sp = (int64_t*)sspur_alloc((size_t)cap * 8);
+    int64_t n = host_.str_spans(1, s.p, s.len, sp, cap);
+    RawL r = raw_alloc(n / 2, sizeof(Str));
+    for (int64_t i = 0; i + 1 < n; i += 2) { Str w = {sp[i + 1], s.p + sp[i]}; r = raw_push(r, &w, sizeof(Str)); }
+    return r;
+}
+typedef struct { int64_t some; int64_t v; } OptI_;
+typedef struct { int64_t some; Str v; } OptS_;
+static OptI_ str_to_int(Str s) {
+    s = str_trim(s); OptI_ o = {0, 0};
+    if (s.len == 0) return o;
+    int64_t i = 0; int neg = 0;
+    if (s.p[0] == '+' || s.p[0] == '-') { neg = s.p[0] == '-'; i = 1; }
+    if (i == s.len) return o;
+    int64_t v = 0;
+    for (; i < s.len; i++) {
+        char c = s.p[i];
+        if (c < '0' || c > '9') return o;
+        if (__builtin_mul_overflow(v, 10, &v)) return o;
+        if (neg ? __builtin_sub_overflow(v, c - '0', &v) : __builtin_add_overflow(v, c - '0', &v)) return o;
+    }
+    o.some = 1; o.v = v; return o;
+}
+static OptS_ str_char_at(Str s, int64_t k) {
+    OptS_ o = {0, {0, 0}};
+    if (k < 0) return o;
+    int64_t i = 0, c = 0;
+    while (i < s.len && c < k) { i = utf8_next(s, i); c++; }
+    if (i >= s.len) return o;
+    o.some = 1; o.v = (Str){utf8_next(s, i) - i, s.p + i}; return o;
+}
+static OptS_ str_last(Str s) {
+    OptS_ o = {0, {0, 0}};
+    if (!s.len) return o;
+    int64_t i = s.len - 1;
+    while (i > 0 && ((unsigned char)s.p[i] & 0xC0) == 0x80) i--;
+    o.some = 1; o.v = (Str){s.len - i, s.p + i}; return o;
+}
 "#;
 
 pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Compiled, String> {
@@ -140,7 +279,9 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
     let free: libloading::Symbol<unsafe extern "C" fn(*mut i64)> = unsafe { library.get(b"sspur_buf_free") }.map_err(|e| e.to_string())?;
     let free = *free;
     let defs: Vec<FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f.clone()) } else { None }).collect();
-    Ok(assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines, free))
+    let set_host: libloading::Symbol<unsafe extern "C" fn(*const crate::HostApi)> = unsafe { library.get(b"sspur_set_host") }.map_err(|e| e.to_string())?;
+    unsafe { set_host(&crate::HOST) };
+    Ok(assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines, free, plan.err_types))
 }
 
 pub fn c_source(m: &Module, check: &CheckOutput) -> String {
@@ -151,6 +292,7 @@ pub fn c_source(m: &Module, check: &CheckOutput) -> String {
 }
 
 struct Plan {
+    err_types: Vec<Type>,
     fns: BTreeMap<String, (Vec<Type>, Type, bool)>,
     skipped: BTreeMap<String, String>,
     refines: Vec<(String, String, Type)>,
@@ -179,7 +321,7 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
             _ => None,
         })
         .collect();
-    let field_refines: HashMap<String, Vec<(String, Option<Expr>, Option<String>)>> = m
+    let field_refines: FieldRefines = m
         .defs
         .iter()
         .flat_map(|d| match d {
@@ -189,21 +331,25 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
         })
         .map(|(owner, fs)| (owner, fs.into_iter().map(|f| (f.name.clone(), f.refine.clone(), match &f.ty { Ty::Named { name, .. } => Some(name.clone()), _ => None })).collect()))
         .collect();
+    let generic_defs: HashMap<String, FnDef> = defs.iter().filter(|f| !f.tparams.is_empty()).map(|f| (f.name.clone(), (*f).clone())).collect();
     loop {
         let mut cx = Cx::new(check, &ok, &alias_refines, &field_refines);
+        cx.generics = generic_defs.iter().filter(|(n, _)| ok.contains(*n)).map(|(n, f)| (n.clone(), f.clone())).collect();
+        cx.fn_index = index.clone();
+        cx.all_fns = defs.iter().map(|f| (f.name.clone(), (*f).clone())).collect();
         let mut failed = Vec::new();
         let mut bodies = String::new();
         let mut plan_fns = BTreeMap::new();
-        for f in defs.iter().filter(|f| ok.contains(&f.name)) {
+        for f in defs.iter().filter(|f| ok.contains(&f.name) && f.tparams.is_empty()) {
             let Some((params, ret)) = check.fn_types.get(&f.name).cloned() else {
                 failed.push((f.name.clone(), "has no type information".to_string()));
                 continue;
             };
             let snapshot = cx.snapshot();
-            match cx.function(f, &params, &ret, index[&f.name]) {
+            match cx.function(f, &params, &ret, index[&f.name], &f.name) {
                 Ok(code) => {
                     bodies.push_str(&code);
-                    let scalar = params.iter().chain([&ret]).all(|t| matches!(t, Type::Con(n, a) if a.is_empty() && matches!(n.as_str(), "Int" | "Bool" | "Unit")));
+                    let scalar = !f.effects.iter().any(|e| e.name == "fail") && params.iter().chain([&ret]).all(|t| matches!(t, Type::Con(n, a) if a.is_empty() && matches!(n.as_str(), "Int" | "Bool" | "Unit")));
                     plan_fns.insert(f.name.clone(), (params, ret, scalar));
                 }
                 Err(e) => {
@@ -212,17 +358,34 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
                 }
             }
         }
+        while let Some((gname, map, cname)) = cx.spec_queue.pop() {
+            let f = cx.generics.get(&gname).cloned().unwrap_or_else(|| cx.all_fns[&gname].clone());
+            let (params, ret) = check.fn_types[&gname].clone();
+            let params: Vec<Type> = params.iter().map(|t| subst_map(t, &map)).collect();
+            let ret = subst_map(&ret, &map);
+            let saved = std::mem::replace(&mut cx.mono, map);
+            match cx.function(&f, &params, &ret, index[&gname], &cname) {
+                Ok(code) => bodies.push_str(&code),
+                Err(e) => failed.push((gname.clone(), format!("specialization failed: {e}"))),
+            }
+            cx.mono = saved;
+        }
         if failed.is_empty() {
             let mut entries = String::new();
-            for f in defs.iter().filter(|f| ok.contains(&f.name)) {
+            writeln!(cx.protos, "static void enc_err(Status* st);").unwrap();
+            for f in defs.iter().filter(|f| ok.contains(&f.name) && f.tparams.is_empty()) {
                 let (params, ret, scalar) = plan_fns[&f.name].clone();
+                if params.iter().chain([&ret]).any(has_fn) {
+                    continue;
+                }
                 entries.push_str(&cx.entries(&f.name, &params, &ret, scalar)?);
             }
+            entries.push_str(&cx.enc_err_fn()?);
             let mut src = String::from(PRELUDE);
             src.push_str(&cx.fwd);
             src.push_str(&cx.defs);
             src.push_str(&cx.protos);
-            for f in defs.iter().filter(|f| ok.contains(&f.name)) {
+            for f in defs.iter().filter(|f| ok.contains(&f.name) && f.tparams.is_empty()) {
                 let (params, ret, _) = &plan_fns[&f.name];
                 let ps: Vec<String> = params.iter().map(|t| cx.cty(t)).collect::<G<_>>()?;
                 let rr = cx.rr(ret)?;
@@ -232,10 +395,12 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
                 writeln!(src, "static {rr} f_{}({});", f.name, sig.join(", ")).unwrap();
             }
             src.push_str(&cx.helpers);
+            src.push_str(&cx.lambdas);
             src.push_str(&bodies);
             src.push_str(&entries);
             src.push_str(&cx.helpers_late);
-            let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone() };
+            plan_fns.retain(|_, (p, r, _)| !p.iter().chain([&*r]).any(has_fn));
+            let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone() };
             return Ok((src, plan));
         }
         for (n, e) in failed {
@@ -246,14 +411,8 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
 }
 
 fn precheck(f: &FnDef) -> G<()> {
-    if !f.tparams.is_empty() {
-        return Err("is generic".into());
-    }
-    if let Some(e) = f.effects.iter().find(|e| e.name != "div") {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
-    }
-    if matches!(f.body.kind, ExprKind::Table(_)) {
-        return Err("is a rule table".into());
     }
     Ok(())
 }
@@ -281,6 +440,19 @@ fn build(src: &str, opt: &str) -> Result<PathBuf, String> {
     }
     std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
     Ok(lib)
+}
+
+fn c_lit(s: &str) -> String {
+    let mut out = String::from("\"");
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b == b' ' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("\\{b:03o}"));
+        }
+    }
+    out.push('"');
+    out
 }
 
 fn lit(n: i64) -> String {
@@ -313,13 +485,17 @@ struct Snapshot {
     complete: HashSet<String>,
     helpers_done: HashSet<String>,
     refines: Vec<(String, String, Type)>,
+    err_types: Vec<Type>,
+    lambdas: String,
+    spec_done: HashSet<String>,
+    spec_queue: Vec<(String, HashMap<String, Type>, String)>,
 }
 
 struct Cx<'a> {
     check: &'a CheckOutput,
     eligible: &'a HashSet<String>,
     alias_refines: &'a HashMap<String, Expr>,
-    field_refines: &'a HashMap<String, Vec<(String, Option<Expr>, Option<String>)>>,
+    field_refines: &'a FieldRefines,
     layouts: Layouts,
     fwd: String,
     defs: String,
@@ -334,10 +510,24 @@ struct Cx<'a> {
     scopes: Vec<HashMap<String, (String, Type)>>,
     counter: usize,
     ret: Type,
+    catch_stack: Vec<(Type, String, String)>,
+    err_types: Vec<Type>,
+    fname: String,
+    generics: HashMap<String, FnDef>,
+    fn_index: HashMap<String, usize>,
+    spec_queue: Vec<(String, HashMap<String, Type>, String)>,
+    spec_done: HashSet<String>,
+    mono: HashMap<String, Type>,
+    lambdas: String,
+    mutable: HashSet<String>,
+    fidx: usize,
+    inplace: HashSet<String>,
+    pending_linear: HashSet<String>,
+    all_fns: HashMap<String, FnDef>,
 }
 
 impl<'a> Cx<'a> {
-    fn new(check: &'a CheckOutput, eligible: &'a HashSet<String>, alias_refines: &'a HashMap<String, Expr>, field_refines: &'a HashMap<String, Vec<(String, Option<Expr>, Option<String>)>>) -> Self {
+    fn new(check: &'a CheckOutput, eligible: &'a HashSet<String>, alias_refines: &'a HashMap<String, Expr>, field_refines: &'a FieldRefines) -> Self {
         Cx {
             check,
             eligible,
@@ -357,6 +547,20 @@ impl<'a> Cx<'a> {
             scopes: Vec::new(),
             counter: 0,
             ret: Type::unit(),
+            catch_stack: Vec::new(),
+            err_types: Vec::new(),
+            fname: String::new(),
+            generics: HashMap::new(),
+            fn_index: HashMap::new(),
+            spec_queue: Vec::new(),
+            spec_done: HashSet::new(),
+            mono: HashMap::new(),
+            lambdas: String::new(),
+            mutable: HashSet::new(),
+            fidx: 0,
+            inplace: HashSet::new(),
+            pending_linear: HashSet::new(),
+            all_fns: HashMap::new(),
         }
     }
 
@@ -371,6 +575,10 @@ impl<'a> Cx<'a> {
             complete: self.complete.clone(),
             helpers_done: self.helpers_done.clone(),
             refines: self.refines.clone(),
+            err_types: self.err_types.clone(),
+            lambdas: self.lambdas.clone(),
+            spec_done: self.spec_done.clone(),
+            spec_queue: self.spec_queue.clone(),
         }
     }
 
@@ -384,7 +592,12 @@ impl<'a> Cx<'a> {
         self.complete = s.complete;
         self.helpers_done = s.helpers_done;
         self.refines = s.refines;
+        self.err_types = s.err_types;
+        self.lambdas = s.lambdas;
+        self.spec_done = s.spec_done;
+        self.spec_queue = s.spec_queue;
         self.in_progress.clear();
+        self.catch_stack.clear();
     }
 
     fn fresh(&mut self, base: &str) -> String {
@@ -398,8 +611,13 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if a.is_empty() && n == "Bool" => "B".into(),
             Type::Con(n, a) if a.is_empty() && n == "Unit" => "U".into(),
             Type::Con(n, a) if a.is_empty() && n == "F64" => "D".into(),
+            Type::Con(n, a) if a.is_empty() && n == "Str" => "Z".into(),
             Type::Con(n, a) if n == "List" => format!("L_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Opt" => format!("O_{}", self.mangle(&a[0])?),
+            Type::Con(n, a) if n == "Map" => format!("M_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
+            Type::Con(n, a) if matches!(n.as_str(), "Secret" | "Pii" | "Untrusted") => format!("W{}_{}", &n[..1], self.mangle(&a[0])?),
+            Type::Con(n, a) if n == "Guess" => format!("G_{}", self.mangle(&a[0])?),
+            Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n) => format!("N_{n}"),
             Type::Con(n, a) if self.layouts.records.contains_key(n) || self.layouts.sums.contains_key(n) => {
                 let kind = if self.layouts.records.contains_key(n) { "R" } else { "S" };
                 let mut s = format!("{kind}_{n}");
@@ -412,6 +630,10 @@ impl<'a> Cx<'a> {
             Type::Tuple(xs) => {
                 let parts: Vec<String> = xs.iter().map(|x| self.mangle(x)).collect::<G<_>>()?;
                 format!("T{}_{}", xs.len(), parts.join("_"))
+            }
+            Type::Fn(ps, r, _) => {
+                let parts: Vec<String> = ps.iter().map(|x| self.mangle(x)).collect::<G<_>>()?;
+                format!("F{}_{}_{}", ps.len(), parts.join("_"), self.mangle(r)?)
             }
             other => return Err(format!("uses type {other}, which is not native yet")),
         })
@@ -462,11 +684,38 @@ impl<'a> Cx<'a> {
         match t {
             Type::Con(n, _) if matches!(n.as_str(), "Int" | "Bool" | "Unit") => Ok("int64_t".into()),
             Type::Con(n, _) if n == "F64" => Ok("double".into()),
+            Type::Con(n, _) if n == "Str" => Ok("Str".into()),
             Type::Con(n, a) if n == "List" => {
                 self.fwd_decl(&m);
                 if self.complete.insert(m.clone()) {
                     let e = self.decl(&a[0])?;
                     writeln!(self.defs, "struct {m} {{ int64_t len; {e}* data; int64_t* hdr; }};").unwrap();
+                }
+                Ok(m)
+            }
+            Type::Con(n, a) if matches!(n.as_str(), "Secret" | "Pii" | "Untrusted") => self.cty(&a[0]),
+            Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n) => {
+                let inner = self.layouts.newtypes[n].clone();
+                self.cty(&inner)
+            }
+            Type::Con(n, a) if n == "Guess" => {
+                self.fwd_decl(&m);
+                if !self.complete.contains(&m) {
+                    let e = self.cty(&a[0])?;
+                    if self.complete.insert(m.clone()) {
+                        writeln!(self.defs, "struct {m} {{ {e} v; double conf; }};").unwrap();
+                    }
+                }
+                Ok(m)
+            }
+            Type::Con(n, a) if n == "Map" => {
+                self.fwd_decl(&m);
+                if self.complete.insert(m.clone()) {
+                    self.cty(&a[0])?;
+                    self.cty(&a[1])?;
+                    let node = format!("MN_{m}");
+                    self.fwd_decl(&node);
+                    writeln!(self.defs, "struct {m} {{ {node}* root; }};").unwrap();
                 }
                 Ok(m)
             }
@@ -476,6 +725,18 @@ impl<'a> Cx<'a> {
                     let e = self.cty(&a[0])?;
                     if self.complete.insert(m.clone()) {
                         writeln!(self.defs, "struct {m} {{ int64_t some; {e} v; }};").unwrap();
+                    }
+                }
+                Ok(m)
+            }
+            Type::Fn(ps, r, _) => {
+                self.fwd_decl(&m);
+                if !self.complete.contains(&m) {
+                    let pcs: Vec<String> = ps.iter().map(|x| self.cty(x)).collect::<G<_>>()?;
+                    let rr = self.rr(r)?;
+                    if self.complete.insert(m.clone()) {
+                        let args: String = pcs.iter().map(|p| format!("{p}, ")).collect();
+                        writeln!(self.defs, "struct {m} {{ {rr} (*fn)(void*, {args}Status*, int64_t); void* env; }};").unwrap();
                     }
                 }
                 Ok(m)
@@ -548,12 +809,26 @@ impl<'a> Cx<'a> {
         Ok(name)
     }
 
+    fn zero_cost_inner(&self, t: &Type) -> Option<Type> {
+        match t {
+            Type::Con(n, a) if matches!(n.as_str(), "Secret" | "Pii" | "Untrusted") => Some(a[0].clone()),
+            Type::Con(n, a) if a.is_empty() => self.layouts.newtypes.get(n).cloned(),
+            _ => None,
+        }
+    }
+
     fn helper_cmp(&mut self, t: &Type) -> G {
+        if let Some(inner) = self.zero_cost_inner(t) {
+            return self.helper_cmp(&inner);
+        }
         if is(t, "Int") || is(t, "Bool") || is(t, "Unit") {
             return Ok("cmp_I".into());
         }
         if is(t, "F64") {
             return Ok("cmp_D".into());
+        }
+        if is(t, "Str") {
+            return Ok("cmp_S".into());
         }
         let m = self.mangle(t)?;
         let name = format!("cmp_{m}");
@@ -568,6 +843,15 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if n == "List" => {
                 let ec = self.helper_cmp(&a[0])?;
                 write!(body, "int64_t n = a.len < b.len ? a.len : b.len; for (int64_t i = 0; i < n; i++) {{ int c = {ec}(a.data[i], b.data[i]); if (c) return c; }} return cmp_I(a.len, b.len);").unwrap();
+            }
+            Type::Con(n, a) if n == "Guess" => {
+                let ec = self.helper_cmp(&a[0])?;
+                write!(body, "int c = {ec}(a.v, b.v); if (c) return c; return cmp_D(a.conf, b.conf);").unwrap();
+            }
+            Type::Con(n, a) if n == "Map" => {
+                let (mm, node) = self.map_helpers(t)?;
+                let (kc, vc) = (self.helper_cmp(&a[0])?, self.helper_cmp(&a[1])?);
+                write!(body, "int64_t na = sz_{mm}(a.root), nb = sz_{mm}(b.root); {node}** xa = ({node}**)sspur_alloc((size_t)(na + 1) * sizeof({node}*)); {node}** xb = ({node}**)sspur_alloc((size_t)(nb + 1) * sizeof({node}*)); int64_t ca = 0, cb = 0; fill_{mm}(a.root, xa, &ca); fill_{mm}(b.root, xb, &cb); int64_t n = na < nb ? na : nb; for (int64_t i = 0; i < n; i++) {{ int c = {kc}(xa[i]->k, xb[i]->k); if (c) return c; c = {vc}(xa[i]->v, xb[i]->v); if (c) return c; }} return cmp_I(na, nb);").unwrap();
             }
             Type::Con(n, a) if n == "Opt" => {
                 let ec = self.helper_cmp(&a[0])?;
@@ -614,6 +898,9 @@ impl<'a> Cx<'a> {
     }
 
     fn helper_enc(&mut self, t: &Type) -> G {
+        if let Some(inner) = self.zero_cost_inner(t) {
+            return self.helper_enc(&inner);
+        }
         let m = self.mangle(t)?;
         let name = format!("enc_{m}");
         if !self.helpers_done.insert(name.clone()) {
@@ -622,11 +909,21 @@ impl<'a> Cx<'a> {
         let c = self.cty(t)?;
         writeln!(self.protos, "static void {name}(Buf* b, {c} v);").unwrap();
         let body = match t {
+            _ if is(t, "Str") => "buf_push(b, v.len); for (int64_t i = 0; i < v.len; i += 8) { int64_t w = 0; memcpy(&w, v.p + i, (size_t)(v.len - i < 8 ? v.len - i : 8)); buf_push(b, w); }".to_string(),
             _ if is(t, "F64") => "buf_push(b, dbits(v));".to_string(),
             _ if scalar(t) => "buf_push(b, v);".to_string(),
             Type::Con(n, a) if n == "List" => {
                 let e = self.helper_enc(&a[0])?;
                 format!("buf_push(b, v.len); for (int64_t i = 0; i < v.len; i++) {e}(b, v.data[i]);")
+            }
+            Type::Con(n, a) if n == "Guess" => {
+                let e = self.helper_enc(&a[0])?;
+                format!("{e}(b, v.v); buf_push(b, dbits(v.conf));")
+            }
+            Type::Con(n, a) if n == "Map" => {
+                let (mm, node) = self.map_helpers(t)?;
+                let (ek, ev) = (self.helper_enc(&a[0])?, self.helper_enc(&a[1])?);
+                format!("int64_t n = sz_{mm}(v.root); {node}** xs = ({node}**)sspur_alloc((size_t)(n + 1) * sizeof({node}*)); int64_t c = 0; fill_{mm}(v.root, xs, &c); buf_push(b, n); for (int64_t i = 0; i < n; i++) {{ {ek}(b, xs[i]->k); {ev}(b, xs[i]->v); }}")
             }
             Type::Con(n, a) if n == "Opt" => {
                 let e = self.helper_enc(&a[0])?;
@@ -671,6 +968,9 @@ impl<'a> Cx<'a> {
     }
 
     fn helper_dec(&mut self, t: &Type) -> G {
+        if let Some(inner) = self.zero_cost_inner(t) {
+            return self.helper_dec(&inner);
+        }
         let m = self.mangle(t)?;
         let name = format!("dec_{m}");
         if !self.helpers_done.insert(name.clone()) {
@@ -679,12 +979,22 @@ impl<'a> Cx<'a> {
         let c = self.cty(t)?;
         writeln!(self.protos, "static {c} {name}(const int64_t** p);").unwrap();
         let body = match t {
+            _ if is(t, "Str") => "int64_t n = *(*p)++; char* s = (char*)sspur_alloc((size_t)n + 1); for (int64_t i = 0; i < n; i += 8) { int64_t w = *(*p)++; memcpy(s + i, &w, (size_t)(n - i < 8 ? n - i : 8)); } return (Str){n, s};".to_string(),
             _ if is(t, "F64") => "return bitsd(*(*p)++);".to_string(),
             _ if scalar(t) => "return *(*p)++;".to_string(),
             Type::Con(n, a) if n == "List" => {
                 let d = self.helper_dec(&a[0])?;
                 let ec = self.decl(&a[0])?;
                 format!("int64_t n = *(*p)++; RawL r = raw_alloc(n, sizeof({ec})); {c} l = {{0, ({ec}*)r.data, r.hdr}}; for (int64_t i = 0; i < n; i++) l.data[i] = {d}(p); l.len = n; l.hdr[1] = n; return l;")
+            }
+            Type::Con(n, a) if n == "Guess" => {
+                let d = self.helper_dec(&a[0])?;
+                format!("{c} g; g.v = {d}(p); g.conf = bitsd(*(*p)++); return g;")
+            }
+            Type::Con(n, a) if n == "Map" => {
+                let (mm, _) = self.map_helpers(t)?;
+                let (dk, dv) = (self.helper_dec(&a[0])?, self.helper_dec(&a[1])?);
+                format!("int64_t n = *(*p)++; {c} m = {{0}}; for (int64_t i = 0; i < n; i++) {{ __auto_type k = {dk}(p); __auto_type v = {dv}(p); m.root = put_{mm}(m.root, k, v, sspur_prio()); }} return m;")
             }
             Type::Con(n, a) if n == "Opt" => {
                 let d = self.helper_dec(&a[0])?;
@@ -749,12 +1059,13 @@ impl<'a> Cx<'a> {
         }
         let enc = self.helper_enc(ret)?;
         let rr = self.rr(ret)?;
-        writeln!(s, "int64_t sspur_wentry_{name}(const int64_t* in, Status* st, int64_t** out, int64_t* out_len) {{ Mark m = arena_mark(); const int64_t* p = in; {decs}{rr} r = f_{name}({args}st, -st->limit); if (r.code) {{ arena_release(m); return r.code; }} Buf b = {{0}}; {enc}(&b, r.v); *out = b.data; *out_len = b.len; arena_release(m); return 0; }}").unwrap();
+        writeln!(s, "int64_t sspur_wentry_{name}(const int64_t* in, Status* st, int64_t** out, int64_t* out_len) {{ Mark m = arena_mark(); const int64_t* p = in; {decs}{rr} r = f_{name}({args}st, -st->limit); if (r.code) {{ if (r.code == {T_RAISE}) enc_err(st); arena_release(m); return r.code; }} Buf b = {{0}}; {enc}(&b, r.v); *out = b.data; *out_len = b.len; arena_release(m); return 0; }}").unwrap();
         Ok(s)
     }
 
     fn ty(&self, e: &Expr) -> G<Type> {
         let t = self.check.expr_types.get(&expr_key(e)).cloned().ok_or_else(|| "has an expression without type information".to_string())?;
+        let t = subst_map(&t, &self.mono);
         if has_vars(&t) {
             return Err(format!("has an expression of unresolved type {t}"));
         }
@@ -794,11 +1105,10 @@ impl<'a> Cx<'a> {
     }
 
     fn alias_check(&mut self, ty: &Ty, ctx: &str, value_var: &str, t: &Type) -> G {
-        if let Ty::Named { name, .. } = ty {
-            if let Some(r) = self.alias_refines.get(name).cloned() {
+        if let Ty::Named { name, .. } = ty
+            && let Some(r) = self.alias_refines.get(name).cloned() {
                 return self.refine_check(format!("type {name} in {ctx}"), &r, value_var, t);
             }
-        }
         Ok(String::new())
     }
 
@@ -820,8 +1130,15 @@ impl<'a> Cx<'a> {
         Ok(s)
     }
 
-    fn function(&mut self, f: &FnDef, params: &[Type], ret: &Type, fidx: usize) -> G {
-        self.scopes = vec![HashMap::new()];
+    fn function(&mut self, f: &FnDef, params: &[Type], ret: &Type, fidx: usize, cname: &str) -> G {
+        self.function_in(f, params, ret, fidx, cname, None)
+    }
+
+    fn function_in(&mut self, f: &FnDef, params: &[Type], ret: &Type, fidx: usize, cname: &str, env: Option<(String, Scope)>) -> G {
+        self.scopes = vec![env.as_ref().map(|(_, s)| s.clone()).unwrap_or_default()];
+        self.fname = f.name.clone();
+        self.fidx = fidx;
+        self.catch_stack.clear();
         self.ret = ret.clone();
         let rr = self.rr(ret)?;
         let rc = self.cty(ret)?;
@@ -831,10 +1148,21 @@ impl<'a> Cx<'a> {
         }
         sig.push("Status* st".into());
         sig.push("int64_t depth".into());
-        let mut s = format!("#define RRT {rr}\n#define FIDX {fidx}\nstatic {rr} f_{}({}) {{\n", f.name, sig.join(", "));
+        let (fname_c, env_pre, env_line) = match &env {
+            Some((es, _)) => (cname.to_string(), "void* env, ".to_string(), format!("  struct {es}* e_ = (struct {es}*)env; (void)e_;\n")),
+            None => (format!("f_{cname}"), String::new(), String::new()),
+        };
+        if cname != f.name || env.is_some() {
+            writeln!(self.protos, "static {rr} {fname_c}({env_pre}{});", sig.join(", ")).unwrap();
+        }
+        let mut s = format!("#define RRT {rr}\n#define FIDX {fidx}\nstatic {rr} {fname_c}({env_pre}{}) {{\n{env_line}", sig.join(", "));
         writeln!(s, "  depth += 1; if (UNLIKELY(depth > 0)) TRAPV({T_DEPTH}, 0, 0);").unwrap();
         for (i, (p, t)) in f.params.iter().zip(params).enumerate() {
             self.scopes[0].insert(p.name.clone(), (format!("a{i}"), t.clone()));
+        }
+        self.inplace.clear();
+        if cname.ends_with("__lin") {
+            self.inplace.insert("a0".into());
         }
         for (i, (p, t)) in f.params.iter().zip(params).enumerate() {
             let ctx = format!("parameter '{}' of {}", p.name, f.name);
@@ -849,7 +1177,10 @@ impl<'a> Cx<'a> {
             let c = self.expr(pre)?;
             writeln!(s, "  if (UNLIKELY(!({c}))) TRAPV({T_PRE}, {i}, 0);").unwrap();
         }
-        let body = self.expr(&f.body)?;
+        let body = match &f.body.kind {
+            ExprKind::Table(rows) => self.table(f, rows, params, ret)?,
+            _ => self.expr(&f.body)?,
+        };
         writeln!(s, "  {rc} ret_;\n  ret_ = {body};\n  goto done_;\ndone_: ;").unwrap();
         if let Some(rt) = &f.ret {
             let c = self.alias_check(rt, &format!("result of {}", f.name), "ret_", ret)?;
@@ -868,21 +1199,151 @@ impl<'a> Cx<'a> {
         Ok(s)
     }
 
-    fn call_user(&mut self, name: &str, args: Vec<String>) -> G {
+    fn resolve_callee(&mut self, name: &str, arg_types: &[Type], ret: Option<&Type>) -> G<(String, Type)> {
         if !self.eligible.contains(name) {
             return Err(format!("calls '{name}', which is not native"));
         }
-        let (_, ret) = self.check.fn_types.get(name).cloned().ok_or("unknown callee")?;
-        let rr = self.rr(&ret)?;
+        let (decl_params, decl_ret) = self.check.fn_types.get(name).cloned().ok_or("unknown callee")?;
+        if !self.generics.contains_key(name) {
+            return Ok((name.to_string(), decl_ret));
+        }
+        let mut map = HashMap::new();
+        for (d, a) in decl_params.iter().zip(arg_types) {
+            match_types(d, a, &mut map);
+        }
+        if let Some(r) = ret {
+            match_types(&decl_ret, r, &mut map);
+        }
+        let f = self.generics[name].clone();
+        let mut key = Vec::new();
+        for p in f.tparams.iter().filter(|p| p.name.starts_with(|c: char| c.is_ascii_uppercase())) {
+            let t = map.get(&p.name).cloned().ok_or_else(|| format!("cannot infer type parameter {} of {name}", p.name))?;
+            if has_vars(&t) {
+                return Err(format!("unresolved type parameter {} of {name}", p.name));
+            }
+            key.push(self.mangle(&t)?);
+        }
+        let cname = format!("{name}__{}", key.join("_"));
+        if self.spec_done.insert(cname.clone()) {
+            self.spec_queue.push((name.to_string(), map.clone(), cname.clone()));
+        }
+        Ok((cname, subst_map(&decl_ret, &map)))
+    }
+
+    fn fn_def(&self, name: &str) -> Option<&FnDef> {
+        self.all_fns.get(name)
+    }
+
+    fn call_user(&mut self, name: &str, args: Vec<(String, Type)>, ret: Option<&Type>) -> G {
+        let tys: Vec<Type> = args.iter().map(|(_, t)| t.clone()).collect();
+        let (cname, rt) = self.resolve_callee(name, &tys, ret)?;
+        let rr = self.rr(&rt)?;
         let mut s = String::from("({ ");
         let mut names = Vec::new();
-        for a in args {
+        for (a, _) in args {
             let t = self.fresh("ca");
             write!(s, "__auto_type {t} = {a}; ").unwrap();
             names.push(t);
         }
         let call_args: String = names.iter().map(|n| format!("{n}, ")).collect();
-        write!(s, "{rr} c_ = f_{name}({call_args}st, depth); if (UNLIKELY(c_.code)) return (RRT){{.code = c_.code}}; c_.v; }})").unwrap();
+        let handlers = self.handlers("c_.code")?;
+        write!(s, "{rr} c_ = f_{cname}({call_args}st, depth); if (UNLIKELY(c_.code)) {{ {handlers}return (RRT){{.code = c_.code}}; }} c_.v; }})").unwrap();
+        Ok(s)
+    }
+
+    fn call_closure(&mut self, f: &str, ft: &Type, args: Vec<String>) -> G {
+        let Type::Fn(_, r, _) = ft else { return Err("calls a non-function value".into()) };
+        let rr = self.rr(r)?;
+        let fc = self.cty(ft)?;
+        let mut s = format!("({{ {fc} k_ = {f}; ");
+        let mut names = Vec::new();
+        for a in args {
+            let t = self.fresh("ka");
+            write!(s, "__auto_type {t} = {a}; ").unwrap();
+            names.push(t);
+        }
+        let call_args: String = names.iter().map(|n| format!("{n}, ")).collect();
+        let handlers = self.handlers("c_.code")?;
+        write!(s, "{rr} c_ = k_.fn(k_.env, {call_args}st, depth); if (UNLIKELY(c_.code)) {{ {handlers}return (RRT){{.code = c_.code}}; }} c_.v; }})").unwrap();
+        Ok(s)
+    }
+
+    fn fn_value(&mut self, name: &str, ft: &Type) -> G {
+        let Type::Fn(ps, r, _) = ft else { return Err("function value with a non-function type".into()) };
+        let (cname, _) = self.resolve_callee(name, ps, Some(r))?;
+        let wrapper = format!("fw_{cname}");
+        let fc = self.cty(ft)?;
+        if self.helpers_done.insert(wrapper.clone()) {
+            let rr = self.rr(r)?;
+            let pcs: Vec<String> = ps.iter().map(|p| self.cty(p)).collect::<G<_>>()?;
+            let sig: String = pcs.iter().enumerate().map(|(i, p)| format!("{p} a{i}, ")).collect();
+            let call: String = (0..pcs.len()).map(|i| format!("a{i}, ")).collect();
+            writeln!(self.protos, "static {rr} {wrapper}(void* env, {sig}Status* st, int64_t depth);").unwrap();
+            writeln!(self.lambdas, "static {rr} {wrapper}(void* env, {sig}Status* st, int64_t depth) {{ return f_{cname}({call}st, depth); }}").unwrap();
+        }
+        Ok(format!("(({fc}){{{wrapper}, 0}})"))
+    }
+
+    fn closure(&mut self, params: &[String], body: &Expr, ft: &Type) -> G {
+        let Type::Fn(ps, r, _) = ft else { return Err("lambda with a non-function type".into()) };
+        if ps.len() != params.len() {
+            return Err("lambda arity mismatch".into());
+        }
+        let mut captures: Vec<(String, String, Type)> = Vec::new();
+        let mut seen = HashSet::new();
+        let mut names = Vec::new();
+        visit::walk_expr(body, &mut |x| {
+            match &x.kind {
+                ExprKind::Name(n) => names.push(n.clone()),
+                ExprKind::Placeholder => names.push("_".into()),
+                _ => {}
+            }
+            true
+        });
+        for n in names {
+            if params.contains(&n) || !seen.insert(n.clone()) {
+                continue;
+            }
+            if let Some((c, t)) = self.lookup(&n) {
+                if self.mutable.contains(&c) {
+                    return Err(format!("lambda captures mutable variable '{n}'"));
+                }
+                captures.push((n, c, t));
+            }
+        }
+        let id = self.fresh("lam");
+        let env = format!("ENV_{id}");
+        let mut fields = String::new();
+        for (i, (_, _, t)) in captures.iter().enumerate() {
+            let c = self.cty(t)?;
+            write!(fields, "{c} c{i}; ").unwrap();
+        }
+        writeln!(self.defs, "struct {env} {{ {fields}char pad_; }};").unwrap();
+        let rr = self.rr(r)?;
+        let pcs: Vec<String> = ps.iter().map(|p| self.cty(p)).collect::<G<_>>()?;
+        let sig: String = pcs.iter().enumerate().map(|(i, p)| format!("{p} a{i}, ")).collect();
+        let saved_scopes = std::mem::take(&mut self.scopes);
+        let saved_catch = std::mem::take(&mut self.catch_stack);
+        let mut scope = HashMap::new();
+        for (i, (n, _, t)) in captures.iter().enumerate() {
+            scope.insert(n.clone(), (format!("e_->c{i}"), t.clone()));
+        }
+        for (i, (p, t)) in params.iter().zip(ps).enumerate() {
+            scope.insert(p.clone(), (format!("a{i}"), t.clone()));
+        }
+        self.scopes = vec![scope];
+        let b = self.expr(body);
+        self.scopes = saved_scopes;
+        self.catch_stack = saved_catch;
+        let b = b?;
+        writeln!(self.protos, "static {rr} {id}(void* env, {sig}Status* st, int64_t depth);").unwrap();
+        writeln!(self.lambdas, "#define RRT {rr}\n#define FIDX {}\nstatic {rr} {id}(void* env, {sig}Status* st, int64_t depth) {{ struct {env}* e_ = (struct {env}*)env; (void)e_; return ({rr}){{{b}, 0}}; }}\n#undef RRT\n#undef FIDX", self.fidx).unwrap();
+        let fc = self.cty(ft)?;
+        let mut s = format!("({{ struct {env}* ev_ = (struct {env}*)sspur_alloc(sizeof(struct {env})); ");
+        for (i, (_, c, _)) in captures.iter().enumerate() {
+            write!(s, "ev_->c{i} = {c}; ").unwrap();
+        }
+        write!(s, "({fc}){{{id}, ev_}}; }})").unwrap();
         Ok(s)
     }
 
@@ -901,8 +1362,19 @@ impl<'a> Cx<'a> {
                 self.scopes.pop();
                 r
             }
-            ExprKind::Name(n) if self.lookup(n).is_none() => self.call_user(n, args.into_iter().map(|(v, _)| v).collect()),
-            _ => Err("passes a function value that is not a lambda or a function name".into()),
+            ExprKind::Name(n) if self.lookup(n).is_none() => {
+                let ft = self.ty(f).ok();
+                let ret = match &ft {
+                    Some(Type::Fn(_, r, _)) => Some((**r).clone()),
+                    _ => None,
+                };
+                self.call_user(n, args, ret.as_ref())
+            }
+            _ => {
+                let ft = self.ty(f)?;
+                let fv = self.expr(f)?;
+                self.call_closure(&fv, &ft, args.into_iter().map(|(v, _)| v).collect())
+            }
         }
     }
 
@@ -924,32 +1396,78 @@ impl<'a> Cx<'a> {
         let t = self.ty(e)?;
         match &e.kind {
             ExprKind::Int(n) => Ok(lit(*n)),
+            ExprKind::Str(parts) => {
+                if let [StrPart::Lit(l)] = parts.as_slice() {
+                    return Ok(format!("str_lit({}, {})", c_lit(l), l.len()));
+                }
+                let mut s = String::from("({ SB sb_ = {0}; ");
+                for p in parts {
+                    match p {
+                        StrPart::Lit(l) => write!(s, "sb_put(&sb_, {}, {}); ", c_lit(l), l.len()).unwrap(),
+                        StrPart::Expr(x) => {
+                            let xt = self.ty(x)?;
+                            let v = self.expr(x)?;
+                            let sh = self.helper_show(&xt)?;
+                            write!(s, "{sh}(&sb_, {v}, 0); ").unwrap();
+                        }
+                    }
+                }
+                s.push_str("sb_done(&sb_); })");
+                Ok(s)
+            }
+            ExprKind::Raise(x) => {
+                let xt = self.ty(x)?;
+                let v = self.expr(x)?;
+                let z = self.zero(&t)?;
+                self.raise_code(&v, &xt, &z)
+            }
+            ExprKind::Catch(body, arms) => self.catch_expr(e, body, arms, &t),
             ExprKind::Float(x) => Ok(format!("bitsd({}LL)", x.to_bits() as i64)),
             ExprKind::Bool(b) => Ok(if *b { "1LL" } else { "0LL" }.into()),
             ExprKind::Unit => Ok("0LL".into()),
             ExprKind::Name(n) if self.lookup(n).is_some() => Ok(self.lookup(n).unwrap().0),
             ExprKind::Placeholder => self.lookup("_").map(|(v, _)| v).ok_or_else(|| "unbound placeholder".into()),
             ExprKind::Name(n) if n == "none" => Ok(format!("({}){{0}}", self.cty(&t)?)),
+            ExprKind::Name(n) if matches!(t, Type::Fn(..)) && self.check.fn_types.contains_key(n) => self.fn_value(n, &t),
+            ExprKind::Lambda { params, body, .. } => self.closure(params, body, &t),
             ExprKind::Name(n) => self.variant(n, &[], &t),
             ExprKind::Field(x, f) => {
                 let xt = self.ty(x)?;
+                if f == "raw" && matches!(&xt, Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n)) {
+                    return self.expr(x);
+                }
                 if let (Type::Tuple(_), Ok(i)) = (&xt, f.parse::<usize>()) {
                     return Ok(format!("({}).f{i}", self.expr(x)?));
                 }
-                if let Type::Con(n, a) = &xt {
-                    if self.layouts.record_fields(n, a).is_some_and(|fs| fs.iter().any(|(fname, _)| fname == f)) {
+                if let Type::Con(n, a) = &xt
+                    && self.layouts.record_fields(n, a).is_some_and(|fs| fs.iter().any(|(fname, _)| fname == f)) {
                         return Ok(format!("({}).{f}", self.expr(x)?));
                     }
-                }
                 self.method(e, x, f, &[], &t)
             }
             ExprKind::Method { recv, name, args, .. } => self.method(e, recv, name, args, &t),
             ExprKind::Call(f, args) => {
-                let ExprKind::Name(n) = &f.kind else { return Err("calls a function value".into()) };
-                if self.lookup(n).is_some() {
-                    return Err("calls a function-typed variable".into());
+                let is_local = matches!(&f.kind, ExprKind::Name(n) if self.lookup(n).is_some());
+                if is_local || !matches!(f.kind, ExprKind::Name(_)) {
+                    let ft = self.ty(f)?;
+                    let fv = self.expr(f)?;
+                    let vals: Vec<String> = args.iter().map(|a| self.expr(a)).collect::<G<_>>()?;
+                    return self.call_closure(&fv, &ft, vals);
                 }
+                let ExprKind::Name(n) = &f.kind else { unreachable!() };
                 match n.as_str() {
+                    "empty_map" => Ok(format!("(({}){{0}})", self.cty(&t)?)),
+                    "secret" | "pii" | "untrusted" => self.expr(&args[0]),
+                    "guess" => {
+                        let (v, c) = (self.expr(&args[0])?, self.expr(&args[1])?);
+                        let gc = self.cty(&t)?;
+                        Ok(format!("({{ __auto_type gv_ = {v}; double gc_ = {c}; if (UNLIKELY(!(gc_ >= 0.0 && gc_ <= 1.0))) TRAPV({T_GUESS}, 0, dbits(gc_)); ({gc}){{gv_, gc_}}; }})"))
+                    }
+                    _ if self.layouts.newtypes.contains_key(n) && self.lookup(n).is_none() && !self.check.fn_types.contains_key(n) => self.expr(&args[0]),
+                    "log" => {
+                        let v = self.expr(&args[0])?;
+                        Ok(format!("({{ Str s_ = {v}; host_.log(s_.p, s_.len); 0LL; }})"))
+                    }
                     "some" => {
                         let v = self.expr(&args[0])?;
                         Ok(format!("({}){{1, {v}}}", self.cty(&t)?))
@@ -962,8 +1480,11 @@ impl<'a> Cx<'a> {
                         Ok(format!("({{ __auto_type x_ = {a}; __auto_type y_ = {b}; {c}(y_, x_) {op} 0 ? y_ : x_; }})"))
                     }
                     _ => {
-                        let vals: Vec<String> = args.iter().map(|a| self.expr(a)).collect::<G<_>>()?;
-                        self.call_user(n, vals)
+                        let mut vals = Vec::new();
+                        for a in args {
+                            vals.push((self.expr(a)?, self.ty(a)?));
+                        }
+                        self.call_user(n, vals, Some(&t))
                     }
                 }
             }
@@ -992,6 +1513,9 @@ impl<'a> Cx<'a> {
                         BinOp::Pow => format!("({{ double a_ = {x}; double b_ = {y}; pow(a_, b_); }})"),
                         _ => format!("({{ double a_ = {x}; double b_ = {y}; a_ {} b_; }})", op.symbol()),
                     });
+                }
+                if *op == BinOp::Add && is(&at, "Str") {
+                    return Ok(format!("({{ Str a_ = {x}; Str b_ = {y}; str_cat(a_, b_); }})"));
                 }
                 if let (BinOp::Add, Some(et)) = (op, elem(&at, "List")) {
                     let ec = self.decl(&et)?;
@@ -1088,6 +1612,456 @@ impl<'a> Cx<'a> {
         }
     }
 
+    fn err_index(&mut self, t: &Type) -> usize {
+        match self.err_types.iter().position(|x| x == t) {
+            Some(i) => i,
+            None => {
+                self.err_types.push(t.clone());
+                self.err_types.len() - 1
+            }
+        }
+    }
+
+    fn handlers(&mut self, code: &str) -> G {
+        let mut s = String::new();
+        let stack = self.catch_stack.clone();
+        for (t, label, var) in stack.iter().rev() {
+            let idx = self.err_index(t);
+            let ec = self.cty(t)?;
+            write!(s, "if ({code} == {T_RAISE} && st->err_type == {idx}) {{ {var} = *({ec}*)st->err; goto {label}; }} ").unwrap();
+        }
+        Ok(s)
+    }
+
+    fn raise_code(&mut self, val: &str, et: &Type, filler: &str) -> G {
+        if let Some((_, label, var)) = self.catch_stack.iter().rev().find(|(t, _, _)| t == et).cloned() {
+            return Ok(format!("({{ {var} = {val}; goto {label}; {filler}; }})"));
+        }
+        let idx = self.err_index(et);
+        let ec = self.cty(et)?;
+        Ok(format!("({{ __auto_type ev_ = {val}; {ec}* ep_ = ({ec}*)sspur_alloc(sizeof({ec})); *ep_ = ev_; st->err = ep_; st->err_type = {idx}; return (RRT){{.code = {T_RAISE}}}; {filler}; }})"))
+    }
+
+    fn enc_err_fn(&mut self) -> G {
+        let mut cases = String::new();
+        let types = self.err_types.clone();
+        for (i, t) in types.iter().enumerate() {
+            let enc = self.helper_enc(t)?;
+            let ec = self.cty(t)?;
+            write!(cases, "case {i}: {{ Buf eb = {{0}}; {enc}(&eb, *({ec}*)st->err); st->rbuf = eb.data; st->rlen = eb.len; break; }} ").unwrap();
+        }
+        Ok(format!("static void enc_err(Status* st) {{ switch (st->err_type) {{ {cases}default: break; }} }}\n"))
+    }
+
+    fn helper_show(&mut self, t: &Type) -> G {
+        let m = self.mangle(t)?;
+        let name = format!("show_{m}");
+        if !self.helpers_done.insert(name.clone()) {
+            return Ok(name);
+        }
+        let c = self.cty(t)?;
+        writeln!(self.protos, "static void {name}(SB* b, {c} v, int q);").unwrap();
+        let lit = |s: &str| format!("sb_put(b, {}, {}); ", c_lit(s), s.len());
+        let body = match t {
+            _ if is(t, "Int") => "sb_int(b, v);".to_string(),
+            _ if is(t, "Bool") => "if (v) sb_put(b, \"true\", 4); else sb_put(b, \"false\", 5);".to_string(),
+            _ if is(t, "Unit") => "sb_put(b, \"()\", 2);".to_string(),
+            _ if is(t, "F64") => "sb_f64(b, v);".to_string(),
+            _ if is(t, "Str") => "if (q) sb_strq(b, v); else sb_put(b, v.p, v.len);".to_string(),
+            Type::Con(n, a) if n == "List" => {
+                let e = self.helper_show(&a[0])?;
+                format!("sb_put(b, \"[\", 1); for (int64_t i = 0; i < v.len; i++) {{ if (i) sb_put(b, \", \", 2); {e}(b, v.data[i], 1); }} sb_put(b, \"]\", 1);")
+            }
+            Type::Con(n, a) if n == "Guess" => {
+                let e = self.helper_show(&a[0])?;
+                format!("sb_put(b, \"guess(\", 6); {e}(b, v.v, 1); sb_put(b, \", \", 2); sb_f64d(b, v.conf); sb_put(b, \")\", 1);")
+            }
+            Type::Con(n, a) if n == "Secret" => {
+                let _ = a;
+                "sb_put(b, \"<secret>\", 8);".to_string()
+            }
+            Type::Con(n, _) if n == "Pii" => "sb_put(b, \"<redacted>\", 10);".to_string(),
+            Type::Con(n, a) if n == "Untrusted" => {
+                let e = self.helper_show(&a[0])?;
+                format!("sb_put(b, \"untrusted(\", 10); {e}(b, v, 1); sb_put(b, \")\", 1);")
+            }
+            Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n) => {
+                let inner = self.layouts.newtypes[n].clone();
+                let e = self.helper_show(&inner)?;
+                format!("{}{e}(b, v, 1); sb_put(b, \")\", 1);", lit(&format!("{n}(")))
+            }
+            Type::Con(n, a) if n == "Map" => {
+                let (mm, node) = self.map_helpers(t)?;
+                let (sk, sv) = (self.helper_show(&a[0])?, self.helper_show(&a[1])?);
+                format!("int64_t n = sz_{mm}(v.root); {node}** xs = ({node}**)sspur_alloc((size_t)(n + 1) * sizeof({node}*)); int64_t c = 0; fill_{mm}(v.root, xs, &c); sb_put(b, \"{{\", 1); for (int64_t i = 0; i < n; i++) {{ if (i) sb_put(b, \", \", 2); {sk}(b, xs[i]->k, 1); sb_put(b, \": \", 2); {sv}(b, xs[i]->v, 1); }} sb_put(b, \"}}\", 1);")
+            }
+            Type::Con(n, a) if n == "Opt" => {
+                let e = self.helper_show(&a[0])?;
+                format!("if (!v.some) sb_put(b, \"none\", 4); else {{ sb_put(b, \"some(\", 5); {e}(b, v.v, 1); sb_put(b, \")\", 1); }}")
+            }
+            Type::Tuple(xs) => {
+                let mut s = "sb_put(b, \"(\", 1); ".to_string();
+                for (i, x) in xs.iter().enumerate() {
+                    let e = self.helper_show(x)?;
+                    if i > 0 {
+                        s.push_str("sb_put(b, \", \", 2); ");
+                    }
+                    write!(s, "{e}(b, v.f{i}, 1); ").unwrap();
+                }
+                s.push_str("sb_put(b, \")\", 1);");
+                s
+            }
+            Type::Con(n, a) if self.layouts.records.contains_key(n) => {
+                let mut s = lit(&format!("{n}{{"));
+                for (i, (f, ft)) in self.layouts.record_fields(n, a).unwrap().iter().enumerate() {
+                    let e = self.helper_show(ft)?;
+                    s.push_str(&lit(&format!("{}{f}: ", if i > 0 { ", " } else { "" })));
+                    write!(s, "{e}(b, v.{f}, 1); ").unwrap();
+                }
+                s.push_str("sb_put(b, \"}\", 1);");
+                s
+            }
+            Type::Con(n, a) if self.layouts.sums.contains_key(n) => {
+                let tag = self.tag(t, "v");
+                let mut s = format!("switch ({tag}) {{ ");
+                for (k, (vname, fs)) in self.layouts.sum_variants(n, a).unwrap().iter().enumerate() {
+                    write!(s, "case {k}: ").unwrap();
+                    s.push_str(&lit(vname));
+                    if let Some(fs) = fs {
+                        s.push_str("sb_put(b, \"{\", 1); ");
+                        for (i, (f, ft)) in fs.iter().enumerate() {
+                            let e = self.helper_show(ft)?;
+                            s.push_str(&lit(&format!("{}{f}: ", if i > 0 { ", " } else { "" })));
+                            write!(s, "{e}(b, v->u.v{k}.{f}, 1); ").unwrap();
+                        }
+                        s.push_str("sb_put(b, \"}\", 1); ");
+                    }
+                    s.push_str("break; ");
+                }
+                s.push_str("default: break; }");
+                s
+            }
+            _ => return Err(format!("cannot display {t} natively")),
+        };
+        writeln!(self.helpers, "static void {name}(SB* b, {c} v, int q) {{ {body} }}").unwrap();
+        Ok(name)
+    }
+
+    fn show_str(&mut self, v: &str, t: &Type) -> G {
+        if is(t, "Str") {
+            return Ok(v.to_string());
+        }
+        let sh = self.helper_show(t)?;
+        Ok(format!("({{ SB sb_ = {{0}}; {sh}(&sb_, {v}, 0); sb_done(&sb_); }})"))
+    }
+
+    fn catch_expr(&mut self, e: &Expr, body: &Expr, arms: &[Arm], t: &Type) -> G {
+        let et = self
+            .check
+            .expr_types
+            .get(&(e.span.start, e.span.end, 9))
+            .cloned()
+            .map(|t| self.subst(&t))
+            .ok_or("catch without an error type")?;
+        if has_vars(&et) {
+            return Err("catch of an unresolved error type".into());
+        }
+        let rc = self.cty(t)?;
+        let ec = self.cty(&et)?;
+        let (var, label, end, res) = (self.fresh("cv"), self.fresh("ch"), self.fresh("cend"), self.fresh("cr"));
+        self.catch_stack.push((et.clone(), label.clone(), var.clone()));
+        let b = self.expr(body);
+        self.catch_stack.pop();
+        let b = b?;
+        let mut arms_code = String::new();
+        for a in arms {
+            let mut conds = Vec::new();
+            let mut binds = Vec::new();
+            self.pattern(&a.pat, &var, &et, &mut conds, &mut binds)?;
+            self.scopes.push(HashMap::new());
+            let mut decl = String::new();
+            for (n, expr, bt) in binds {
+                let c = self.bind(&n, bt);
+                write!(decl, "__auto_type {c} = {expr}; ").unwrap();
+            }
+            let guard = match &a.guard {
+                Some(g) => self.expr(g),
+                None => Ok("1".into()),
+            };
+            let arm_body = self.expr(&a.body);
+            self.scopes.pop();
+            let (guard, arm_body) = (guard?, arm_body?);
+            let cond = if conds.is_empty() { "1".to_string() } else { conds.join(" && ") };
+            write!(arms_code, "if ({cond}) {{ {decl}if ({guard}) {{ {res} = {arm_body}; goto {end}; }} }} ").unwrap();
+        }
+        let zero = self.zero(t)?;
+        let reraise = self.raise_code(&var, &et, &zero)?;
+        Ok(format!("({{ {rc} {res}; {ec} {var}; {res} = {b}; goto {end}; {label}: ; {arms_code}(void)({reraise}); {end}: ; {res}; }})"))
+    }
+
+    fn table(&mut self, f: &FnDef, rows: &[TableRow], params: &[Type], ret: &Type) -> G {
+        let rc = self.cty(ret)?;
+        let (res, end) = (self.fresh("tr"), self.fresh("tend"));
+        let mut s = format!("({{ {rc} {res}; ");
+        for r in rows {
+            self.scopes.push(HashMap::new());
+            let mut open = String::new();
+            let mut close = String::new();
+            for (i, (c, t)) in r.cells.iter().zip(params).enumerate() {
+                match c {
+                    Cell::Any => {}
+                    Cell::Pat(p) => {
+                        let mut conds = Vec::new();
+                        let mut binds = Vec::new();
+                        if let Err(e) = self.pattern(p, &format!("a{i}"), t, &mut conds, &mut binds) {
+                            self.scopes.pop();
+                            return Err(e);
+                        }
+                        let cond = if conds.is_empty() { "1".to_string() } else { conds.join(" && ") };
+                        write!(open, "if ({cond}) {{ ").unwrap();
+                        close.push_str("} ");
+                        for (n, expr, bt) in binds {
+                            let cv = self.bind(&n, bt);
+                            write!(open, "__auto_type {cv} = {expr}; ").unwrap();
+                        }
+                    }
+                    Cell::Cond(x) => match self.expr(x) {
+                        Ok(cv) => {
+                            write!(open, "if ({cv}) {{ ").unwrap();
+                            close.push_str("} ");
+                        }
+                        Err(e) => {
+                            self.scopes.pop();
+                            return Err(e);
+                        }
+                    },
+                }
+            }
+            let out = self.expr(&r.out);
+            self.scopes.pop();
+            write!(s, "{open}{res} = {}; goto {end}; {close}", out?).unwrap();
+        }
+        let mut msg = format!("SB mb_ = {{0}}; sb_put(&mb_, {}, {}); ", c_lit(&format!("no row of rule {} matched (", f.name)), format!("no row of rule {} matched (", f.name).len());
+        for (i, (p, t)) in f.params.iter().zip(params).enumerate() {
+            let sh = self.helper_show(t)?;
+            let label = format!("{}{} = ", if i > 0 { ", " } else { "" }, p.name);
+            write!(msg, "sb_put(&mb_, {}, {}); {sh}(&mb_, a{i}, 1); ", c_lit(&label), label.len()).unwrap();
+        }
+        msg.push_str("sb_put(&mb_, \")\", 1); char* mc_ = (char*)malloc((size_t)mb_.len + 1); memcpy(mc_, mb_.p, (size_t)mb_.len); st->rbuf = (int64_t*)mc_; st->rlen = mb_.len; ");
+        write!(s, "{{ {msg}TRAPV({T_MSG}, 0, 0); }} {end}: ; {res}; }})").unwrap();
+        Ok(s)
+    }
+
+    fn str_method(&mut self, r: &str, name: &str, args: &[Expr], t: &Type) -> G {
+        let arg = |cx: &mut Self, i: usize| cx.expr(&args[i]);
+        Ok(match name {
+            "len" => format!("utf8_len({r})"),
+            "is_empty" => format!("((int64_t)(({r}).len == 0))"),
+            "lower" => format!("str_case({r}, 1)"),
+            "upper" => format!("str_case({r}, 2)"),
+            "trim" => format!("str_trim({r})"),
+            "reverse" => format!("str_rev({r})"),
+            "take" => format!("str_take({r}, {})", arg(self, 0)?),
+            "drop" => format!("str_drop({r}, {})", arg(self, 0)?),
+            "contains" => format!("((int64_t)(str_find({r}, {}, 0) >= 0))", arg(self, 0)?),
+            "starts_with" => format!("str_starts({r}, {})", arg(self, 0)?),
+            "ends_with" => format!("str_ends({r}, {})", arg(self, 0)?),
+            "replace" => {
+                let (a, b) = (arg(self, 0)?, arg(self, 1)?);
+                format!("({{ Str s_ = {r}; Str f_ = {a}; Str t_ = {b}; str_replace(s_, f_, t_); }})")
+            }
+            "repeat" => {
+                let n = arg(self, 0)?;
+                format!("({{ Str s_ = {r}; int64_t n_ = {n}; if (UNLIKELY(n_ < 0)) TRAPV({T_REPEAT}, 0, 0); str_repeat(s_, n_); }})")
+            }
+            "is_alpha" => format!("({{ Str s_ = {r}; host_.str_class(1, s_.p, s_.len); }})"),
+            "split" | "chars" | "words" => {
+                let lc = self.cty(t)?;
+                let call = match name {
+                    "split" => format!("str_split({r}, {})", arg(self, 0)?),
+                    "chars" => format!("str_chars({r})"),
+                    _ => format!("str_words({r})"),
+                };
+                format!("({{ RawL r_ = {call}; ({lc}){{r_.len, (Str*)r_.data, r_.hdr}}; }})")
+            }
+            "to_int" => {
+                let oc = self.cty(t)?;
+                format!("({{ OptI_ o_ = str_to_int({r}); ({oc}){{o_.some, o_.v}}; }})")
+            }
+            "get" | "first" | "last" => {
+                let oc = self.cty(t)?;
+                let call = match name {
+                    "get" => format!("str_char_at({r}, {})", arg(self, 0)?),
+                    "first" => format!("str_char_at({r}, 0)"),
+                    _ => format!("str_last({r})"),
+                };
+                format!("({{ OptS_ o_ = {call}; ({oc}){{o_.some, o_.v}}; }})")
+            }
+            _ => return Err(format!("uses Str.{name}")),
+        })
+    }
+
+    fn subst(&self, t: &Type) -> Type {
+        subst_map(t, &self.mono)
+    }
+
+    fn map_helpers(&mut self, t: &Type) -> G<(String, String)> {
+        let Type::Con(_, a) = t else { return Err("bad map type".into()) };
+        let (kt, vt) = (a[0].clone(), a[1].clone());
+        let m = self.mangle(t)?;
+        let node = format!("MN_{m}");
+        if self.helpers_done.insert(format!("map_{m}")) {
+            let kc = self.cty(&kt)?;
+            let vc = self.cty(&vt)?;
+            let kcmp = self.helper_cmp(&kt)?;
+            self.fwd_decl(&node);
+            writeln!(self.defs, "struct {node} {{ {kc} k; {vc} v; uint64_t pr; int64_t sz; {node}* l; {node}* r; }};").unwrap();
+            let p = &mut self.protos;
+            writeln!(p, "static {node}* put_{m}({node}* t, {kc} k, {vc} v, uint64_t pr);").unwrap();
+            writeln!(p, "static {node}* del_{m}({node}* t, {kc} k);").unwrap();
+            writeln!(p, "static {node}* find_{m}({node}* t, {kc} k);").unwrap();
+            writeln!(p, "static void fill_{m}({node}* t, {node}** out, int64_t* n);").unwrap();
+            let h = &mut self.helpers;
+            writeln!(h, "static inline int64_t sz_{m}({node}* t) {{ return t ? t->sz : 0; }}").unwrap();
+            writeln!(h, "static inline {node}* cp_{m}({node}* t) {{ {node}* n = ({node}*)sspur_alloc(sizeof({node})); *n = *t; return n; }}").unwrap();
+            writeln!(h, "static inline void fix_{m}({node}* t) {{ t->sz = 1 + sz_{m}(t->l) + sz_{m}(t->r); }}").unwrap();
+            writeln!(h, "static {node}* put_{m}({node}* t, {kc} k, {vc} v, uint64_t pr) {{ if (!t) {{ {node}* n = ({node}*)sspur_alloc(sizeof({node})); n->k = k; n->v = v; n->pr = pr; n->sz = 1; n->l = n->r = 0; return n; }} int c = {kcmp}(k, t->k); {node}* n = cp_{m}(t); if (c == 0) {{ n->v = v; return n; }} if (c < 0) {{ n->l = put_{m}(t->l, k, v, pr); if (n->l->pr > n->pr) {{ {node}* L = n->l; n->l = L->r; fix_{m}(n); L->r = n; fix_{m}(L); return L; }} }} else {{ n->r = put_{m}(t->r, k, v, pr); if (n->r->pr > n->pr) {{ {node}* R = n->r; n->r = R->l; fix_{m}(n); R->l = n; fix_{m}(R); return R; }} }} fix_{m}(n); return n; }}").unwrap();
+            writeln!(h, "static {node}* merge_{m}({node}* a, {node}* b) {{ if (!a) return b; if (!b) return a; if (a->pr > b->pr) {{ {node}* n = cp_{m}(a); n->r = merge_{m}(a->r, b); fix_{m}(n); return n; }} {node}* n = cp_{m}(b); n->l = merge_{m}(a, b->l); fix_{m}(n); return n; }}").unwrap();
+            writeln!(h, "static {node}* del_{m}({node}* t, {kc} k) {{ if (!t) return t; int c = {kcmp}(k, t->k); if (c == 0) return merge_{m}(t->l, t->r); {node}* n = cp_{m}(t); if (c < 0) n->l = del_{m}(t->l, k); else n->r = del_{m}(t->r, k); fix_{m}(n); return n; }}").unwrap();
+            writeln!(h, "static {node}* find_{m}({node}* t, {kc} k) {{ while (t) {{ int c = {kcmp}(k, t->k); if (c == 0) return t; t = c < 0 ? t->l : t->r; }} return 0; }}").unwrap();
+            writeln!(h, "static {node}* mput_{m}({node}* t, {kc} k, {vc} v, uint64_t pr) {{ if (!t) {{ {node}* n = ({node}*)sspur_alloc(sizeof({node})); n->k = k; n->v = v; n->pr = pr; n->sz = 1; n->l = n->r = 0; return n; }} int c = {kcmp}(k, t->k); if (c == 0) {{ t->v = v; return t; }} if (c < 0) {{ t->l = mput_{m}(t->l, k, v, pr); if (t->l->pr > t->pr) {{ {node}* L = t->l; t->l = L->r; fix_{m}(t); L->r = t; fix_{m}(L); return L; }} }} else {{ t->r = mput_{m}(t->r, k, v, pr); if (t->r->pr > t->pr) {{ {node}* R = t->r; t->r = R->l; fix_{m}(t); R->l = t; fix_{m}(R); return R; }} }} fix_{m}(t); return t; }}").unwrap();
+            writeln!(h, "static void fill_{m}({node}* t, {node}** out, int64_t* n) {{ if (!t) return; fill_{m}(t->l, out, n); out[(*n)++] = t; fill_{m}(t->r, out, n); }}").unwrap();
+        }
+        Ok((m, node))
+    }
+
+    fn map_method(&mut self, r: &str, mt: &Type, name: &str, args: &[Expr], t: &Type) -> G {
+        let (m, node) = self.map_helpers(mt)?;
+        let Type::Con(_, a) = mt else { unreachable!() };
+        let (kt, vt) = (a[0].clone(), a[1].clone());
+        let mc = self.cty(mt)?;
+        let mv = self.fresh("mp");
+        let head = format!("__auto_type {mv} = {r}; ");
+        let all = format!("int64_t n_ = sz_{m}({mv}.root); {node}** ns_ = ({node}**)sspur_alloc((size_t)(n_ + 1) * sizeof({node}*)); int64_t c_ = 0; fill_{m}({mv}.root, ns_, &c_); ");
+        Ok(match name {
+            "len" => format!("sz_{m}(({r}).root)"),
+            "get" => {
+                let k = self.expr(&args[0])?;
+                let oc = self.cty(t)?;
+                format!("({{ {head}{node}* f_ = find_{m}({mv}.root, {k}); {oc} o_ = {{0}}; if (f_) {{ o_.some = 1; o_.v = f_->v; }} o_; }})")
+            }
+            "has" => {
+                let k = self.expr(&args[0])?;
+                format!("({{ {head}(int64_t)(find_{m}({mv}.root, {k}) != 0); }})")
+            }
+            "put" if self.inplace.contains(r) => {
+                let (k, v) = (self.expr(&args[0])?, self.expr(&args[1])?);
+                format!("({{ __auto_type k_ = {k}; __auto_type v_ = {v}; {r}.root = mput_{m}({r}.root, k_, v_, sspur_prio()); {r}; }})")
+            }
+            "put" => {
+                let (k, v) = (self.expr(&args[0])?, self.expr(&args[1])?);
+                format!("({{ {head}__auto_type k_ = {k}; __auto_type v_ = {v}; ({mc}){{put_{m}({mv}.root, k_, v_, sspur_prio())}}; }})")
+            }
+            "remove" => {
+                let k = self.expr(&args[0])?;
+                format!("({{ {head}({mc}){{del_{m}({mv}.root, {k})}}; }})")
+            }
+            "keys" | "values" | "items" => {
+                let lc = self.cty(t)?;
+                let et = elem(t, "List").ok_or("bad list")?;
+                let ec = self.cty(&et)?;
+                let fill = match name {
+                    "keys" => "d_[i_] = ns_[i_]->k;".to_string(),
+                    "values" => "d_[i_] = ns_[i_]->v;".to_string(),
+                    _ => "d_[i_].f0 = ns_[i_]->k; d_[i_].f1 = ns_[i_]->v;".to_string(),
+                };
+                let _ = (&kt, &vt);
+                format!("({{ {head}{all}RawL r_ = raw_alloc(n_, sizeof({ec})); {ec}* d_ = ({ec}*)r_.data; for (int64_t i_ = 0; i_ < n_; i_++) {{ {fill} }} r_.hdr[1] = n_; ({lc}){{n_, d_, r_.hdr}}; }})")
+            }
+            _ => return Err(format!("uses Map.{name}")),
+        })
+    }
+
+    fn helper_hash(&mut self, t: &Type) -> G {
+        if let Some(inner) = self.zero_cost_inner(t) {
+            return self.helper_hash(&inner);
+        }
+        if is(t, "Int") || is(t, "Bool") || is(t, "Unit") {
+            return Ok("hash_I".into());
+        }
+        if is(t, "F64") {
+            return Ok("hash_D".into());
+        }
+        if is(t, "Str") {
+            return Ok("hash_S".into());
+        }
+        let m = self.mangle(t)?;
+        let name = format!("hash_{m}");
+        if !self.helpers_done.insert(name.clone()) {
+            return Ok(name);
+        }
+        let c = self.cty(t)?;
+        writeln!(self.protos, "static uint64_t {name}({c} v);").unwrap();
+        let mut body = String::from("uint64_t h = 7; ");
+        match t {
+            Type::Con(n, a) if n == "List" => {
+                let e = self.helper_hash(&a[0])?;
+                write!(body, "for (int64_t i = 0; i < v.len; i++) h = hmix(h * 31 + {e}(v.data[i])); h = hmix(h ^ (uint64_t)v.len);").unwrap();
+            }
+            Type::Con(n, a) if n == "Opt" => {
+                let e = self.helper_hash(&a[0])?;
+                write!(body, "h = v.some ? hmix(11 + {e}(v.v)) : 3;").unwrap();
+            }
+            Type::Tuple(xs) => {
+                for (i, x) in xs.iter().enumerate() {
+                    let e = self.helper_hash(x)?;
+                    write!(body, "h = hmix(h * 31 + {e}(v.f{i})); ").unwrap();
+                }
+            }
+            Type::Con(n, a) if self.layouts.records.contains_key(n) => {
+                for (f, ft) in self.layouts.record_fields(n, a).unwrap() {
+                    let e = self.helper_hash(&ft)?;
+                    write!(body, "h = hmix(h * 31 + {e}(v.{f})); ").unwrap();
+                }
+            }
+            Type::Con(n, a) if self.layouts.sums.contains_key(n) => {
+                let tag = self.tag(t, "v");
+                write!(body, "h = hmix((uint64_t){tag} + 1); switch ({tag}) {{ ").unwrap();
+                for (k, (_, fs)) in self.layouts.sum_variants(n, a).unwrap().iter().enumerate() {
+                    if let Some(fs) = fs {
+                        write!(body, "case {k}: ").unwrap();
+                        for (f, ft) in fs {
+                            let e = self.helper_hash(ft)?;
+                            write!(body, "h = hmix(h * 31 + {e}(v->u.v{k}.{f})); ").unwrap();
+                        }
+                        body.push_str("break; ");
+                    }
+                }
+                body.push_str("default: break; }");
+            }
+            _ => return Err(format!("cannot hash {t}")),
+        }
+        body.push_str(" return h;");
+        writeln!(self.helpers, "static uint64_t {name}({c} v) {{ {body} }}").unwrap();
+        Ok(name)
+    }
+
+    fn counts(&mut self, r: &str, lt: &Type, et: &Type, t: &Type) -> G {
+        let m = self.mangle(lt)?;
+        let name = format!("counts_{m}");
+        let lc = self.cty(lt)?;
+        let out = self.cty(t)?;
+        let pt = elem(t, "List").ok_or("bad counts type")?;
+        let pc = self.cty(&pt)?;
+        if self.helpers_done.insert(name.clone()) {
+            let c = self.helper_cmp(et)?;
+            let h = self.helper_hash(et)?;
+            writeln!(self.protos, "static {out} {name}({lc} l);").unwrap();
+            writeln!(self.helpers, "static {out} {name}({lc} l) {{ int64_t n = l.len; int64_t cap = 16; while (cap < n * 2) cap *= 2; int64_t* slot = (int64_t*)sspur_alloc((size_t)cap * 8); memset(slot, 0, (size_t)cap * 8); RawL r = raw_alloc(n, sizeof({pc})); {pc}* d = ({pc}*)r.data; int64_t k = 0; for (int64_t i = 0; i < n; i++) {{ uint64_t hv = {h}(l.data[i]); int64_t j = (int64_t)(hv & (uint64_t)(cap - 1)); for (;;) {{ int64_t g = slot[j]; if (!g) {{ slot[j] = k + 1; d[k].f0 = l.data[i]; d[k].f1 = 1; k++; break; }} if ({c}(d[g - 1].f0, l.data[i]) == 0) {{ d[g - 1].f1++; break; }} j = (j + 1) & (cap - 1); }} }} r.hdr[1] = k; return ({out}){{k, d, r.hdr}}; }}").unwrap();
+        }
+        Ok(format!("{name}({r})"))
+    }
+
     fn zero(&mut self, t: &Type) -> G {
         let c = self.cty(t)?;
         Ok(if c == "int64_t" {
@@ -1144,14 +2118,63 @@ impl<'a> Cx<'a> {
 
     fn method(&mut self, e: &Expr, recv: &Expr, name: &str, args: &[Expr], t: &Type) -> G {
         if self.check.user_methods.contains(&(e.span.start, e.span.end)) {
-            let mut vals = vec![self.expr(recv)?];
+            let mut vals = vec![(self.expr(recv)?, self.ty(recv)?)];
             for a in args {
-                vals.push(self.expr(a)?);
+                vals.push((self.expr(a)?, self.ty(a)?));
             }
-            return self.call_user(name, vals);
+            return self.call_user(name, vals, Some(t));
         }
         let rt = self.ty(recv)?;
         let r = self.expr(recv)?;
+        if name == "str" {
+            return self.show_str(&r, &rt);
+        }
+        if is(&rt, "Str") {
+            return self.str_method(&r, name, args, t);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "Map") {
+            return self.map_method(&r, &rt, name, args, t);
+        }
+        if let Type::Con(kind, a) = &rt {
+            if matches!(kind.as_str(), "Secret" | "Pii" | "Untrusted") {
+                let inner = a[0].clone();
+                let x = self.fresh("wx");
+                return Ok(match name {
+                    "expose" | "trust" => r,
+                    "map" | "check" | "validate" => {
+                        let body = self.apply(&args[0], vec![(x.clone(), inner)])?;
+                        format!("({{ __auto_type {x} = {r}; {body}; }})")
+                    }
+                    _ => return Err(format!("uses {kind}.{name}")),
+                });
+            }
+            if kind == "Guess" {
+                let inner = a[0].clone();
+                let g = self.fresh("gg");
+                let x = self.fresh("gx");
+                let head = format!("__auto_type {g} = {r}; ");
+                return Ok(match name {
+                    "conf" => format!("(({r}).conf)"),
+                    "accept" => format!("(({r}).v)"),
+                    "map" => {
+                        let gc = self.cty(t)?;
+                        let body = self.apply(&args[0], vec![(x.clone(), inner)])?;
+                        format!("({{ {head}__auto_type {x} = {g}.v; ({gc}){{{body}, {g}.conf}}; }})")
+                    }
+                    "verify" => {
+                        let oc = self.cty(t)?;
+                        let body = self.apply(&args[0], vec![(x.clone(), inner)])?;
+                        format!("({{ {head}__auto_type {x} = {g}.v; {oc} o_ = {{0}}; if ({body}) {{ o_.some = 1; o_.v = {g}.v; }} o_; }})")
+                    }
+                    "at_least" => {
+                        let oc = self.cty(t)?;
+                        let min = self.expr(&args[0])?;
+                        format!("({{ {head}double m_ = {min}; {oc} o_ = {{0}}; if ({g}.conf >= m_) {{ o_.some = 1; o_.v = {g}.v; }} o_; }})")
+                    }
+                    _ => return Err(format!("uses Guess.{name}")),
+                });
+            }
+        }
         if let Some(et) = elem(&rt, "List") {
             return self.list_method(&r, &rt, &et, name, args, t);
         }
@@ -1161,6 +2184,15 @@ impl<'a> Cx<'a> {
                 "is_some" => format!("(({r}).some)"),
                 "is_none" => format!("((int64_t)!({r}).some)"),
                 "get" => format!("({{ __auto_type o_ = {r}; if (UNLIKELY(!o_.some)) TRAPV({T_UNWRAP}, 0, 0); o_.v; }})"),
+                "ok_or" => {
+                    let et2 = self.ty(&args[0])?;
+                    let ev = self.expr(&args[0])?;
+                    let o = self.fresh("oo");
+                    let ev_name = self.fresh("oe");
+                    let z = self.zero(&et)?;
+                    let raise = self.raise_code(&ev_name, &et2, &z)?;
+                    format!("({{ __auto_type {o} = {r}; if (!{o}.some) {{ __auto_type {ev_name} = {ev}; (void)({raise}); }} {o}.v; }})")
+                }
                 "map" => {
                     let x = self.fresh("om");
                     let body = self.apply(&args[0], vec![(x.clone(), et.clone())])?;
@@ -1262,7 +2294,34 @@ impl<'a> Cx<'a> {
                 let acc_t = self.ty(&args[0])?;
                 let at = self.cty(t)?;
                 let acc = self.fresh("acc");
-                let body = self.apply(&args[1], vec![(acc.clone(), acc_t), (x.clone(), et.clone())])?;
+                let is_map = matches!(&acc_t, Type::Con(n, _) if n == "Map");
+                let lin_lambda = is_map
+                    && is_fresh_map(&args[0])
+                    && matches!(&args[1].kind, ExprKind::Lambda { params, body, .. } if params.len() == 2 && linear(body, &params[0], true));
+                let lin_fn = match &args[1].kind {
+                    ExprKind::Name(n) if is_map && is_fresh_map(&args[0]) && self.lookup(n).is_none() && !self.generics.contains_key(n) => self
+                        .fn_def(n)
+                        .filter(|f| f.posts.is_empty() && f.params.len() == 2 && linear(&f.body, &f.params[0].name, true))
+                        .map(|f| f.name.clone()),
+                    _ => None,
+                };
+                let body = if let Some(fname) = lin_fn {
+                    let cname = format!("{fname}__lin");
+                    if self.spec_done.insert(cname.clone()) {
+                        self.spec_queue.push((fname.clone(), HashMap::new(), cname.clone()));
+                    }
+                    let (_, ret) = self.check.fn_types[&fname].clone();
+                    let rr = self.rr(&ret)?;
+                    let handlers = self.handlers("c_.code")?;
+                    format!("({{ {rr} c_ = f_{cname}({acc}, {x}, st, depth); if (UNLIKELY(c_.code)) {{ {handlers}return (RRT){{.code = c_.code}}; }} c_.v; }})")
+                } else {
+                    if lin_lambda {
+                        self.inplace.insert(acc.clone());
+                    }
+                    let b = self.apply(&args[1], vec![(acc.clone(), acc_t), (x.clone(), et.clone())]);
+                    self.inplace.remove(&acc);
+                    b?
+                };
                 wrap(format!("{at} {acc} = {init}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ __auto_type {x} = {l}.data[{i}]; {acc} = {body}; }} {acc};"))
             }
             "any" | "all" => {
@@ -1317,6 +2376,11 @@ impl<'a> Cx<'a> {
                     wrap(format!("__auto_type b_ = {other}; int64_t n_ = {l}.len < b_.len ? {l}.len : b_.len; RawL r_ = raw_alloc(n_, sizeof({pc})); {pc}* d_ = ({pc}*)r_.data; for (int64_t {i} = 0; {i} < n_; {i}++) {{ d_[{i}].f0 = {l}.data[{i}]; d_[{i}].f1 = b_.data[{i}]; }} r_.hdr[1] = n_; ({out}){{n_, d_, r_.hdr}};"))
                 }
             }
+            "counts" => self.counts(r, lt, et, t)?,
+            "join" if is(et, "Str") => {
+                let sep = self.expr(&args[0])?;
+                wrap(format!("Str sep_ = {sep}; int64_t n_ = {l}.len > 0 ? ({l}.len - 1) * sep_.len : 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) n_ += {l}.data[{i}].len; char* o_ = (char*)sspur_alloc((size_t)n_ + 1); int64_t w_ = 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ if ({i} && sep_.len) {{ memcpy(o_ + w_, sep_.p, (size_t)sep_.len); w_ += sep_.len; }} if ({l}.data[{i}].len) {{ memcpy(o_ + w_, {l}.data[{i}].p, (size_t){l}.data[{i}].len); w_ += {l}.data[{i}].len; }} }} (Str){{n_, o_}};"))
+            }
             _ => return Err(format!("uses List.{name}")),
         })
     }
@@ -1327,7 +2391,7 @@ impl<'a> Cx<'a> {
             Pat::Bind(n) => binds.push((n.clone(), v.to_string(), t.clone())),
             Pat::Int(k) => conds.push(format!("({v} == {})", lit(*k))),
             Pat::Bool(b) => conds.push(format!("({v} == {})", i64::from(*b))),
-            Pat::Str(_) => return Err("matches on strings".into()),
+            Pat::Str(sl) => conds.push(format!("(cmp_S({v}, str_lit({}, {})) == 0)", c_lit(sl), sl.len())),
             Pat::Tuple(ps) => {
                 let Type::Tuple(ts) = t else { return Err("bad tuple pattern".into()) };
                 for (i, (p, t)) in ps.iter().zip(ts).enumerate() {
@@ -1402,16 +2466,118 @@ impl<'a> Cx<'a> {
         Ok(s)
     }
 
+    fn local_group(&mut self, stmts: &[Stmt]) -> G {
+        let fns: Vec<&FnDef> = stmts.iter().filter_map(|s| if let Stmt::Fn(f) = s { Some(&**f) } else { None }).collect();
+        if fns.is_empty() {
+            return Ok(String::new());
+        }
+        let names: HashSet<String> = fns.iter().map(|f| f.name.clone()).collect();
+        let mut captures: Vec<(String, String, Type)> = Vec::new();
+        let mut seen = HashSet::new();
+        for f in &fns {
+            let params: HashSet<&String> = f.params.iter().map(|p| &p.name).collect();
+            let mut used = Vec::new();
+            for x in f.pres.iter().chain(f.posts.iter()).chain([&f.body]) {
+                visit::walk_expr(x, &mut |e| {
+                    if let ExprKind::Name(n) = &e.kind {
+                        used.push(n.clone());
+                    }
+                    true
+                });
+            }
+            for n in used {
+                if params.contains(&n) || names.contains(&n) || !seen.insert(n.clone()) {
+                    continue;
+                }
+                if let Some((c, t)) = self.lookup(&n) {
+                    if self.mutable.contains(&c) {
+                        return Err(format!("local function captures mutable variable '{n}'"));
+                    }
+                    captures.push((n, c, t));
+                }
+            }
+        }
+        let gid = self.fresh("lg");
+        let env = format!("ENV_{gid}");
+        let mut fields = String::new();
+        for (i, (_, _, t)) in captures.iter().enumerate() {
+            let c = self.cty(t)?;
+            write!(fields, "{c} c{i}; ").unwrap();
+        }
+        writeln!(self.defs, "struct {env} {{ {fields}char pad_; }};").unwrap();
+        let mut infos = Vec::new();
+        for f in &fns {
+            let (ps, r) = self.check.local_fn_types.get(&(f.sig_span.start, f.sig_span.end)).cloned().ok_or("local function without type information")?;
+            let ps: Vec<Type> = ps.iter().map(|t| self.subst(t)).collect();
+            let r = self.subst(&r);
+            let ft = Type::Fn(ps.clone(), Box::new(r.clone()), sspur_check::Row::default());
+            let cl = self.cty(&ft)?;
+            let lname = format!("lf_{gid}_{}", f.name);
+            infos.push(((*f).clone(), ps, r, ft, cl, lname));
+        }
+        let mut inner_scope = HashMap::new();
+        for (i, (n, _, t)) in captures.iter().enumerate() {
+            inner_scope.insert(n.clone(), (format!("e_->c{i}"), t.clone()));
+        }
+        for (f, _, _, ft, cl, lname) in &infos {
+            inner_scope.insert(f.name.clone(), (format!("(({cl}){{{lname}, env}})"), ft.clone()));
+        }
+        let saved_scopes = std::mem::take(&mut self.scopes);
+        let saved_catch = std::mem::take(&mut self.catch_stack);
+        let saved_ret = self.ret.clone();
+        let saved_name = self.fname.clone();
+        let saved_inplace = std::mem::take(&mut self.inplace);
+        let mut out = Ok(());
+        for (f, ps, r, _, _, lname) in &infos {
+            match self.function_in(f, ps, r, self.fidx, lname, Some((env.clone(), inner_scope.clone()))) {
+                Ok(code) => self.lambdas.push_str(&code),
+                Err(e) => {
+                    out = Err(e);
+                    break;
+                }
+            }
+        }
+        self.scopes = saved_scopes;
+        self.catch_stack = saved_catch;
+        self.ret = saved_ret;
+        self.fname = saved_name;
+        self.inplace = saved_inplace;
+        out?;
+        let gv = self.fresh("gv");
+        let mut s = format!("struct {env}* {gv} = (struct {env}*)sspur_alloc(sizeof(struct {env})); ");
+        for (i, (_, c, _)) in captures.iter().enumerate() {
+            write!(s, "{gv}->c{i} = {c}; ").unwrap();
+        }
+        for (f, _, _, ft, cl, lname) in &infos {
+            self.scopes.last_mut().unwrap().insert(f.name.clone(), (format!("(({cl}){{{lname}, {gv}}})"), ft.clone()));
+        }
+        Ok(s)
+    }
+
     fn block(&mut self, stmts: &[Stmt]) -> G {
         self.scopes.push(HashMap::new());
         let mut s = String::from("({ ");
+        match self.local_group(stmts) {
+            Ok(g) => s.push_str(&g),
+            Err(e) => {
+                self.scopes.pop();
+                return Err(e);
+            }
+        }
         let n = stmts.len();
         for (i, st) in stmts.iter().enumerate() {
             let last = i + 1 == n;
+            if let Stmt::Var(v, init) = st
+                && is_fresh_map(init) && var_linear(&stmts[i + 1..], v) {
+                    self.pending_linear.insert(v.clone());
+                }
             let r = match st {
                 Stmt::Expr(x) => self.expr(x).map(|v| if last { format!("{v}; ") } else { format!("(void)({v}); ") }),
                 other => self.stmt(other).map(|c| if last { format!("{c}0LL; ") } else { c }),
             };
+            if let Stmt::Var(v, _) = st {
+                self.pending_linear.remove(v.as_str());
+            }
             match r {
                 Ok(c) => s.push_str(&c),
                 Err(e) => {
@@ -1446,6 +2612,10 @@ impl<'a> Cx<'a> {
                 let c = self.cty(&t)?;
                 let v = self.expr(e)?;
                 let var = self.bind(n, t);
+                self.mutable.insert(var.clone());
+                if self.pending_linear.contains(n.as_str()) && is_fresh_map(e) {
+                    self.inplace.insert(var.clone());
+                }
                 Ok(format!("{c} {var} = {v}; "))
             }
             Stmt::Assign(n, e, _) => {
@@ -1494,7 +2664,7 @@ impl<'a> Cx<'a> {
                 Ok(format!("{{ __auto_type {l} = {lv}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ __auto_type {item} = {l}.data[{i}]; if ({cond}) {{ {decl}(void)({}); }} }} }} ", body?))
             }
             Stmt::Expr(e) => Ok(format!("(void)({}); ", self.expr(e)?)),
-            Stmt::Fn(_) => Err("defines a local function".into()),
+            Stmt::Fn(_) => Ok(String::new()),
         }
     }
 
@@ -1519,7 +2689,7 @@ impl<'a> Cx<'a> {
             write!(s, "__auto_type {vv} = {nv}; ").unwrap();
             let mut lval = w.clone();
             let mut cur = t.clone();
-            let mut records: Vec<(String, String, Vec<(String, Type)>)> = Vec::new();
+            let mut records: Vec<(String, String, Fields)> = Vec::new();
             for (seg, key) in path.iter().zip(&keys) {
                 match (seg, &cur) {
                     (PathSeg::Field(f), Type::Con(n, a)) => {
@@ -1546,6 +2716,138 @@ impl<'a> Cx<'a> {
         }
         write!(s, "{w}; }})").unwrap();
         Ok(s)
+    }
+}
+
+fn mentions(e: &Expr, m: &str) -> bool {
+    let mut hit = false;
+    visit::walk_expr(e, &mut |x| {
+        if matches!(&x.kind, ExprKind::Name(n) if n == m) {
+            hit = true;
+        }
+        true
+    });
+    hit
+}
+
+fn is_name(e: &Expr, m: &str) -> bool {
+    matches!(&e.kind, ExprKind::Name(n) if n == m)
+}
+
+fn pat_binds(p: &Pat, m: &str) -> bool {
+    match p {
+        Pat::Bind(n) => n == m,
+        Pat::Tuple(xs) => xs.iter().any(|x| pat_binds(x, m)),
+        Pat::Ctor { args: CtorArgs::Positional(xs), .. } => xs.iter().any(|x| pat_binds(x, m)),
+        Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().any(|(_, x)| pat_binds(x, m)),
+        _ => false,
+    }
+}
+
+const MAP_READS: &[&str] = &["get", "has", "len"];
+
+fn linear(e: &Expr, m: &str, tail: bool) -> bool {
+    match &e.kind {
+        ExprKind::Name(n) if n == m => tail,
+        ExprKind::Method { recv, name, args, .. } if is_name(recv, m) => {
+            if MAP_READS.contains(&name.as_str()) {
+                args.iter().all(|a| linear(a, m, false))
+            } else if name == "put" || name == "remove" {
+                tail && args.iter().all(|a| linear(a, m, false))
+            } else {
+                false
+            }
+        }
+        ExprKind::Field(recv, f) if is_name(recv, m) => f == "len",
+        ExprKind::Lambda { body, .. } => !mentions(body, m),
+        ExprKind::If(c, t, f) => linear(c, m, false) && linear(t, m, tail) && f.as_ref().is_none_or(|f| linear(f, m, tail)),
+        ExprKind::Match(s, arms) => {
+            linear(s, m, false)
+                && arms.iter().all(|a| !pat_binds(&a.pat, m) && a.guard.as_ref().is_none_or(|g| linear(g, m, false)) && linear(&a.body, m, tail))
+        }
+        ExprKind::Block(stmts) => {
+            let n = stmts.len();
+            stmts.iter().enumerate().all(|(i, s)| match s {
+                Stmt::Expr(x) => linear(x, m, tail && i + 1 == n),
+                Stmt::Let(p, x) => !pat_binds(p, m) && linear(x, m, false),
+                Stmt::Var(v, x) => v != m && linear(x, m, false),
+                Stmt::Assign(v, x, _) => v != m && linear(x, m, false),
+                Stmt::While(c, b) => linear(c, m, false) && linear(b, m, false),
+                Stmt::For(p, it, b) => !pat_binds(p, m) && linear(it, m, false) && linear(b, m, false),
+                Stmt::Fn(f) => !mentions(&f.body, m),
+            })
+        }
+        _ => visit::children(e).into_iter().all(|c| linear(c, m, false)),
+    }
+}
+
+fn var_linear(rest: &[Stmt], m: &str) -> bool {
+    let n = rest.len();
+    rest.iter().enumerate().all(|(i, s)| stmt_linear(s, m, i + 1 == n))
+}
+
+fn stmt_linear(s: &Stmt, m: &str, last: bool) -> bool {
+    match s {
+        Stmt::Assign(v, x, _) if v == m => match &x.kind {
+            ExprKind::Method { recv, name, args, .. } if is_name(recv, m) && (name == "put" || name == "remove") => args.iter().all(|a| linear(a, m, false)),
+            _ => false,
+        },
+        Stmt::Expr(x) => linear(x, m, last),
+        Stmt::Let(p, x) => !pat_binds(p, m) && linear(x, m, false),
+        Stmt::Var(v, x) => v != m && linear(x, m, false),
+        Stmt::Assign(_, x, _) => linear(x, m, false),
+        Stmt::While(c, b) => linear(c, m, false) && body_linear(b, m),
+        Stmt::For(p, it, b) => !pat_binds(p, m) && linear(it, m, false) && body_linear(b, m),
+        Stmt::Fn(f) => !mentions(&f.body, m),
+    }
+}
+
+fn body_linear(b: &Expr, m: &str) -> bool {
+    match &b.kind {
+        ExprKind::Block(stmts) => stmts.iter().all(|s| stmt_linear(s, m, false)),
+        ExprKind::If(c, t, f) => linear(c, m, false) && body_linear(t, m) && f.as_ref().is_none_or(|f| body_linear(f, m)),
+        _ => linear(b, m, false),
+    }
+}
+
+fn is_fresh_map(e: &Expr) -> bool {
+    matches!(&e.kind, ExprKind::Call(f, args) if args.is_empty() && is_name(f, "empty_map"))
+}
+
+fn has_fn(t: &Type) -> bool {
+    match t {
+        Type::Fn(..) => true,
+        Type::Con(_, a) => a.iter().any(has_fn),
+        Type::Tuple(xs) => xs.iter().any(has_fn),
+        _ => false,
+    }
+}
+
+fn subst_map(t: &Type, m: &HashMap<String, Type>) -> Type {
+    if m.is_empty() {
+        return t.clone();
+    }
+    match t {
+        Type::Param(p) => m.get(p).cloned().unwrap_or_else(|| t.clone()),
+        Type::Con(n, a) => Type::Con(n.clone(), a.iter().map(|x| subst_map(x, m)).collect()),
+        Type::Tuple(xs) => Type::Tuple(xs.iter().map(|x| subst_map(x, m)).collect()),
+        Type::Fn(ps, r, row) => Type::Fn(ps.iter().map(|x| subst_map(x, m)).collect(), Box::new(subst_map(r, m)), row.clone()),
+        Type::Var(_) => t.clone(),
+    }
+}
+
+fn match_types(decl: &Type, actual: &Type, m: &mut HashMap<String, Type>) {
+    match (decl, actual) {
+        (Type::Param(p), a) => {
+            m.entry(p.clone()).or_insert_with(|| a.clone());
+        }
+        (Type::Con(_, d), Type::Con(_, a)) => d.iter().zip(a).for_each(|(x, y)| match_types(x, y, m)),
+        (Type::Tuple(d), Type::Tuple(a)) => d.iter().zip(a).for_each(|(x, y)| match_types(x, y, m)),
+        (Type::Fn(dp, dr, _), Type::Fn(ap, ar, _)) => {
+            dp.iter().zip(ap).for_each(|(x, y)| match_types(x, y, m));
+            match_types(dr, ar, m);
+        }
+        _ => {}
     }
 }
 

@@ -18,7 +18,7 @@ Each phase has an exit criterion. A phase isn't done until its criterion is met 
 |---|---|
 | 1 | Done. SSP-T median 0.71x Python tokens |
 | 2 | **Done.** 12 suite programs. Spec-only evaluation: Opus 30/30 zero-shot (bar: 70%), Haiku 25/30. See `adr/0002-phase2-compiler-core.md` and `bench/eval/` |
-| 4 | Started: Cranelift JIT dev tier (1.66x C++ -O2) and a C/clang release tier (**0.96x C++ -O2**, meeting Phase 5's 1.1x bar early). Pending: `sys` profile, ownership, SMT contracts. See `adr/0004-native-tiers.md` and `bench/native/` |
+| 4 | Native by default: the whole language compiles to C (via clang/LLVM). **0.78x to 1.0x C++** on compute, strings, and app workloads, and 0.31x idiomatic C++ on persistent data structures. Pending: `sys` profile, ownership, SMT contracts. See `adr/0005-native-by-default.md` and `bench/native/` |
 | 3 | Mostly done: store, transactions, query API with context packs, MCP server, contract fuzzing, typed holes. Pending: effect handlers, coroutines, and the agent token comparison against Python. See `adr/0003-phase3-agent-loop.md` |
 
 ## Language completeness

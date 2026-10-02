@@ -35,11 +35,15 @@ pub struct CheckOutput {
     pub sigs: BTreeMap<String, String>,
     pub expr_types: HashMap<ExprKey, Type>,
     pub fn_types: HashMap<String, (Vec<Type>, Type)>,
-    pub records: HashMap<String, (Vec<String>, Vec<(String, Type)>)>,
-    pub sums: HashMap<String, (Vec<String>, Vec<(String, Option<Vec<(String, Type)>>)>)>,
+    pub records: RecordTable,
+    pub sums: SumTable,
+    pub newtypes: HashMap<String, Type>,
+    pub local_fn_types: HashMap<(u32, u32), (Vec<Type>, Type)>,
 }
 
 pub type ExprKey = (u32, u32, u8);
+pub type RecordTable = HashMap<String, (Vec<String>, Vec<(String, Type)>)>;
+pub type SumTable = HashMap<String, (Vec<String>, Vec<(String, Option<Vec<(String, Type)>>)>)>;
 
 pub fn expr_key(e: &Expr) -> ExprKey {
     let tag = match &e.kind {
@@ -136,6 +140,7 @@ struct Checker {
     cur_params: Vec<(String, Type)>,
     pending_types: Vec<(ExprKey, Type)>,
     expr_types: HashMap<ExprKey, Type>,
+    local_fn_types: HashMap<(u32, u32), (Vec<Type>, Type)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -206,6 +211,7 @@ pub fn check(m: &Module) -> CheckOutput {
         cur_params: vec![],
         pending_types: vec![],
         expr_types: HashMap::new(),
+        local_fn_types: HashMap::new(),
     };
     c.load_builtins();
     c.collect(m);
@@ -227,10 +233,14 @@ pub fn check(m: &Module) -> CheckOutput {
     let fn_types = c.fns.iter().map(|(n, s)| (n.clone(), (s.params.clone(), s.ret.clone()))).collect();
     let mut records = HashMap::new();
     let mut sums = HashMap::new();
+    let mut newtypes = HashMap::new();
     for (n, info) in &c.types {
         match &info.kind {
             TypeKind::Record(fs) => {
                 records.insert(n.clone(), (info.params.clone(), fs.clone()));
+            }
+            TypeKind::New(inner) => {
+                newtypes.insert(n.clone(), inner.clone());
             }
             TypeKind::Sum(vs) => {
                 let variants = vs.iter().map(|v| (v.clone(), c.ctors.get(v).and_then(|ci| ci.fields.clone()))).collect();
@@ -250,7 +260,7 @@ pub fn check(m: &Module) -> CheckOutput {
             fix: vec![],
         });
     }
-    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums }
+    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types }
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -1039,6 +1049,7 @@ impl Checker {
                             self.err("E_UNSUPPORTED", f.sig_span, format!("local function '{}' cannot be generic; define it at top level", f.name));
                         }
                         let sch = self.scheme_of(f);
+                        self.local_fn_types.insert((f.sig_span.start, f.sig_span.end), (sch.params.clone(), sch.ret.clone()));
                         let ty = self.local_fn_type(&sch);
                         self.bind(&f.name, ty, false);
                     }
@@ -1381,6 +1392,7 @@ impl Checker {
             }
         };
         self.check_arms(&err_ty, arms, &bt);
+        self.pending_types.push(((span.start, span.end, 9), err_ty.clone()));
         let err_ty = self.resolve(&err_ty);
         let atom = format!("fail[{err_ty}]");
         let exhaustive = self.missing_cases(&err_ty, arms).is_empty();

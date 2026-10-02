@@ -51,8 +51,9 @@ sspur mcp                                 # MCP server for agents
 | `schema/` | JSON schemas for nodes, ops, diagnostics |
 | `bench/` | Token benchmark: SSP-T vs Python, TypeScript, Go, Rust |
 | `examples/` | SSP-T sample programs (design targets; may use features not implemented yet) |
-| `crates/` | `sspur-syntax`, `sspur-check`, `sspur-hash`, `sspur-eval` (interpreter and fuzzer), `sspur-store` (codebase, transactions, queries), `sspur-cli` (CLI and MCP server) |
+| `crates/` | `sspur-native` (Cranelift JIT and C release tier), `sspur-syntax`, `sspur-check`, `sspur-hash`, `sspur-eval` (interpreter and fuzzer), `sspur-store` (codebase, transactions, queries), `sspur-cli` (CLI and MCP server) |
 | `bench/eval/` | Spec-only model evaluation: tasks, scorer, results |
+| `bench/native/` | Native tiers versus C++: interpreter, Cranelift JIT, release (clang) |
 | `tests/programs/` | Executable suite programs, each with tests |
 
 ## Token benchmark

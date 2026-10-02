@@ -43,6 +43,7 @@ pub struct Interp {
     pub output: RefCell<Option<Vec<String>>>,
     depth: Cell<u32>,
     pub fuel: Cell<u64>,
+    native: Option<sspur_native::Compiled>,
 }
 
 const MAX_DEPTH: u32 = 20_000;
@@ -73,6 +74,7 @@ impl Interp {
             output: RefCell::new(None),
             depth: Cell::new(0),
             fuel: Cell::new(u64::MAX),
+            native: None,
         };
         for d in &m.defs {
             match d {
@@ -169,7 +171,30 @@ impl Interp {
         out
     }
 
+    pub fn set_native(&mut self, c: sspur_native::Compiled) {
+        self.native = Some(c);
+    }
+
     pub fn call_fn(&self, f: &FnDef, args: Vec<Value>) -> R {
+        if let Some(n) = &self.native {
+            let raw: Option<Vec<i64>> = args
+                .iter()
+                .map(|a| match a {
+                    Value::Int(i) => Some(*i),
+                    Value::Bool(b) => Some(i64::from(*b)),
+                    _ => None,
+                })
+                .collect();
+            if let Some(raw) = raw
+                && let Some(r) = n.call(&f.name, &raw) {
+                    return match r {
+                        Ok(v) if n.returns_bool(&f.name) => Ok(Value::Bool(v != 0)),
+                        Ok(_) if n.returns_unit(&f.name) => Ok(Value::Unit),
+                        Ok(v) => Ok(Value::Int(v)),
+                        Err(msg) => trap(msg),
+                    };
+                }
+        }
         let globals = self.globals.clone();
         self.call_fn_in(f, args, &globals)
     }

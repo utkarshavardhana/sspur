@@ -113,7 +113,7 @@ fn real_main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "mcp" => mcp::serve(),
-        "check" | "run" | "test" | "fuzz" | "hash" | "fmt" => program_cmd(&cmd, &args),
+        "check" | "run" | "test" | "fuzz" | "hash" | "fmt" | "native" => program_cmd(&cmd, &args),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -228,7 +228,26 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        "run" => match interp(&loaded).run_main() {
+        "native" if args.has("--emit-c") => {
+            print!("{}", sspur_native::cgen::c_source(&loaded.module));
+            ExitCode::SUCCESS
+        }
+        "native" => match sspur_native::compile(&loaded.module) {
+            Ok(c) => {
+                for f in &c.functions {
+                    println!("native  {f}");
+                }
+                for (f, why) in &c.skipped {
+                    println!("interp  {f}  ({why})");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("native compilation failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        "run" => match native_interp(&loaded, args).run_main() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("runtime error: {e}");
@@ -236,7 +255,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             }
         },
         "test" => {
-            let results = interp(&loaded).run_tests();
+            let results = native_interp(&loaded, args).run_tests();
             let failed = results.iter().filter(|(_, r)| r.is_err()).count();
             for (name, r) in &results {
                 match r {
@@ -265,6 +284,31 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         }
         _ => unreachable!(),
     }
+}
+
+fn native_interp(l: &Loaded, args: &Args) -> Interp {
+    let mut it = interp(l);
+    if args.has("--release") {
+        let opt = if args.has("--O3") { "-O3" } else { "-O2" };
+        match sspur_native::cgen::compile_release(&l.module, opt) {
+            Ok(c) => {
+                c.set_max_depth(1_000_000);
+                it.set_native(c);
+                return it;
+            }
+            Err(e) => eprintln!("release build failed, falling back to the Cranelift tier: {e}"),
+        }
+    }
+    if args.has("--native") || args.has("--release") {
+        match sspur_native::compile(&l.module) {
+            Ok(c) => {
+                c.set_max_depth(1_000_000);
+                it.set_native(c)
+            }
+            Err(e) => eprintln!("native compilation failed, interpreting: {e}"),
+        }
+    }
+    it
 }
 
 pub fn interp(l: &Loaded) -> Interp {

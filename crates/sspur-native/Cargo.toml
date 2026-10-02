@@ -1,0 +1,14 @@
+[package]
+name = "sspur-native"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+blake3.workspace = true
+cranelift-codegen = "0.136.2"
+cranelift-frontend = "0.136.2"
+cranelift-jit = "0.136.2"
+cranelift-module = "0.136.2"
+cranelift-native = "0.136.2"
+libloading = "0.9.0"
+sspur-syntax.workspace = true

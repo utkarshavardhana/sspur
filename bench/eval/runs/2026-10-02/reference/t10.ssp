@@ -1,0 +1,14 @@
+fn compress(s: Str) -> Str
+= do
+  var out = ""
+  var prev = ""
+  var n = 0
+  for c in s.chars
+    if c == prev then n := n + 1 else do
+      out := out + flush(prev, n)
+      prev := c
+      n := 1
+  out + flush(prev, n)
+
+fn flush(c: Str, n: Int) -> Str
+= if n == 0 then "" else if n == 1 then c else "{c}{n}"

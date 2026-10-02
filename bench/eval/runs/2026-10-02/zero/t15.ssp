@@ -1,0 +1,12 @@
+fn parse_int(s: Str) -> Int ! fail[ParseErr]
+= do
+  t = s.trim
+  if t == "" then raise Empty else t.to_int.ok_or(NotNumber{text: t})
+
+fn sum_csv(line: Str) -> Int ! fail[ParseErr]
+= line.split(",").map(parse_int).sum
+
+fn safe_sum_csv(line: Str) -> Int
+= catch sum_csv(line)
+  | Empty => -1
+  | NotNumber{text: _} => -1

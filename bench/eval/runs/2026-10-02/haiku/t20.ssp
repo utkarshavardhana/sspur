@@ -1,0 +1,13 @@
+fn most_common(xs: List[Str]) -> Opt[Str]
+= do
+  if xs.is_empty then
+    none
+  else
+    var counts = xs.counts
+    var result = none
+    var max_count = 0
+    for (str, count) in counts
+      if count > max_count then
+        result := some(str)
+        max_count := count
+    result

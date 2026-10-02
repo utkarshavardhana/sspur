@@ -1,0 +1,8 @@
+fn binary(n: Int) -> Str
+  pre n >= 0
+= if n < 2 then n.str else binary(n / 2) + (n % 2).str
+
+test binary_zero = binary(0) == "0"
+test binary_one = binary(1) == "1"
+test binary_ten = binary(10) == "1010"
+test binary_255 = binary(255) == "11111111"

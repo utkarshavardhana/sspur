@@ -1,0 +1,7 @@
+fn count_vowels(s: Str) -> Int
+= do
+  lower = s.lower
+  count = lower.chars.filter(c =>
+    c.str == "a" or c.str == "e" or c.str == "i" or c.str == "o" or c.str == "u"
+  ).len
+  count

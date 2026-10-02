@@ -1,0 +1,14 @@
+fn after(l: Light, n: Int) -> Light
+  pre n >= 0
+= do
+  var steps = n % 3
+  var light = l
+  for _ in 0..steps
+    light := next_light(light)
+  light
+
+fn next_light(l: Light) -> Light
+= match l
+  | Green => Yellow
+  | Yellow => Red
+  | Red => Green

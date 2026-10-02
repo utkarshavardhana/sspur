@@ -18,6 +18,7 @@ fn is_sorted(xs: List[Int]) -> Bool
 = xs.zip(xs.drop(1)).all(_.0 <= _.1)
 
 fn go(xs: List[Int], t: Int, lo: Int, hi: Int) -> Opt[Int]
+  pre lo >= 0 and hi <= xs.len
 = if lo >= hi then none else do
   mid = (lo + hi) / 2
   v = xs[mid]

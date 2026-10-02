@@ -1,0 +1,14 @@
+fn safe_sum_csv(line: Str) -> Int
+= catch do
+  var parts = line.split(",")
+  var result = 0
+  for p in parts
+    var t = p.trim
+    if t.is_empty then
+      raise Empty
+    else
+      result := result + catch t.to_int
+        | _ => raise NotNumber{text: t}
+  result
+  | Empty => -1
+  | NotNumber{text} => -1

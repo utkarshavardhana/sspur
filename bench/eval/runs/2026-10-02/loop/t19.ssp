@@ -1,0 +1,10 @@
+fn add_word(m: Map[Int, List[Str]], w: Str) -> Map[Int, List[Str]]
+= m.put(w.len, m.get(w.len).or([]) + [w])
+
+fn group_by_len(words: List[Str]) -> Map[Int, List[Str]]
+= words.fold(empty_map(), add_word)
+
+test t19_a = group_by_len(["ab", "c", "de", "fgh"]).get(2) == some(["ab", "de"])
+test t19_b = group_by_len(["ab", "c", "de", "fgh"]).get(1) == some(["c"])
+test t19_c = group_by_len(["ab", "c", "de", "fgh"]).len == 3
+test t19_d = group_by_len([]).len == 0

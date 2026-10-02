@@ -12,4 +12,5 @@ sspur-syntax.workspace = true
 sspur-check.workspace = true
 sspur-hash.workspace = true
 sspur-eval.workspace = true
+sspur-store.workspace = true
 serde_json.workspace = true

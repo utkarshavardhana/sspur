@@ -1,0 +1,11 @@
+fn apply_n[A](x: A, n: Int, f: A -> A) -> A
+  pre n >= 0
+= do
+  var acc = x
+  for i in 0..n
+    acc := f(acc)
+  acc
+
+test apply_n_zero = apply_n(5, 0, _ + 1) == 5
+test apply_n_three = apply_n(1, 3, _ * 2) == 8
+test apply_n_str = apply_n("a", 2, s => s + "b") == "abb"

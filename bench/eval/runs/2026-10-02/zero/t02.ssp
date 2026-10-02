@@ -1,0 +1,4 @@
+fn second_largest(xs: List[Int]) -> Opt[Int]
+= do
+  u = xs.unique.sort.reverse
+  if u.len < 2 then none else some(u[1])

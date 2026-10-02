@@ -1,0 +1,7 @@
+fn mirror(t: Tree) -> Tree
+= match t
+  | Leaf => Leaf
+  | Node{left, value, right} => Node{left: mirror(right), value: value, right: mirror(left)}
+
+test mirror_leaf = mirror(Leaf) == Leaf
+test mirror_some = mirror(Node{left: Node{left: Leaf, value: 2, right: Leaf}, value: 1, right: Leaf}) == Node{left: Leaf, value: 1, right: Node{left: Leaf, value: 2, right: Leaf}}

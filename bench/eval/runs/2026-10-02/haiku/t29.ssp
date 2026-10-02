@@ -1,0 +1,17 @@
+fn primes_upto(n: Int) -> List[Int]
+= do
+  var result = []
+  for i in 2..n+1
+    if is_prime(i) then result := result.push(i)
+  result
+
+fn is_prime(n: Int) -> Bool
+= if n < 2 then false
+  else if n == 2 then true
+  else if n % 2 == 0 then false
+  else not has_factor(n, 3)
+
+fn has_factor(n: Int, i: Int) -> Bool
+= if i * i > n then false
+  else if n % i == 0 then true
+  else has_factor(n, i + 2)

@@ -1,0 +1,6 @@
+fn second_largest(xs: List[Int]) -> Opt[Int]
+= xs.unique.sort.reverse.get(1)
+
+test s1 = second_largest([3, 1, 3, 2]) == some(2)
+test s2 = second_largest([5, 5]) == none
+test s3 = second_largest([]) == none

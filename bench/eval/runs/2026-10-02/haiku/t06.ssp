@@ -1,0 +1,5 @@
+fn is_anagram(a: Str, b: Str) -> Bool
+= do
+  a_clean = a.lower.chars.filter(_.is_alpha).sort
+  b_clean = b.lower.chars.filter(_.is_alpha).sort
+  a_clean == b_clean

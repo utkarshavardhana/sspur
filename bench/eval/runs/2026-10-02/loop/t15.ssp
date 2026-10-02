@@ -1,0 +1,21 @@
+fn parse_part(s: Str) -> Int ! fail[ParseErr]
+= do
+  t = s.trim
+  if t == "" then raise Empty else parse_digits(t)
+
+fn parse_digits(t: Str) -> Int ! fail[ParseErr]
+= match t.to_int
+  | some(n) => n
+  | none => raise NotNumber{text: t}
+
+fn sum_parts(line: Str) -> Int ! fail[ParseErr]
+= line.split(",").map(parse_part).sum
+
+fn safe_sum_csv(line: Str) -> Int
+= catch sum_parts(line)
+  | Empty => -1
+  | NotNumber{text: _} => -1
+
+test t15_ok = safe_sum_csv(" 1,2, 3 ") == 6
+test t15_empty = safe_sum_csv("1,,2") == -1
+test t15_bad = safe_sum_csv("1,x") == -1

@@ -1,0 +1,7 @@
+fn apply_n[A](x: A, n: Int, f: A -> A) -> A
+  pre n >= 0
+= do
+  var acc = x
+  for i in 0..n
+    acc := f(acc)
+  acc

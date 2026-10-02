@@ -1,0 +1,6 @@
+fn fib(n: Int) -> Int
+  pre n >= 0
+= fib_help(n, 0, 1)
+
+fn fib_help(n: Int, a: Int, b: Int) -> Int
+= if n == 0 then a else fib_help(n - 1, b, a + b)

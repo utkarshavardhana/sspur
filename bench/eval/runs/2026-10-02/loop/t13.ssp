@@ -1,0 +1,20 @@
+fn parse_trimmed(t: Str) -> Int ! fail[ParseErr]
+= match t.to_int
+  | some(n) => n
+  | none => raise NotNumber{text: t}
+
+fn parse_int(s: Str) -> Int ! fail[ParseErr]
+= do
+  t = s.trim
+  if t == "" then raise Empty else parse_trimmed(t)
+
+test t13_ok = catch parse_int(" 42 ") == 42
+  | _ => false
+test t13_neg = catch parse_int("-7") == -7
+  | _ => false
+test t13_empty = catch parse_int("   ") == 0
+  | Empty => true
+  | NotNumber{text: _} => false
+test t13_bad = catch parse_int(" 4x ") == 0
+  | Empty => false
+  | NotNumber{text} => text == "4x"

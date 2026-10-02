@@ -1,0 +1,31 @@
+type Address = {city: Str, zip: Str}
+type User = {name: Str, age: Int where _ >= 0, address: Address, tags: List[Str]}
+
+fn birthday(u: User) -> User
+  post r.age == u.age + 1
+  ex birthday(sample()).age == 31
+= u with age := u.age + 1
+
+fn relocate(u: User, city: Str) -> User
+  ex relocate(sample(), "Pune").address.city == "Pune"
+  ex relocate(sample(), "Pune").address.zip == "560001"
+= u with address.city := city
+
+fn retag(u: User, i: Int, t: Str) -> User
+  pre i >= 0 and i < u.tags.len
+= u with tags[i] := t, name := u.name.upper
+
+fn sample() -> User
+= {name: "asha", age: 30, address: {city: "Bengaluru", zip: "560001"}, tags: ["admin", "beta"]}
+
+fn main() -> Unit ! log
+= do
+  log("{birthday(sample())}")
+  log("{retag(relocate(sample(), "Pune"), 1, "ga")}")
+
+test retag_ok = retag(sample(), 1, "ga").tags == ["admin", "ga"]
+test retag_name = retag(sample(), 0, "x").name == "ASHA"
+test original_unchanged = do
+  u = sample()
+  v = u with age := 99
+  u.age == 30 and v.age == 99

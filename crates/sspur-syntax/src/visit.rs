@@ -60,6 +60,17 @@ pub fn children(e: &Expr) -> Vec<&Expr> {
         }
         ExprKind::Record { fields, .. } => out.extend(fields.iter().map(|(_, x)| x)),
         ExprKind::List(xs) | ExprKind::Tuple(xs) | ExprKind::Par(xs) => out.extend(xs.iter()),
+        ExprKind::With(base, ups) => {
+            out.push(base);
+            for (p, v) in ups {
+                for seg in p {
+                    if let PathSeg::Index(i) = seg {
+                        out.push(i);
+                    }
+                }
+                out.push(v);
+            }
+        }
     }
     out
 }
@@ -132,6 +143,17 @@ pub fn walk_expr_mut(e: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
         }
         ExprKind::Record { fields, .. } => fields.iter_mut().for_each(|(_, x)| walk_expr_mut(x, f)),
         ExprKind::List(xs) | ExprKind::Tuple(xs) | ExprKind::Par(xs) => xs.iter_mut().for_each(|x| walk_expr_mut(x, f)),
+        ExprKind::With(base, ups) => {
+            walk_expr_mut(base, f);
+            for (p, v) in ups {
+                for seg in p {
+                    if let PathSeg::Index(i) = seg {
+                        walk_expr_mut(i, f);
+                    }
+                }
+                walk_expr_mut(v, f);
+            }
+        }
     }
 }
 
@@ -170,7 +192,7 @@ pub fn strip_spans(m: &mut Module) {
                     strip_ty(r);
                 }
                 f.effects.iter_mut().for_each(strip_effect);
-                f.pres.iter_mut().chain(f.posts.iter_mut()).for_each(strip_expr);
+                f.pres.iter_mut().chain(f.posts.iter_mut()).chain(f.examples.iter_mut()).for_each(strip_expr);
                 strip_expr(&mut f.body);
             }
             Def::Test(t) => {

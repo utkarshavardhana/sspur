@@ -1,0 +1,2 @@
+fn chunk(xs: List[Int], n: Int where _ > 0) -> List[List[Int]]
+= if xs.is_empty then [] else [xs.take(n)] + chunk(xs.drop(n), n)

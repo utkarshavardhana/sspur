@@ -1,0 +1,2 @@
+fn flatten(xss: List[List[Int]]) -> List[Int]
+= xss.fold([], (acc, ys) => acc + ys)

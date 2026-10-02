@@ -1,0 +1,11 @@
+fn cap_word(w: Str) -> Str
+= do
+  cs = w.chars
+  cs.take(1).join("").upper + cs.drop(1).join("").lower
+
+fn title_case(s: Str) -> Str
+= s.split(" ").map(cap_word).join(" ")
+
+test tc1 = title_case("hello wORLD") == "Hello World"
+test tc2 = title_case("") == ""
+test tc3 = title_case("a") == "A"

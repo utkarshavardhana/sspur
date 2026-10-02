@@ -234,6 +234,16 @@ fn str_method(name: &str, x: &str, a: Vec<Value>) -> R {
     let strs = |it: Vec<&str>| Value::list(it.into_iter().map(Value::str).collect());
     Ok(match name {
         "len" => Value::Int(x.chars().count() as i64),
+        "is_empty" => Value::Bool(x.is_empty()),
+        "take" => Value::str(&x.chars().take(int(&a[0])?.max(0) as usize).collect::<String>()),
+        "drop" => Value::str(&x.chars().skip(int(&a[0])?.max(0) as usize).collect::<String>()),
+        "reverse" => Value::str(&x.chars().rev().collect::<String>()),
+        "get" => {
+            let i = int(&a[0])?;
+            if i < 0 { Value::Opt(None) } else { x.chars().nth(i as usize).map_or(Value::Opt(None), |c| Value::some(Value::str(&c.to_string()))) }
+        }
+        "first" => x.chars().next().map_or(Value::Opt(None), |c| Value::some(Value::str(&c.to_string()))),
+        "last" => x.chars().last().map_or(Value::Opt(None), |c| Value::some(Value::str(&c.to_string()))),
         "lower" => Value::str(&x.to_lowercase()),
         "upper" => Value::str(&x.to_uppercase()),
         "trim" => Value::str(x.trim()),

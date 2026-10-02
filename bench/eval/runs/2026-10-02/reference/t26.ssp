@@ -1,0 +1,9 @@
+fn inorder(t: Tree) -> List[Int]
+= match t
+  | Leaf => []
+  | Node{left, value, right} => inorder(left) + [value] + inorder(right)
+
+fn is_bst(t: Tree) -> Bool
+= do
+  xs = inorder(t)
+  xs.zip(xs.drop(1)).all(_.0 < _.1)

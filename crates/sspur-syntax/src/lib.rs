@@ -2,6 +2,7 @@ pub mod ast;
 pub mod lexer;
 pub mod parser;
 pub mod printer;
+pub mod rename;
 pub mod visit;
 
 pub use ast::*;

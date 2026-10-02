@@ -1,0 +1,14 @@
+fn withdraw(a: Account, amt: Int) -> Account ! fail[TxErr]
+= do
+  if amt <= 0 then raise Invalid
+  if amt > a.balance then raise Insufficient{short: amt - a.balance}
+  Account{id: a.id, balance: a.balance - amt}
+
+test t16_ok = catch withdraw({id: "a", balance: 10}, 3) == Account{id: "a", balance: 7}
+  | _ => false
+test t16_inv = catch withdraw({id: "a", balance: 10}, 0) == Account{id: "a", balance: 10}
+  | Invalid => true
+  | Insufficient{short: _} => false
+test t16_short = catch withdraw({id: "a", balance: 10}, 15) == Account{id: "a", balance: 10}
+  | Invalid => false
+  | Insufficient{short} => short == 5

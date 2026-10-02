@@ -111,6 +111,7 @@ struct Checker {
     holes: Vec<Hole>,
     record_types: HashMap<(u32, u32), String>,
     user_methods: HashSet<(u32, u32)>,
+    fail_types: HashMap<String, Type>,
 }
 
 const BUILTIN_TYPES: &[(&str, usize)] = &[
@@ -152,6 +153,7 @@ pub fn check(m: &Module) -> CheckOutput {
         holes: vec![],
         record_types: HashMap::new(),
         user_methods: HashSet::new(),
+        fail_types: HashMap::new(),
     };
     c.load_builtins();
     c.collect(m);
@@ -291,7 +293,7 @@ impl Checker {
                     if e.name == "fail" {
                         for a in &e.args {
                             let at = self.conv_ty_depth(a, depth);
-                            row.atoms.insert(format!("fail[{at}]"));
+                            row.atoms.insert(self.fail_atom(&at));
                         }
                     } else if e.args.is_empty() {
                         row.atoms.insert(e.name.clone());
@@ -448,6 +450,14 @@ impl Checker {
         for p in &f.pres {
             self.check_contract(p, &param_binds);
         }
+        for ex in &f.examples {
+            self.scopes.push(HashMap::new());
+            self.frames.push(Frame::new());
+            let t = self.infer(ex, Some(&Type::bool()));
+            self.expect(&Type::bool(), &t, ex.span);
+            self.frames.pop();
+            self.scopes.pop();
+        }
         let mut post_binds = param_binds.clone();
         post_binds.push(("r".into(), scheme.ret.clone()));
         for p in &f.posts {
@@ -511,7 +521,7 @@ impl Checker {
             let fits: Vec<String> = locals.iter().filter(|(_, t)| self.resolve(t) == ty).map(|(n, _)| n.clone()).collect();
             let label = name.map_or("?".to_string(), |n| format!("?{n}"));
             let hint = if fits.is_empty() { None } else { Some(format!("in scope with type {ty}: {}", fits.join(", "))) };
-            self.push_diag("E_HOLE", "error", span, format!("hole {label} expects type {ty}"), hint, vec![]);
+            self.push_diag("E_HOLE", "hole", span, format!("hole {label} expects type {ty}"), hint, vec![]);
         }
     }
 
@@ -607,7 +617,14 @@ impl Checker {
         }
     }
 
+    fn fail_atom(&mut self, t: &Type) -> String {
+        let atom = format!("fail[{t}]");
+        self.fail_types.entry(atom.clone()).or_insert_with(|| t.clone());
+        atom
+    }
+
     fn add_effect(&mut self, atom: String, span: Span, ty: Option<Type>) {
+        let ty = ty.or_else(|| self.fail_types.get(&atom).cloned());
         if let Some(f) = self.frames.last_mut() {
             f.entry(atom).or_insert((span, ty));
         }
@@ -666,7 +683,8 @@ impl Checker {
         }
         for ft in fails {
             let ft = self.resolve(&ft);
-            self.add_effect(format!("fail[{ft}]"), span, Some(ft));
+            let atom = self.fail_atom(&ft);
+            self.add_effect(atom, span, Some(ft));
         }
         self.resolve(&ret)
     }
@@ -921,10 +939,23 @@ impl Checker {
                 let t = self.infer(x, None);
                 let rt = self.resolve(&t);
                 match &rt {
-                    Type::Con(n, _) if self.types.contains_key(n) => self.add_effect(format!("fail[{rt}]"), e.span, Some(rt.clone())),
+                    Type::Con(n, _) if self.types.contains_key(n) => {
+                        let atom = self.fail_atom(&rt);
+                        self.add_effect(atom, e.span, Some(rt.clone()))
+                    }
                     _ => self.err("E_RAISE_TYPE", e.span, format!("can only raise values of a declared error type, found {rt}")),
                 }
                 self.fresh()
+            }
+            ExprKind::With(base, ups) => {
+                let bt = self.infer(base, exp);
+                for (path, value) in ups {
+                    let target = self.path_type(&bt, path, e.span);
+                    let tr = self.resolve(&target);
+                    let vt = self.infer(value, Some(&tr));
+                    self.expect(&target, &vt, value.span);
+                }
+                self.resolve(&bt)
             }
             ExprKind::Return(x) => {
                 if self.lambda_depth > 0 {
@@ -936,6 +967,41 @@ impl Checker {
                 self.fresh()
             }
         }
+    }
+
+    fn path_type(&mut self, base: &Type, path: &[PathSeg], span: Span) -> Type {
+        let mut cur = self.resolve(base);
+        for seg in path {
+            cur = match (seg, &cur) {
+                (PathSeg::Field(f), Type::Con(n, args)) => match self.types.get(n).cloned() {
+                    Some(TypeInfo { params, kind: TypeKind::Record(fields) }) => match fields.iter().find(|(name, _)| name == f) {
+                        Some((_, ft)) => {
+                            let map: HashMap<String, Type> = params.iter().cloned().zip(args.iter().cloned()).collect();
+                            subst_params(ft, &map)
+                        }
+                        None => {
+                            self.err("E_FIELD_UNKNOWN", span, format!("{n} has no field '{f}'"));
+                            return self.fresh();
+                        }
+                    },
+                    _ => {
+                        self.err("E_WITH_PATH", span, format!("'with' can only update record fields and list elements; {cur} is not a record"));
+                        return self.fresh();
+                    }
+                },
+                (PathSeg::Index(i), Type::Con(n, args)) if n == "List" => {
+                    let it = self.infer(i, Some(&Type::int()));
+                    self.expect(&Type::int(), &it, i.span);
+                    args[0].clone()
+                }
+                _ => {
+                    self.err("E_WITH_PATH", span, format!("cannot follow this update path through {cur}"));
+                    return self.fresh();
+                }
+            };
+            cur = self.resolve(&cur);
+        }
+        cur
     }
 
     fn infer_name(&mut self, n: &str, span: Span) -> Type {
@@ -957,7 +1023,8 @@ impl Checker {
             let mut row = Row::closed(atoms);
             row.var = rvars.first().copied();
             for f in fails {
-                row.atoms.insert(format!("fail[{f}]"));
+                let atom = self.fail_atom(&f);
+                row.atoms.insert(atom);
             }
             return Type::Fn(params, Box::new(ret), row);
         }

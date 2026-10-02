@@ -1,0 +1,8 @@
+fn title_case(s: Str) -> Str
+= do
+  words = s.split(" ")
+  capitalized = words.map(w =>
+    if w.len == 0 then ""
+    else w.chars.get(0).ok_or(' ').str.upper + w.drop(1).lower
+  )
+  capitalized.join(" ")

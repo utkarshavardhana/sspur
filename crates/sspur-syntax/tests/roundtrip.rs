@@ -45,3 +45,39 @@ fn errors_have_codes() {
     let e = parse("store Orders = table").unwrap_err();
     assert_eq!(e.code, "E_UNSUPPORTED");
 }
+
+#[test]
+fn tolerant_input_canonicalizes() {
+    let natural = "fn f(xs: List[Int], n: Int) -> Int\n= do\n  var t = 0\n  for x in xs do\n    if x < n then\n      t := t + x\n    else\n      t := t - 1\n  t\n";
+    let canonical = "fn f(xs: List[Int], n: Int) -> Int\n= do\n  var t = 0\n  for x in xs\n    if x < n then t := t + x else t := t - 1\n  t\n";
+    let mut a = parse(natural).unwrap();
+    let mut b = parse(canonical).unwrap();
+    strip_spans(&mut a);
+    strip_spans(&mut b);
+    assert_eq!(a, b);
+    assert_eq!(print_module(&parse(natural).unwrap()), canonical);
+}
+
+#[test]
+fn else_on_next_line_and_single_quotes() {
+    let a = parse("fn g(n: Int) -> Str\n= if n < 0 then 'neg'\n  else if n == 0 then 'zero'\n  else 'pos'").unwrap();
+    assert_eq!(print_module(&a), "fn g(n: Int) -> Str\n= if n < 0 then \"neg\" else if n == 0 then \"zero\" else \"pos\"\n");
+}
+
+#[test]
+fn blocks_inside_parentheses_use_layout() {
+    let src = "fn h(xs: List[Int]) -> Int\n= xs.fold(0, (acc, x) =>\n    do\n    y = x * 2\n    acc + y\n  )";
+    let m = parse(src).unwrap_or_else(|e| panic!("{e:?}"));
+    let printed = print_module(&m);
+    let mut a = m;
+    let mut b = parse(&printed).unwrap_or_else(|e| panic!("{e:?}\n{printed}"));
+    strip_spans(&mut a);
+    strip_spans(&mut b);
+    assert_eq!(a, b);
+}
+
+#[test]
+fn nested_strings_in_interpolation() {
+    let m = parse("fn f(x: Str) -> Str\n= \"a {x.replace(\"b\", 'c')} d\"").unwrap();
+    assert!(print_module(&m).contains("x.replace(\"b\", \"c\")"));
+}

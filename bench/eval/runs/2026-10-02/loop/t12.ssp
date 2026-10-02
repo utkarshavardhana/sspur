@@ -1,0 +1,17 @@
+fn area(s: Shape) -> F64
+= match s
+  | Circle{r} => 3.14159 * r * r
+  | Rect{w, h} => w * h
+  | Square{s: side} => side * side
+
+fn pick(acc: Opt[Shape], x: Shape) -> Opt[Shape]
+= match acc
+  | none => some(x)
+  | some(b) => if area(x) > area(b) then some(x) else acc
+
+fn largest_area(xs: List[Shape]) -> Opt[Shape]
+= xs.fold(none, (acc, x) => pick(acc, x))
+
+test t12_empty = largest_area([]) == none
+test t12_basic = largest_area([Square{s: 1.0}, Circle{r: 1.0}, Rect{w: 1.0, h: 2.0}]) == some(Circle{r: 1.0})
+test t12_tie = largest_area([Rect{w: 2.0, h: 2.0}, Square{s: 2.0}]) == some(Rect{w: 2.0, h: 2.0})

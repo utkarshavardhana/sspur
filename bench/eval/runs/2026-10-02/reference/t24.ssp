@@ -1,0 +1,4 @@
+fn tree_sum(t: Tree) -> Int
+= match t
+  | Leaf => 0
+  | Node{left, value, right} => tree_sum(left) + value + tree_sum(right)

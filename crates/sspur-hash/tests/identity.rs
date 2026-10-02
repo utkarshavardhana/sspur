@@ -68,3 +68,12 @@ fn hashes_are_52_char_base32() {
     assert_eq!(a["f"].len(), 52);
     assert!(a["f"].chars().all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c)));
 }
+
+#[test]
+fn examples_are_part_of_identity() {
+    let a = hashes("fn f(x: Int) -> Int\n  ex f(1) == 2\n= x * 2");
+    let b = hashes("fn f(x: Int) -> Int\n  ex f(2) == 4\n= x * 2");
+    let c = hashes("fn g(y: Int) -> Int\n  ex g(1) == 2\n= y * 2");
+    assert_ne!(a["f"], b["f"]);
+    assert_eq!(a["f"], c["g"], "self-references in examples are rename-stable");
+}

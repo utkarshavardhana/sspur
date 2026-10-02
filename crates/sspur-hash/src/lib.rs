@@ -35,6 +35,24 @@ pub fn hash_module_with(m: &Module, res: &Resolution) -> Vec<(String, String)> {
     m.defs.iter().map(|d| (d.name().to_string(), base32(&hashes[d.name()]))).collect()
 }
 
+pub fn dependencies(m: &Module, res: &Resolution) -> BTreeMap<String, Vec<String>> {
+    let h = Hasher::new(m, res);
+    m.defs.iter().map(|d| (d.name().to_string(), h.deps(d).into_iter().filter(|n| n != d.name()).collect())).collect()
+}
+
+pub fn root_hash(entries: &[(String, String)]) -> String {
+    let mut sorted: Vec<&(String, String)> = entries.iter().collect();
+    sorted.sort();
+    let mut h = blake3::Hasher::new();
+    for (n, x) in sorted {
+        h.update(n.as_bytes());
+        h.update(b"\0");
+        h.update(x.as_bytes());
+        h.update(b"\n");
+    }
+    base32(h.finalize().as_bytes())
+}
+
 struct Hasher<'a> {
     defs: BTreeMap<String, &'a Def>,
     ctor_owner: HashMap<String, (String, usize)>,
@@ -121,7 +139,7 @@ impl<'a> Hasher<'a> {
                 for e in &f.effects {
                     tys.extend(e.args.iter());
                 }
-                exprs.extend(f.pres.iter().chain(f.posts.iter()));
+                exprs.extend(f.pres.iter().chain(f.posts.iter()).chain(f.examples.iter()));
                 exprs.push(&f.body);
             }
             Def::Test(t) => exprs.push(&t.body),
@@ -302,6 +320,12 @@ impl<'a> Hasher<'a> {
                     self.expr(&mut enc, p, group);
                 }
                 enc.locals.pop();
+                let saved = std::mem::take(&mut enc.locals);
+                enc.uint(f.examples.len() as u64);
+                for x in &f.examples {
+                    self.expr(&mut enc, x, group);
+                }
+                enc.locals = saved;
                 self.expr(&mut enc, &f.body, group);
             }
             Def::Test(t) => {
@@ -546,6 +570,27 @@ impl<'a> Hasher<'a> {
             ExprKind::Return(x) => {
                 enc.tag(b'<');
                 self.expr(enc, x, group);
+            }
+            ExprKind::With(base, ups) => {
+                enc.tag(b'W');
+                self.expr(enc, base, group);
+                enc.uint(ups.len() as u64);
+                for (path, v) in ups {
+                    enc.uint(path.len() as u64);
+                    for seg in path {
+                        match seg {
+                            PathSeg::Field(f) => {
+                                enc.tag(b'f');
+                                enc.str(f);
+                            }
+                            PathSeg::Index(i) => {
+                                enc.tag(b'x');
+                                self.expr(enc, i, group);
+                            }
+                        }
+                    }
+                    self.expr(enc, v, group);
+                }
             }
         }
     }

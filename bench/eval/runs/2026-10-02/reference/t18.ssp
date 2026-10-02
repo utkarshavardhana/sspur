@@ -1,0 +1,2 @@
+fn pairs[A](xs: List[A]) -> List[(A, A)]
+= xs.zip(xs.drop(1))

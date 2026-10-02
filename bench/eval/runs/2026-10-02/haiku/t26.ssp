@@ -1,0 +1,19 @@
+fn is_bst(t: Tree) -> Bool
+= check_strictly_increasing(inorder(t))
+
+fn inorder(t: Tree) -> List[Int]
+= match t
+  | Leaf => []
+  | Node{left, right, value} =>
+    inorder(left).concat([value]).concat(inorder(right))
+
+fn check_strictly_increasing(xs: List[Int]) -> Bool
+= do
+  var last = none
+  for i in 0..xs.len
+    match xs.get(i)
+    | some(v) =>
+      if last.is_some and last.or(0) >= v then return false
+      last := some(v)
+    | none => ()
+  true

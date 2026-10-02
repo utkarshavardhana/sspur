@@ -1,5 +1,6 @@
 #![allow(clippy::mutable_key_type)]
 mod builtins;
+pub mod fuzz;
 pub mod value;
 
 use sspur_syntax::*;
@@ -38,11 +39,14 @@ pub struct Interp {
     record_types: HashMap<(u32, u32), String>,
     user_methods: HashSet<(u32, u32)>,
     globals: Rc<Env>,
+    types: HashMap<String, TypeDef>,
     pub output: RefCell<Option<Vec<String>>>,
     depth: Cell<u32>,
+    pub fuel: Cell<u64>,
 }
 
 const MAX_DEPTH: u32 = 20_000;
+pub const OUT_OF_FUEL: &str = "evaluation step budget exhausted";
 
 fn ty_name(t: &Ty) -> Option<&str> {
     match t {
@@ -65,8 +69,10 @@ impl Interp {
             record_types,
             user_methods,
             globals: Rc::new(Env::default()),
+            types: HashMap::new(),
             output: RefCell::new(None),
             depth: Cell::new(0),
+            fuel: Cell::new(u64::MAX),
         };
         for d in &m.defs {
             match d {
@@ -74,7 +80,10 @@ impl Interp {
                     it.fns.insert(f.name.clone(), Rc::new(f.clone()));
                 }
                 Def::Test(t) => it.tests.push(t.clone()),
-                Def::Type(t) => it.add_type(t),
+                Def::Type(t) => {
+                    it.types.insert(t.name.clone(), t.clone());
+                    it.add_type(t)
+                }
             }
         }
         it
@@ -136,7 +145,17 @@ impl Interp {
 
     pub fn run_tests(&self) -> Vec<(String, Result<(), String>)> {
         let mut out = Vec::new();
-        for t in &self.tests {
+        let mut cases: Vec<(String, Expr)> = Vec::new();
+        let mut names: Vec<&String> = self.fns.keys().collect();
+        names.sort();
+        for n in names {
+            for (i, ex) in self.fns[n].examples.iter().enumerate() {
+                cases.push((format!("{n}.ex{}", i + 1), ex.clone()));
+            }
+        }
+        cases.extend(self.tests.iter().map(|t| (t.name.clone(), t.body.clone())));
+        for (name, body) in &cases {
+            let t = TestDef { name: name.clone(), body: body.clone(), span: Span::default() };
             *self.output.borrow_mut() = Some(vec![]);
             let r = match self.eval(&t.body, &Env::child(&self.globals)) {
                 Ok(Value::Bool(true)) => Ok(()),
@@ -164,7 +183,7 @@ impl Interp {
     fn call_fn_inner(&self, f: &FnDef, args: Vec<Value>) -> R {
         let env = Env::child(&self.globals);
         for (p, v) in f.params.iter().zip(args) {
-            self.check_value_type(&p.ty, &v, &f.name)?;
+            self.check_value_type(&p.ty, &v, &format!("parameter '{}' of {}", p.name, f.name))?;
             if let Some(r) = &p.refine {
                 self.check_refine(r, &v, &format!("parameter '{}' of {}", p.name, f.name))?;
             }
@@ -180,7 +199,7 @@ impl Interp {
             Err(c) => return Err(c),
         };
         if let Some(rt) = &f.ret {
-            self.check_value_type(rt, &result, &f.name)?;
+            self.check_value_type(rt, &result, &format!("result of {}", f.name))?;
         }
         if !f.posts.is_empty() {
             let penv = Env::child(&env);
@@ -266,6 +285,11 @@ impl Interp {
     }
 
     pub fn eval(&self, e: &Expr, env: &Rc<Env>) -> R {
+        let fuel = self.fuel.get();
+        if fuel == 0 {
+            return trap(OUT_OF_FUEL);
+        }
+        self.fuel.set(fuel - 1);
         match &e.kind {
             ExprKind::Int(n) => Ok(Value::Int(*n)),
             ExprKind::Float(x) => Ok(Value::Float(*x)),
@@ -411,6 +435,47 @@ impl Interp {
             ExprKind::Tuple(xs) | ExprKind::Par(xs) => Ok(Value::Tuple(Rc::new(self.eval_args(xs, env)?))),
             ExprKind::Raise(x) => Err(Ctrl::Raise(self.eval(x, env)?)),
             ExprKind::Return(x) => Err(Ctrl::Return(self.eval(x, env)?)),
+            ExprKind::With(base, ups) => {
+                let mut v = self.eval(base, env)?;
+                for (path, value) in ups {
+                    let mut keys = Vec::with_capacity(path.len());
+                    for seg in path {
+                        keys.push(match seg {
+                            PathSeg::Field(f) => Ok(f.as_str()),
+                            PathSeg::Index(i) => match self.eval(i, env)? {
+                                Value::Int(n) => Err(n),
+                                other => return trap(format!("index must be Int, got {other}")),
+                            },
+                        });
+                    }
+                    let nv = self.eval(value, env)?;
+                    v = self.set_path(&v, &keys, nv)?;
+                }
+                Ok(v)
+            }
+        }
+    }
+
+    fn set_path(&self, v: &Value, keys: &[Result<&str, i64>], nv: Value) -> R {
+        let Some((k, rest)) = keys.split_first() else { return Ok(nv) };
+        match (k, v) {
+            (Ok(f), Value::Record(n, fs)) => {
+                let mut out = Vec::with_capacity(fs.len());
+                for (name, fv) in fs.iter() {
+                    let nfv = if &**name == *f { self.set_path(fv, rest, nv.clone())? } else { fv.clone() };
+                    out.push((name.clone(), nfv));
+                }
+                Ok(Value::Record(n.clone(), self.build_record(n, out)?))
+            }
+            (Err(i), Value::List(xs)) => {
+                if *i < 0 || *i as usize >= xs.len() {
+                    return trap(format!("index {i} out of bounds for list of length {}", xs.len()));
+                }
+                let mut ys = (**xs).clone();
+                ys[*i as usize] = self.set_path(&xs[*i as usize], rest, nv)?;
+                Ok(Value::list(ys))
+            }
+            (_, v) => trap(format!("cannot update a path through {v}")),
         }
     }
 

@@ -112,6 +112,7 @@ pub struct FnDef {
     pub effects: Vec<Effect>,
     pub pres: Vec<Expr>,
     pub posts: Vec<Expr>,
+    pub examples: Vec<Expr>,
     pub body: Expr,
     pub span: Span,
     pub sig_span: Span,
@@ -220,6 +221,13 @@ pub enum ExprKind {
     Par(Vec<Expr>),
     Raise(Box<Expr>),
     Return(Box<Expr>),
+    With(Box<Expr>, Vec<(Vec<PathSeg>, Expr)>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PathSeg {
+    Field(String),
+    Index(Expr),
 }
 
 #[derive(Clone, Debug, PartialEq)]

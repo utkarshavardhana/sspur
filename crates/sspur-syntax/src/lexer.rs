@@ -23,7 +23,7 @@ pub struct Token {
 pub const KEYWORDS: &[&str] = &[
     "fn", "type", "test", "var", "for", "in", "if", "then", "else", "match", "catch", "do", "raise",
     "return", "with", "profile", "derive", "where", "pre", "post", "dec", "cost", "new", "true",
-    "false", "and", "or", "not", "par", "trait", "impl", "store", "svc", "queue", "effect",
+    "false", "and", "or", "not", "par", "ex", "trait", "impl", "store", "svc", "queue", "effect",
 ];
 
 const SYMBOLS: &[&str] = &[
@@ -37,6 +37,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SyntaxError> {
     let mut i = 0;
     let mut depth: i32 = 0;
     let mut at_line_start = true;
+    let mut layout: Vec<(i32, u32)> = Vec::new();
 
     while i < bytes.len() {
         if at_line_start {
@@ -50,6 +51,18 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SyntaxError> {
             }
             if depth == 0 && !out.is_empty() {
                 out.push(Token { tok: Tok::Newline(indent), span: Span::new(next, next) });
+            } else if depth > 0 {
+                while layout.last().is_some_and(|(d, ind)| *d == depth && indent < *ind) {
+                    layout.pop();
+                }
+                let opens = matches!(out.last().map(|t: &Token| &t.tok), Some(Tok::Kw("do" | "then" | "else")) | Some(Tok::Sym("=>" | "=")));
+                let active = layout.last().is_some_and(|(d, _)| *d == depth);
+                if !active && opens {
+                    layout.push((depth, indent));
+                }
+                if layout.last().is_some_and(|(d, _)| *d == depth) {
+                    out.push(Token { tok: Tok::Newline(indent), span: Span::new(next, next) });
+                }
             }
             i = next;
             at_line_start = false;
@@ -63,7 +76,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SyntaxError> {
                 i += 1;
                 at_line_start = true;
             }
-            b'"' => {
+            b'"' | b'\'' => {
                 let (s, end) = lex_string(src, i)?;
                 out.push(Token { tok: Tok::Str(s), span: Span::new(i, end) });
                 i = end;
@@ -102,7 +115,12 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SyntaxError> {
                 };
                 match *sym {
                     "(" | "[" | "{" => depth += 1,
-                    ")" | "]" | "}" => depth -= 1,
+                    ")" | "]" | "}" => {
+                        while layout.last().is_some_and(|(d, _)| *d == depth) {
+                            layout.pop();
+                        }
+                        depth -= 1
+                    }
                     _ => {}
                 }
                 out.push(Token { tok: Tok::Sym(sym), span: Span::new(i, i + sym.len()) });
@@ -129,11 +147,30 @@ fn measure_indent(bytes: &[u8], mut i: usize) -> (u32, usize) {
 
 fn lex_string(src: &str, start: usize) -> Result<(String, usize), SyntaxError> {
     let mut out = String::new();
+    let quote = src[start..].chars().next().unwrap();
     let mut chars = src[start + 1..].char_indices();
+    let mut depth = 0;
+    let mut skip_to = 0;
     while let Some((off, ch)) = chars.next() {
         let pos = start + 1 + off;
+        if pos < skip_to {
+            continue;
+        }
         match ch {
-            '"' => return Ok((out, pos + 1)),
+            '{' => {
+                depth += 1;
+                out.push(ch);
+            }
+            '}' if depth > 0 => {
+                depth -= 1;
+                out.push(ch);
+            }
+            '"' | '\'' if depth > 0 => {
+                let (_, end) = lex_string(src, pos)?;
+                out.push_str(&src[pos..end]);
+                skip_to = end;
+            }
+            c if c == quote => return Ok((out, pos + 1)),
             '\\' => match chars.next() {
                 Some((_, 'n')) => out.push('\n'),
                 Some((_, 't')) => out.push('\t'),

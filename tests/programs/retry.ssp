@@ -3,12 +3,12 @@ type NetErr = Timeout{attempt: Int} | Refused
 fn flaky(attempt: Int, succeed_on: Int) -> Str ! fail[NetErr]
 = if attempt < succeed_on then raise Timeout{attempt} else "response after {attempt} attempts"
 
-fn backoff(attempt: Int) -> Opt[Str] ! log
+fn backoff(attempt: Int where _ >= 1 and _ <= 30) -> Opt[Str] ! log
 = do
   log("attempt {attempt} timed out, backing off {100 * 2 ** (attempt - 1)}ms")
   none
 
-fn with_retry(tries: Int where _ > 0, succeed_on: Int) -> Str ! fail[NetErr], log
+fn with_retry(tries: Int where _ > 0 and _ <= 30, succeed_on: Int) -> Str ! fail[NetErr], log
 = do
   var result = none
   for i in 1..tries + 1

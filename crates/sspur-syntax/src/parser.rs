@@ -421,14 +421,17 @@ impl Parser {
         let sig_span = start.to(self.prev_span());
         let mut pres = Vec::new();
         let mut posts = Vec::new();
+        let mut examples = Vec::new();
         loop {
-            if self.newline_then(|t| matches!(t, Tok::Kw("pre" | "post"))).is_some() {
+            if self.newline_then(|t| matches!(t, Tok::Kw("pre" | "post" | "ex"))).is_some() {
                 self.bump();
             }
             if self.eat_kw("pre") {
                 pres.push(self.refine_expr()?);
             } else if self.eat_kw("post") {
                 posts.push(self.refine_expr()?);
+            } else if self.eat_kw("ex") {
+                examples.push(self.binary(1)?);
             } else {
                 break;
             }
@@ -439,8 +442,8 @@ impl Parser {
             self.bump();
         }
         self.expect_sym("=")?;
-        let body = self.expr_seq()?;
-        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, body, span: start.to(self.prev_span()), sig_span })
+        let body = self.block_or_seq()?;
+        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, body, span: start.to(self.prev_span()), sig_span })
     }
 
     fn expr_seq(&mut self) -> PResult<Expr> {
@@ -493,16 +496,23 @@ impl Parser {
                 params.push(self.expect_ident()?);
             }
             self.expect_sym("=>")?;
-            let body = self.expr()?;
+            let body = self.block_or_expr()?;
             return Ok(Expr::new(ExprKind::Lambda { params, body: Box::new(body), implicit: false }, start.to(self.prev_span())));
         }
         match self.peek() {
             Tok::Kw("if") => {
+                let if_indent = self.line_indent;
                 self.bump();
                 let c = self.expr()?;
                 self.expect_kw("then")?;
                 let t = self.branch()?;
+                if let Some(col) = self.newline_then(|t| matches!(t, Tok::Kw("else")))
+                    && col >= if_indent {
+                        self.line_indent = col;
+                        self.bump();
+                    }
                 let e = if self.eat_kw("else") { Some(Box::new(self.branch()?)) } else { None };
+                self.line_indent = if_indent;
                 Ok(Expr::new(ExprKind::If(Box::new(c), Box::new(t), e), start.to(self.prev_span())))
             }
             Tok::Kw(k @ ("match" | "catch")) => {
@@ -535,7 +545,69 @@ impl Parser {
                 let e = self.expr()?;
                 Ok(Expr::new(ExprKind::Return(Box::new(e)), start.to(self.prev_span())))
             }
-            _ => self.binary(1),
+            _ => {
+                let base = self.binary(1)?;
+                if !self.is_kw("with") {
+                    return Ok(base);
+                }
+                self.bump();
+                let mut updates = Vec::new();
+                loop {
+                    let first = self.expect_ident()?;
+                    let mut path = vec![PathSeg::Field(first)];
+                    loop {
+                        if self.eat_sym(".") {
+                            path.push(PathSeg::Field(self.expect_ident()?));
+                        } else if self.eat_sym("[") {
+                            let i = self.expr()?;
+                            self.expect_sym("]")?;
+                            path.push(PathSeg::Index(i));
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect_sym(":=")?;
+                    let value = self.expr()?;
+                    updates.push((path, value));
+                    if !(self.is_sym(",") && self.path_assign_ahead(1)) {
+                        break;
+                    }
+                    self.bump();
+                }
+                Ok(Expr::new(ExprKind::With(Box::new(base), updates), start.to(self.prev_span())))
+            }
+        }
+    }
+
+    fn path_assign_ahead(&self, mut i: usize) -> bool {
+        if !matches!(self.peek_at(i), Tok::Ident(_)) {
+            return false;
+        }
+        i += 1;
+        loop {
+            match self.peek_at(i) {
+                Tok::Sym(":=") => return true,
+                Tok::Sym(".") if matches!(self.peek_at(i + 1), Tok::Ident(_)) => i += 2,
+                Tok::Sym("[") => {
+                    let mut depth = 0;
+                    loop {
+                        match self.peek_at(i) {
+                            Tok::Sym("[") => depth += 1,
+                            Tok::Sym("]") => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            Tok::Eof => return false,
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                _ => return false,
+            }
         }
     }
 
@@ -543,9 +615,23 @@ impl Parser {
         matches!((self.peek(), self.peek_at(1)), (Tok::Ident(_), Tok::Sym(":=")))
     }
 
+    fn block_or_expr(&mut self) -> PResult<Expr> {
+        if matches!(self.peek(), Tok::Newline(c) if *c > self.line_indent) {
+            return self.block();
+        }
+        self.expr()
+    }
+
+    fn block_or_seq(&mut self) -> PResult<Expr> {
+        if matches!(self.peek(), Tok::Newline(c) if *c > self.line_indent) {
+            return self.block();
+        }
+        self.expr_seq()
+    }
+
     fn branch(&mut self) -> PResult<Expr> {
         if !self.assign_ahead() {
-            return self.expr();
+            return self.block_or_expr();
         }
         let span = self.span();
         let Tok::Ident(name) = self.bump().tok else { unreachable!() };
@@ -572,7 +658,7 @@ impl Parser {
             let guard = if self.eat_kw("if") { Some(self.expr()?) } else { None };
             self.expect_sym("=>")?;
             let saved = self.line_indent;
-            let body = if self.assign_ahead() { self.branch()? } else { self.expr_seq()? };
+            let body = if self.assign_ahead() { self.branch()? } else { self.block_or_seq()? };
             self.line_indent = saved;
             arms.push(Arm { pat, guard, body });
         }
@@ -582,8 +668,9 @@ impl Parser {
     fn block(&mut self) -> PResult<Expr> {
         let start = self.prev_span();
         let outer = self.line_indent;
+        let alone = self.pos >= 2 && matches!(self.toks[self.pos - 2].tok, Tok::Newline(_));
         let col = match *self.peek() {
-            Tok::Newline(c) if c > outer => c,
+            Tok::Newline(c) if c > outer || (alone && c == outer) => c,
             _ => return self.err("E_PARSE_BLOCK", "expected an indented block on the next line"),
         };
         let mut stmts = Vec::new();
@@ -599,6 +686,10 @@ impl Parser {
             stmts.push(self.stmt()?);
         }
         self.line_indent = outer;
+        if let [Stmt::Expr(_)] = stmts.as_slice() {
+            let Some(Stmt::Expr(e)) = stmts.pop() else { unreachable!() };
+            return Ok(e);
+        }
         Ok(Expr::new(ExprKind::Block(stmts), start.to(self.prev_span())))
     }
 
@@ -882,6 +973,7 @@ impl Parser {
                 self.bump();
                 ExprKind::Par(self.args()?)
             }
+            Tok::Kw("if" | "match" | "catch" | "do" | "raise" | "return") => return self.expr(),
             Tok::Ident(name) => {
                 self.bump();
                 if is_upper(&name) && self.is_sym("{") {
@@ -896,7 +988,8 @@ impl Parser {
                 self.bump();
                 let mut items = Vec::new();
                 while !self.is_sym("]") {
-                    items.push(self.expr()?);
+                    let item = self.expr()?;
+                    items.push(self.wrap_placeholder(item));
                     if !self.eat_sym(",") {
                         break;
                     }

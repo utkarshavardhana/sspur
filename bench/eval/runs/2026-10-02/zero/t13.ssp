@@ -1,0 +1,4 @@
+fn parse_int(s: Str) -> Int ! fail[ParseErr]
+= do
+  t = s.trim
+  if t == "" then raise Empty else t.to_int.ok_or(NotNumber{text: t})

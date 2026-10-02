@@ -99,6 +99,9 @@ fn print_fn(f: &FnDef) -> String {
     for p in &f.posts {
         s.push_str(&format!("\n  post {}", expr(p, 2)));
     }
+    for p in &f.examples {
+        s.push_str(&format!("\n  ex {}", expr(p, 2)));
+    }
     s.push_str(&format!("\n= {}", expr(&f.body, 0)));
     s
 }
@@ -150,7 +153,8 @@ fn prec_of(e: &Expr) -> u8 {
         | ExprKind::Catch(..)
         | ExprKind::Block(_)
         | ExprKind::Raise(_)
-        | ExprKind::Return(_) => 0,
+        | ExprKind::Return(_)
+        | ExprKind::With(..) => 0,
         _ => 10,
     }
 }
@@ -250,7 +254,23 @@ pub fn expr(e: &Expr, ind: usize) -> String {
         ExprKind::Par(xs) => format!("par({})", list(xs, ind)),
         ExprKind::Raise(x) => format!("raise {}", expr(x, ind)),
         ExprKind::Return(x) => format!("return {}", expr(x, ind)),
+        ExprKind::With(base, ups) => {
+            let items: Vec<String> = ups.iter().map(|(p, v)| format!("{} := {}", path(p, ind), expr(v, ind))).collect();
+            format!("{} with {}", operand(base, 1, ind), items.join(", "))
+        }
     }
+}
+
+fn path(p: &[PathSeg], ind: usize) -> String {
+    let mut s = String::new();
+    for (i, seg) in p.iter().enumerate() {
+        match seg {
+            PathSeg::Field(f) if i == 0 => s.push_str(f),
+            PathSeg::Field(f) => s.push_str(&format!(".{f}")),
+            PathSeg::Index(e) => s.push_str(&format!("[{}]", expr(e, ind))),
+        }
+    }
+    s
 }
 
 fn branch(e: &Expr, ind: usize) -> String {

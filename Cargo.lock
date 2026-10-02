@@ -160,6 +160,7 @@ dependencies = [
  "sspur-check",
  "sspur-eval",
  "sspur-hash",
+ "sspur-store",
  "sspur-syntax",
 ]
 
@@ -175,6 +176,19 @@ name = "sspur-hash"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "sspur-syntax",
+]
+
+[[package]]
+name = "sspur-store"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "sspur-check",
+ "sspur-eval",
+ "sspur-hash",
  "sspur-syntax",
 ]
 

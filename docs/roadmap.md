@@ -17,7 +17,8 @@ Each phase has an exit criterion. A phase isn't done until its criterion is met 
 | Phase | State |
 |---|---|
 | 1 | Done. SSP-T median 0.71x Python tokens |
-| 2 | Compiler core works, and the 10-program suite runs (11 programs, 44 tests). Pending: spec-only model evaluation on 30 held-out tasks. See `adr/0002-phase2-compiler-core.md` |
+| 2 | **Done.** 12 suite programs. Spec-only evaluation: Opus 30/30 zero-shot (bar: 70%), Haiku 25/30. See `adr/0002-phase2-compiler-core.md` and `bench/eval/` |
+| 3 | Mostly done: store, transactions, query API with context packs, MCP server, contract fuzzing, typed holes. Pending: effect handlers, coroutines, and the agent token comparison against Python. See `adr/0003-phase3-agent-loop.md` |
 
 ## Language completeness
 

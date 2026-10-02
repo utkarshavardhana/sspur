@@ -1,0 +1,8 @@
+fn depth(t: Tree) -> Int
+= match t
+  | Leaf => 0
+  | Node{left, right} => 1 + max(depth(left), depth(right))
+
+test depth_leaf = depth(Leaf) == 0
+test depth_one = depth(Node{left: Leaf, value: 1, right: Leaf}) == 1
+test depth_deep = depth(Node{left: Node{left: Leaf, value: 2, right: Node{left: Leaf, value: 3, right: Leaf}}, value: 1, right: Leaf}) == 3

@@ -1,0 +1,19 @@
+fn compress(s: Str) -> Str
+= do
+  chars = s.chars.map(_.str)
+  if chars.len == 0 then ""
+  else
+    var result = ""
+    var i = 0
+    for c in chars do
+      if i == 0 or chars.get(i - 1).ok_or("") != c then
+        count = 1
+        for j in (i + 1)..chars.len do
+          if chars.get(j).ok_or("") == c then
+            count := count + 1
+        if count == 1 then
+          result := result + c
+        else
+          result := result + c + count.str
+      i := i + 1
+    result

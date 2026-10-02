@@ -1,0 +1,3 @@
+fn binary(n: Int) -> Str
+  pre n >= 0
+= if n < 2 then n.str else binary(n / 2) + (n % 2).str

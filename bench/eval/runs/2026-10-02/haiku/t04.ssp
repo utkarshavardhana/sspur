@@ -1,0 +1,13 @@
+fn chunk(xs: List[Int], n: Int) -> List[List[Int]]
+  pre n > 0
+= do
+  var result = []
+  var current = []
+  for x in xs do
+    if current.len < n then
+      current := current.push(x)
+    else
+      result := result.push(current)
+      current := [x]
+  if current.len > 0 then result := result.push(current)
+  result

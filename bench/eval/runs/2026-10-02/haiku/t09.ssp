@@ -1,0 +1,7 @@
+fn log_each(xs: List[Str]) -> Int ! log
+= do
+  var i = 0
+  for x in xs do
+    log("{i}: {x}")
+    i := i + 1
+  xs.len

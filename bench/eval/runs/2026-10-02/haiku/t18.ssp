@@ -1,0 +1,10 @@
+fn pairs[A](xs: List[A]) -> List[(A, A)]
+= do
+  var result = []
+  if xs.len < 2 then
+    result
+  else
+    for i in 0..xs.len - 1
+      if i < xs.len - 1 then
+        result := result.push((xs[i], xs[i + 1]))
+    result

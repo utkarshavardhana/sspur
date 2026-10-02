@@ -1,0 +1,41 @@
+type Status = Created | Paid{amount: Int} | Shipped{tracking: Str} | Delivered | Cancelled{reason: Str}
+type Event = Pay{amount: Int} | Ship{tracking: Str} | Deliver | Cancel{reason: Str}
+type TransitionErr = Invalid{from: Str, event: Str}
+
+fn name(s: Status) -> Str
+= match s
+  | Created => "created"
+  | Paid{amount} => "paid({amount})"
+  | Shipped{tracking} => "shipped({tracking})"
+  | Delivered => "delivered"
+  | Cancelled{reason} => "cancelled({reason})"
+
+fn event_name(e: Event) -> Str
+= match e
+  | Pay{amount} => "pay"
+  | Ship{tracking} => "ship"
+  | Deliver => "deliver"
+  | Cancel{reason} => "cancel"
+
+fn step(s: Status, e: Event) -> Status ! fail[TransitionErr]
+= match (s, e)
+  | (Created, Pay{amount}) => Paid{amount}
+  | (Created, Cancel{reason}) => Cancelled{reason}
+  | (Paid{amount}, Ship{tracking}) => Shipped{tracking}
+  | (Paid{amount}, Cancel{reason}) => Cancelled{reason: "{reason}, refund {amount}"}
+  | (Shipped{tracking}, Deliver) => Delivered
+  | _ => raise Invalid{from: name(s), event: event_name(e)}
+
+fn run(events: List[Event]) -> Str
+= catch name(events.fold(Created, (s, e) => step(s, e)))
+  | Invalid{from, event} => "invalid: {event} while {from}"
+
+fn main() -> Unit ! log
+= do
+  log(run([Pay{amount: 10}, Ship{tracking: "T1"}, Deliver]))
+  log(run([Pay{amount: 5}, Cancel{reason: "changed mind"}]))
+  log(run([Ship{tracking: "T2"}]))
+
+test happy = run([Pay{amount: 10}, Ship{tracking: "T1"}, Deliver]) == "delivered"
+test cancel_refund = run([Pay{amount: 5}, Cancel{reason: "changed mind"}]) == "cancelled(changed mind, refund 5)"
+test bad = run([Ship{tracking: "T2"}]) == "invalid: ship while created"

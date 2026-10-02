@@ -1,0 +1,39 @@
+fn quicksort(xs: List[Int]) -> List[Int]
+  post r.len == xs.len
+= match xs.first
+  | none => []
+  | some(p) => quicksort(xs.drop(1).filter(_ < p)) + [p] + quicksort(xs.drop(1).filter(_ >= p))
+
+fn merge(a: List[Int], b: List[Int]) -> List[Int]
+= match (a.first, b.first)
+  | (some(x), some(y)) => if x <= y then [x] + merge(a.drop(1), b) else [y] + merge(a, b.drop(1))
+  | (none, _) => b
+  | _ => a
+
+fn merge_sort(xs: List[Int]) -> List[Int]
+  post r.len == xs.len
+= if xs.len <= 1 then xs else merge(merge_sort(xs.take(xs.len / 2)), merge_sort(xs.drop(xs.len / 2)))
+
+fn is_sorted(xs: List[Int]) -> Bool
+= xs.zip(xs.drop(1)).all(_.0 <= _.1)
+
+fn go(xs: List[Int], t: Int, lo: Int, hi: Int) -> Opt[Int]
+= if lo >= hi then none else do
+  mid = (lo + hi) / 2
+  v = xs[mid]
+  if v == t then some(mid) else if v < t then go(xs, t, mid + 1, hi) else go(xs, t, lo, mid)
+
+fn bsearch(xs: List[Int], target: Int) -> Opt[Int]
+= go(xs, target, 0, xs.len)
+
+fn main() -> Unit ! log
+= do
+  log("{quicksort([3, 1, 4, 1, 5, 9, 2, 6])}")
+  log("{merge_sort([5, -2, 7, 0, 0, 3])}")
+
+test qs = quicksort([3, 1, 4, 1, 5, 9, 2, 6]) == [1, 1, 2, 3, 4, 5, 6, 9]
+test ms = merge_sort([5, -2, 7, 0, 0, 3]) == [-2, 0, 0, 3, 5, 7]
+test sorted_check = is_sorted(merge_sort((0..50).map(_ * 7919 % 101)))
+test agree = quicksort((0..40).map(_ * 31 % 17)) == merge_sort((0..40).map(_ * 31 % 17))
+test bs_found = bsearch([1, 3, 5, 7, 9, 11], 7) == some(3)
+test bs_missing = bsearch([1, 3, 5], 4) == none

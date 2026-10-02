@@ -1,0 +1,1360 @@
+mod builtins;
+pub mod types;
+
+use serde::Serialize;
+use serde_json::json;
+use sspur_syntax::*;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+pub use types::{Row, Type};
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Diag {
+    pub code: String,
+    pub severity: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub def: Option<String>,
+    pub span: [u32; 2],
+    pub msg: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fix: Vec<serde_json::Value>,
+}
+
+impl Diag {
+    pub fn is_error(&self) -> bool {
+        self.severity == "error"
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct CheckOutput {
+    pub diags: Vec<Diag>,
+    pub record_types: HashMap<(u32, u32), String>,
+    pub user_methods: HashSet<(u32, u32)>,
+    pub sigs: BTreeMap<String, String>,
+}
+
+impl CheckOutput {
+    pub fn has_errors(&self) -> bool {
+        self.diags.iter().any(Diag::is_error)
+    }
+}
+
+pub fn syntax_diag(e: &SyntaxError) -> Diag {
+    Diag {
+        code: e.code.to_string(),
+        severity: "error",
+        def: None,
+        span: [e.span.start, e.span.end],
+        msg: e.msg.clone(),
+        hint: None,
+        fix: vec![],
+    }
+}
+
+#[derive(Clone, Debug)]
+struct Scheme {
+    tparams: Vec<String>,
+    rparams: Vec<String>,
+    params: Vec<Type>,
+    ret: Type,
+    atoms: BTreeSet<String>,
+    fails: Vec<Type>,
+}
+
+#[derive(Clone, Debug)]
+enum TypeKind {
+    Record(Vec<(String, Type)>),
+    Sum(Vec<String>),
+    Alias(Ty),
+    New(Type),
+}
+
+#[derive(Clone, Debug)]
+struct TypeInfo {
+    params: Vec<String>,
+    kind: TypeKind,
+}
+
+#[derive(Clone, Debug)]
+struct CtorInfo {
+    ty: String,
+    params: Vec<String>,
+    fields: Option<Vec<(String, Type)>>,
+}
+
+#[derive(Clone, Debug)]
+struct Local {
+    ty: Type,
+    mutable: bool,
+}
+
+type Frame = BTreeMap<String, (Span, Option<Type>)>;
+type Hole = (Span, Option<String>, Type, Vec<(String, Type)>);
+
+struct Checker {
+    types: HashMap<String, TypeInfo>,
+    ctors: HashMap<String, CtorInfo>,
+    fns: HashMap<String, Scheme>,
+    globals: HashMap<String, Scheme>,
+    methods: HashMap<(String, String), Scheme>,
+    subst: Vec<Option<Type>>,
+    rsubst: Vec<Option<Row>>,
+    scopes: Vec<HashMap<String, Local>>,
+    frames: Vec<Frame>,
+    diags: Vec<Diag>,
+    cur_def: Option<String>,
+    cur_ret: Option<Type>,
+    lambda_depth: u32,
+    tparams: Vec<String>,
+    holes: Vec<Hole>,
+    record_types: HashMap<(u32, u32), String>,
+    user_methods: HashSet<(u32, u32)>,
+}
+
+const BUILTIN_TYPES: &[(&str, usize)] = &[
+    ("Int", 0),
+    ("I8", 0),
+    ("I16", 0),
+    ("I32", 0),
+    ("U8", 0),
+    ("U16", 0),
+    ("U32", 0),
+    ("U64", 0),
+    ("F32", 0),
+    ("F64", 0),
+    ("Bool", 0),
+    ("Str", 0),
+    ("Unit", 0),
+    ("List", 1),
+    ("Opt", 1),
+    ("Res", 2),
+    ("Map", 2),
+];
+
+pub fn check(m: &Module) -> CheckOutput {
+    let mut c = Checker {
+        types: HashMap::new(),
+        ctors: HashMap::new(),
+        fns: HashMap::new(),
+        globals: HashMap::new(),
+        methods: HashMap::new(),
+        subst: vec![],
+        rsubst: vec![],
+        scopes: vec![],
+        frames: vec![],
+        diags: vec![],
+        cur_def: None,
+        cur_ret: None,
+        lambda_depth: 0,
+        tparams: vec![],
+        holes: vec![],
+        record_types: HashMap::new(),
+        user_methods: HashSet::new(),
+    };
+    c.load_builtins();
+    c.collect(m);
+    let mut sigs = BTreeMap::new();
+    for d in &m.defs {
+        match d {
+            Def::Fn(f) => {
+                c.check_fn(f);
+                sigs.insert(f.name.clone(), printer::print_sig(f));
+            }
+            Def::Test(t) => c.check_test(t),
+            Def::Type(t) => c.check_type_refines(t),
+        }
+    }
+    if m.profile.as_deref().is_some_and(|p| p != "app") {
+        c.diags.push(Diag {
+            code: "E_UNSUPPORTED".into(),
+            severity: "error",
+            def: None,
+            span: [0, 0],
+            msg: format!("profile '{}' is not supported by this compiler version yet", m.profile.as_deref().unwrap()),
+            hint: Some("only the default 'app' profile is implemented".into()),
+            fix: vec![],
+        });
+    }
+    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs }
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut cur = vec![i + 1];
+        for (j, cb) in b.iter().enumerate() {
+            let sub = prev[j] + usize::from(ca != *cb);
+            cur.push(sub.min(prev[j + 1] + 1).min(cur[j] + 1));
+        }
+        prev = cur;
+    }
+    prev[b.len()]
+}
+
+fn suggest<'a>(name: &str, candidates: impl Iterator<Item = &'a String>) -> Option<String> {
+    candidates
+        .map(|c| (edit_distance(name, c), c))
+        .filter(|(d, c)| *d <= 2.max(name.len() / 3) && *d < c.len())
+        .min()
+        .map(|(_, c)| format!("did you mean '{c}'?"))
+}
+
+fn irrefutable(p: &Pat) -> bool {
+    match p {
+        Pat::Wild | Pat::Bind(_) => true,
+        Pat::Tuple(xs) => xs.iter().all(irrefutable),
+        _ => false,
+    }
+}
+
+impl Checker {
+    fn err(&mut self, code: &str, span: Span, msg: String) {
+        self.push_diag(code, "error", span, msg, None, vec![]);
+    }
+
+    fn push_diag(&mut self, code: &str, severity: &'static str, span: Span, msg: String, hint: Option<String>, fix: Vec<serde_json::Value>) {
+        self.diags.push(Diag { code: code.into(), severity, def: self.cur_def.clone(), span: [span.start, span.end], msg, hint, fix });
+    }
+
+    fn fresh(&mut self) -> Type {
+        self.subst.push(None);
+        Type::Var(self.subst.len() as u32 - 1)
+    }
+
+    fn fresh_row(&mut self) -> u32 {
+        self.rsubst.push(None);
+        self.rsubst.len() as u32 - 1
+    }
+
+    fn load_builtins(&mut self) {
+        for src in builtins::GLOBALS {
+            let (name, s) = self.builtin_scheme(src);
+            self.globals.insert(name, s);
+        }
+        for (recv, src) in builtins::METHODS {
+            let (name, s) = self.builtin_scheme(src);
+            self.methods.insert((recv.to_string(), name), s);
+        }
+    }
+
+    fn builtin_scheme(&mut self, src: &str) -> (String, Scheme) {
+        let m = parse(&format!("fn {src}\n= ?")).expect("builtin signature must parse");
+        let Def::Fn(f) = &m.defs[0] else { unreachable!() };
+        (f.name.trim_end_matches('_').to_string(), self.scheme_of(f))
+    }
+
+    fn scheme_of(&mut self, f: &FnDef) -> Scheme {
+        let (tparams, rparams): (Vec<_>, Vec<_>) = f.tparams.iter().map(|p| p.name.clone()).partition(|n| n.starts_with(|c: char| c.is_ascii_uppercase()));
+        for p in &f.tparams {
+            if p.kind.is_some() {
+                self.err("E_UNSUPPORTED", f.sig_span, format!("const generic parameter '{}' is not supported yet", p.name));
+            }
+        }
+        let saved = std::mem::replace(&mut self.tparams, tparams.clone());
+        let params = f.params.iter().map(|p| self.conv_ty(&p.ty)).collect();
+        let ret = f.ret.as_ref().map_or(Type::unit(), |t| self.conv_ty(t));
+        let mut atoms = BTreeSet::new();
+        let mut fails = Vec::new();
+        for e in &f.effects {
+            if e.name == "fail" {
+                if e.args.is_empty() {
+                    self.err("E_EFFECT_ARGS", e.span, "fail needs an error type: fail[E]".into());
+                }
+                for a in &e.args {
+                    fails.push(self.conv_ty(a));
+                }
+            } else if rparams.contains(&e.name) || e.args.is_empty() {
+                atoms.insert(e.name.clone());
+            } else {
+                atoms.insert(printer::effect(e));
+            }
+        }
+        self.tparams = saved;
+        Scheme { tparams, rparams, params, ret, atoms, fails }
+    }
+
+    fn conv_ty(&mut self, t: &Ty) -> Type {
+        self.conv_ty_depth(t, 0)
+    }
+
+    fn conv_ty_depth(&mut self, t: &Ty, depth: u32) -> Type {
+        match t {
+            Ty::Tuple(xs) => Type::Tuple(xs.iter().map(|x| self.conv_ty_depth(x, depth)).collect()),
+            Ty::Fn { params, ret, effects } => {
+                let ps = params.iter().map(|x| self.conv_ty_depth(x, depth)).collect();
+                let r = self.conv_ty_depth(ret, depth);
+                let mut row = Row::default();
+                for e in effects {
+                    if e.name == "fail" {
+                        for a in &e.args {
+                            let at = self.conv_ty_depth(a, depth);
+                            row.atoms.insert(format!("fail[{at}]"));
+                        }
+                    } else if e.args.is_empty() {
+                        row.atoms.insert(e.name.clone());
+                    } else {
+                        row.atoms.insert(printer::effect(e));
+                    }
+                }
+                Type::Fn(ps, Box::new(r), row)
+            }
+            Ty::Named { name, args, span } => {
+                let conv: Vec<Type> = args.iter().map(|x| self.conv_ty_depth(x, depth)).collect();
+                if self.tparams.contains(name) {
+                    return Type::Param(name.clone());
+                }
+                if let Some((_, arity)) = BUILTIN_TYPES.iter().find(|(n, _)| n == name) {
+                    if *arity != conv.len() {
+                        self.err("E_TYPE_ARITY", *span, format!("{name} takes {arity} type argument(s), got {}", conv.len()));
+                        return self.fresh();
+                    }
+                    return Type::Con(name.clone(), conv);
+                }
+                let Some(info) = self.types.get(name).cloned() else {
+                    let hint = suggest(name, self.types.keys());
+                    self.push_diag("E_UNKNOWN_TYPE", "error", *span, format!("unknown type '{name}'"), hint, vec![]);
+                    return self.fresh();
+                };
+                if info.params.len() != conv.len() {
+                    self.err("E_TYPE_ARITY", *span, format!("{name} takes {} type argument(s), got {}", info.params.len(), conv.len()));
+                    return self.fresh();
+                }
+                match &info.kind {
+                    TypeKind::Alias(target) => {
+                        if depth > 32 {
+                            self.err("E_TYPE_CYCLE", *span, format!("type alias '{name}' is cyclic"));
+                            return self.fresh();
+                        }
+                        let saved = std::mem::replace(&mut self.tparams, info.params.clone());
+                        let base = self.conv_ty_depth(target, depth + 1);
+                        self.tparams = saved;
+                        let map: HashMap<String, Type> = info.params.iter().cloned().zip(conv).collect();
+                        subst_params(&base, &map)
+                    }
+                    _ => Type::Con(name.clone(), conv),
+                }
+            }
+        }
+    }
+
+    fn collect(&mut self, m: &Module) {
+        let mut seen: HashMap<String, Span> = HashMap::new();
+        for d in &m.defs {
+            if let Some(prev) = seen.insert(d.name().to_string(), d.span()) {
+                let _ = prev;
+                self.err("E_DUPLICATE", d.span(), format!("'{}' is defined more than once", d.name()));
+            }
+        }
+        for d in &m.defs {
+            if let Def::Type(t) = d {
+                let params = t.params.iter().map(|p| p.name.clone()).collect();
+                let kind = match &t.body {
+                    TypeBody::Alias(ty, _) => TypeKind::Alias(ty.clone()),
+                    TypeBody::Record(_) => TypeKind::Record(vec![]),
+                    TypeBody::Sum(vs) => TypeKind::Sum(vs.iter().map(|v| v.name.clone()).collect()),
+                    TypeBody::New(_) => TypeKind::New(Type::unit()),
+                };
+                self.types.insert(t.name.clone(), TypeInfo { params, kind });
+            }
+        }
+        for d in &m.defs {
+            let Def::Type(t) = d else { continue };
+            self.cur_def = Some(t.name.clone());
+            let params: Vec<String> = t.params.iter().map(|p| p.name.clone()).collect();
+            self.tparams = params.clone();
+            match &t.body {
+                TypeBody::Record(fs) => {
+                    let fields: Vec<(String, Type)> = fs.iter().map(|f| (f.name.clone(), self.conv_ty(&f.ty))).collect();
+                    self.types.get_mut(&t.name).unwrap().kind = TypeKind::Record(fields);
+                }
+                TypeBody::Sum(vs) => {
+                    for v in vs {
+                        let fields = v.fields.as_ref().map(|fs| fs.iter().map(|f| (f.name.clone(), self.conv_ty(&f.ty))).collect());
+                        if self.ctors.contains_key(&v.name) || self.types.contains_key(&v.name) && v.name != t.name {
+                            self.err("E_DUPLICATE", t.span, format!("constructor '{}' is already defined", v.name));
+                        }
+                        self.ctors.insert(v.name.clone(), CtorInfo { ty: t.name.clone(), params: params.clone(), fields });
+                    }
+                }
+                TypeBody::New(inner) => {
+                    let inner = self.conv_ty(inner);
+                    self.types.get_mut(&t.name).unwrap().kind = TypeKind::New(inner);
+                }
+                TypeBody::Alias(..) => {
+                    let ty = Ty::Named { name: t.name.clone(), args: params.iter().map(|p| Ty::Named { name: p.clone(), args: vec![], span: t.span }).collect(), span: t.span };
+                    self.conv_ty(&ty);
+                }
+            }
+            self.tparams.clear();
+        }
+        self.cur_def = None;
+        for d in &m.defs {
+            if let Def::Fn(f) = d {
+                self.cur_def = Some(f.name.clone());
+                let s = self.scheme_of(f);
+                self.fns.insert(f.name.clone(), s);
+            }
+        }
+        self.cur_def = None;
+    }
+
+    fn check_type_refines(&mut self, t: &TypeDef) {
+        self.cur_def = Some(t.name.clone());
+        self.tparams = t.params.iter().map(|p| p.name.clone()).collect();
+        let mut items: Vec<(&Ty, &Expr)> = Vec::new();
+        match &t.body {
+            TypeBody::Record(fs) => items.extend(fs.iter().filter_map(|f| f.refine.as_ref().map(|r| (&f.ty, r)))),
+            TypeBody::Sum(vs) => items.extend(vs.iter().flat_map(|v| v.fields.iter().flatten()).filter_map(|f| f.refine.as_ref().map(|r| (&f.ty, r)))),
+            TypeBody::Alias(ty, Some(r)) => items.push((ty, r)),
+            _ => {}
+        }
+        for (ty, r) in items {
+            let ty = self.conv_ty(ty);
+            self.check_contract(r, &[("_".into(), ty)]);
+        }
+        self.tparams.clear();
+        self.cur_def = None;
+    }
+
+    fn check_contract(&mut self, e: &Expr, binds: &[(String, Type)]) {
+        self.scopes.push(binds.iter().map(|(n, t)| (n.clone(), Local { ty: t.clone(), mutable: false })).collect());
+        self.frames.push(Frame::new());
+        let t = self.infer(e, Some(&Type::bool()));
+        self.expect(&Type::bool(), &t, e.span);
+        let frame = self.frames.pop().unwrap();
+        self.scopes.pop();
+        if let Some((atom, (span, _))) = frame.into_iter().next() {
+            self.err("E_IMPURE_CONTRACT", span, format!("contracts must be pure, but this performs '{atom}'"));
+        }
+    }
+
+    fn check_fn(&mut self, f: &FnDef) {
+        self.cur_def = Some(f.name.clone());
+        let scheme = self.fns[&f.name].clone();
+        self.tparams = scheme.tparams.clone();
+        let mut scope = HashMap::new();
+        for (p, t) in f.params.iter().zip(&scheme.params) {
+            scope.insert(p.name.clone(), Local { ty: t.clone(), mutable: false });
+        }
+        for (p, t) in f.params.iter().zip(&scheme.params) {
+            if let Some(r) = &p.refine {
+                self.check_contract(r, &[("_".into(), t.clone())]);
+            }
+        }
+        let param_binds: Vec<(String, Type)> = scope.iter().map(|(n, l)| (n.clone(), l.ty.clone())).collect();
+        for p in &f.pres {
+            self.check_contract(p, &param_binds);
+        }
+        let mut post_binds = param_binds.clone();
+        post_binds.push(("r".into(), scheme.ret.clone()));
+        for p in &f.posts {
+            self.check_contract(p, &post_binds);
+        }
+
+        self.scopes.push(scope);
+        self.frames.push(Frame::new());
+        self.cur_ret = Some(scheme.ret.clone());
+        let t = self.infer(&f.body, Some(&scheme.ret));
+        self.expect(&scheme.ret, &t, f.body.span);
+        let frame = self.frames.pop().unwrap();
+        self.scopes.pop();
+        self.cur_ret = None;
+
+        let mut declared: BTreeSet<String> = scheme.atoms.clone();
+        for ft in &scheme.fails {
+            declared.insert(format!("fail[{ft}]"));
+        }
+        for (atom, (span, _)) in &frame {
+            if !declared.contains(atom) {
+                let fix = json!({"op": "refine", "target": f.name, "contract": {"effects": [format!("+{atom}")]}});
+                self.push_diag(
+                    "E_EFFECT_MISSING",
+                    "error",
+                    *span,
+                    format!("performs '{atom}' but the signature does not declare it"),
+                    Some(format!("add '{atom}' to the effect row of {}", f.name)),
+                    vec![fix],
+                );
+            }
+        }
+        if f.name != "main" {
+            for atom in &declared {
+                if !frame.contains_key(atom) && !scheme.rparams.contains(atom) {
+                    let fix = json!({"op": "refine", "target": f.name, "contract": {"effects": [format!("-{atom}")]}});
+                    self.push_diag("W_EFFECT_UNUSED", "warning", f.sig_span, format!("declares '{atom}' but never performs it"), None, vec![fix]);
+                }
+            }
+        }
+        self.report_holes();
+        self.tparams.clear();
+        self.cur_def = None;
+    }
+
+    fn check_test(&mut self, t: &TestDef) {
+        self.cur_def = Some(t.name.clone());
+        self.scopes.push(HashMap::new());
+        self.frames.push(Frame::new());
+        let ty = self.infer(&t.body, Some(&Type::bool()));
+        self.expect(&Type::bool(), &ty, t.body.span);
+        self.frames.pop();
+        self.scopes.pop();
+        self.report_holes();
+        self.cur_def = None;
+    }
+
+    fn report_holes(&mut self) {
+        for (span, name, ty, locals) in std::mem::take(&mut self.holes) {
+            let ty = self.resolve(&ty);
+            let fits: Vec<String> = locals.iter().filter(|(_, t)| self.resolve(t) == ty).map(|(n, _)| n.clone()).collect();
+            let label = name.map_or("?".to_string(), |n| format!("?{n}"));
+            let hint = if fits.is_empty() { None } else { Some(format!("in scope with type {ty}: {}", fits.join(", "))) };
+            self.push_diag("E_HOLE", "error", span, format!("hole {label} expects type {ty}"), hint, vec![]);
+        }
+    }
+
+    fn resolve(&self, t: &Type) -> Type {
+        match t {
+            Type::Var(v) => match &self.subst[*v as usize] {
+                Some(x) => self.resolve(x),
+                None => t.clone(),
+            },
+            Type::Con(n, a) => Type::Con(n.clone(), a.iter().map(|x| self.resolve(x)).collect()),
+            Type::Tuple(xs) => Type::Tuple(xs.iter().map(|x| self.resolve(x)).collect()),
+            Type::Fn(ps, r, row) => Type::Fn(ps.iter().map(|x| self.resolve(x)).collect(), Box::new(self.resolve(r)), self.resolve_row(row)),
+            Type::Param(_) => t.clone(),
+        }
+    }
+
+    fn resolve_row(&self, r: &Row) -> Row {
+        let mut out = Row { atoms: r.atoms.clone(), var: None };
+        let mut var = r.var;
+        while let Some(v) = var {
+            match &self.rsubst[v as usize] {
+                Some(b) => {
+                    out.atoms.extend(b.atoms.iter().cloned());
+                    var = b.var;
+                }
+                None => {
+                    out.var = Some(v);
+                    break;
+                }
+            }
+        }
+        out
+    }
+
+    fn occurs(&self, v: u32, t: &Type) -> bool {
+        match self.resolve(t) {
+            Type::Var(x) => x == v,
+            Type::Con(_, a) => a.iter().any(|x| self.occurs(v, x)),
+            Type::Tuple(xs) => xs.iter().any(|x| self.occurs(v, x)),
+            Type::Fn(ps, r, _) => ps.iter().any(|x| self.occurs(v, x)) || self.occurs(v, &r),
+            Type::Param(_) => false,
+        }
+    }
+
+    fn unify(&mut self, exp: &Type, act: &Type) -> bool {
+        let (a, b) = (self.resolve(exp), self.resolve(act));
+        match (&a, &b) {
+            (Type::Var(x), Type::Var(y)) if x == y => true,
+            (Type::Var(x), _) => {
+                if self.occurs(*x, &b) {
+                    return false;
+                }
+                self.subst[*x as usize] = Some(b);
+                true
+            }
+            (_, Type::Var(y)) => {
+                if self.occurs(*y, &a) {
+                    return false;
+                }
+                self.subst[*y as usize] = Some(a);
+                true
+            }
+            (Type::Con(n1, a1), Type::Con(n2, a2)) => n1 == n2 && a1.len() == a2.len() && a1.iter().zip(a2).all(|(x, y)| self.unify(x, y)),
+            (Type::Tuple(x1), Type::Tuple(x2)) => x1.len() == x2.len() && x1.iter().zip(x2).all(|(x, y)| self.unify(x, y)),
+            (Type::Fn(p1, r1, w1), Type::Fn(p2, r2, w2)) => {
+                p1.len() == p2.len() && p1.iter().zip(p2).all(|(x, y)| self.unify(x, y)) && self.unify(r1, r2) && self.unify_row(w1, w2)
+            }
+            (Type::Param(x), Type::Param(y)) => x == y,
+            _ => false,
+        }
+    }
+
+    fn unify_row(&mut self, exp: &Row, act: &Row) -> bool {
+        let (e, a) = (self.resolve_row(exp), self.resolve_row(act));
+        let extra: BTreeSet<String> = a.atoms.difference(&e.atoms).cloned().collect();
+        if !extra.is_empty() {
+            match e.var {
+                Some(v) => self.rsubst[v as usize] = Some(Row { atoms: extra, var: a.var.filter(|x| *x != v) }),
+                None => return false,
+            }
+        } else if let Some(v) = a.var
+            && e.var != Some(v) {
+                let missing: BTreeSet<String> = e.atoms.difference(&a.atoms).cloned().collect();
+                self.rsubst[v as usize] = Some(Row { atoms: missing, var: e.var });
+            }
+        true
+    }
+
+    fn expect(&mut self, exp: &Type, act: &Type, span: Span) {
+        if !self.unify(exp, act) {
+            let (e, a) = (self.resolve(exp), self.resolve(act));
+            self.err("E_TYPE_MISMATCH", span, format!("expected {e}, found {a}"));
+        }
+    }
+
+    fn add_effect(&mut self, atom: String, span: Span, ty: Option<Type>) {
+        if let Some(f) = self.frames.last_mut() {
+            f.entry(atom).or_insert((span, ty));
+        }
+    }
+
+    fn lookup(&self, name: &str) -> Option<&Local> {
+        self.scopes.iter().rev().find_map(|s| s.get(name))
+    }
+
+    fn bind(&mut self, name: &str, ty: Type, mutable: bool) {
+        self.scopes.last_mut().unwrap().insert(name.to_string(), Local { ty, mutable });
+    }
+
+    fn instantiate(&mut self, s: &Scheme) -> (Vec<Type>, Type, BTreeSet<String>, Vec<u32>, Vec<Type>) {
+        let map: HashMap<String, Type> = s.tparams.iter().map(|p| (p.clone(), self.fresh())).collect();
+        let rmap: HashMap<String, u32> = s.rparams.iter().map(|p| (p.clone(), self.fresh_row())).collect();
+        let params = s.params.iter().map(|t| subst_rows(&subst_params(t, &map), &rmap)).collect();
+        let ret = subst_rows(&subst_params(&s.ret, &map), &rmap);
+        let atoms = s.atoms.iter().filter(|a| !rmap.contains_key(*a)).cloned().collect();
+        let rvars = s.atoms.iter().filter_map(|a| rmap.get(a).copied()).collect();
+        let fails = s.fails.iter().map(|t| subst_params(t, &map)).collect();
+        (params, ret, atoms, rvars, fails)
+    }
+
+    fn call_scheme(&mut self, s: &Scheme, name: &str, recv: Option<(Type, Span)>, args: &[Expr], span: Span) -> Type {
+        let (params, ret, atoms, rvars, fails) = self.instantiate(s);
+        let given = args.len() + usize::from(recv.is_some());
+        if given != params.len() {
+            self.err("E_ARITY", span, format!("'{name}' takes {} argument(s), got {given}", params.len()));
+            for a in args {
+                self.infer(a, None);
+            }
+            return ret;
+        }
+        let mut ps = params.iter();
+        if let Some((rt, rspan)) = recv {
+            let p = ps.next().unwrap();
+            self.expect(p, &rt, rspan);
+        }
+        for (a, p) in args.iter().zip(ps) {
+            let pr = self.resolve(p);
+            let t = self.infer(a, Some(&pr));
+            self.expect(p, &t, a.span);
+        }
+        for a in atoms {
+            self.add_effect(a, span, None);
+        }
+        for v in rvars {
+            let r = self.resolve_row(&Row { atoms: BTreeSet::new(), var: Some(v) });
+            for a in r.atoms {
+                self.add_effect(a, span, None);
+            }
+            if let Some(v) = r.var {
+                self.rsubst[v as usize] = Some(Row::default());
+            }
+        }
+        for ft in fails {
+            let ft = self.resolve(&ft);
+            self.add_effect(format!("fail[{ft}]"), span, Some(ft));
+        }
+        self.resolve(&ret)
+    }
+
+    fn call_value(&mut self, ft: Type, args: &[Expr], span: Span) -> Type {
+        let ps: Vec<Type> = args.iter().map(|_| self.fresh()).collect();
+        let ret = self.fresh();
+        let rv = self.fresh_row();
+        let shape = Type::Fn(ps.clone(), Box::new(ret.clone()), Row { atoms: BTreeSet::new(), var: Some(rv) });
+        if !self.unify(&shape, &ft) {
+            let ft = self.resolve(&ft);
+            self.err("E_NOT_CALLABLE", span, format!("cannot call a value of type {ft} with {} argument(s)", args.len()));
+            return ret;
+        }
+        for (a, p) in args.iter().zip(&ps) {
+            let pr = self.resolve(p);
+            let t = self.infer(a, Some(&pr));
+            self.expect(p, &t, a.span);
+        }
+        let row = self.resolve_row(&Row { atoms: BTreeSet::new(), var: Some(rv) });
+        for a in row.atoms {
+            self.add_effect(a, span, None);
+        }
+        self.resolve(&ret)
+    }
+
+    fn method(&mut self, recv: &Expr, rt: Type, name: &str, args: &[Expr], span: Span) -> Type {
+        if let Some(s) = self.fns.get(name).cloned()
+            && self.recv_fits(&s, &rt) {
+                self.user_methods.insert((span.start, span.end));
+                return self.call_scheme(&s, name, Some((rt, recv.span)), args, span);
+            }
+        let rr = self.resolve(&rt);
+        let con = match &rr {
+            Type::Con(n, _) => n.clone(),
+            Type::Var(_) => {
+                self.err("E_INFER", recv.span, format!("cannot infer the receiver type for '.{name}'; add a type annotation"));
+                for a in args {
+                    self.infer(a, None);
+                }
+                return self.fresh();
+            }
+            _ => String::new(),
+        };
+        let found = self.methods.get(&(con.clone(), name.to_string())).or_else(|| self.methods.get(&("*".to_string(), name.to_string()))).cloned();
+        match found {
+            Some(s) => self.call_scheme(&s, name, Some((rt, recv.span)), args, span),
+            None => {
+                let candidates: Vec<String> = self.methods.keys().filter(|(c, _)| *c == con).map(|(_, m)| m.clone()).collect();
+                let hint = suggest(name, candidates.iter());
+                self.push_diag("E_UNKNOWN_METHOD", "error", span, format!("no method '{name}' on {rr}"), hint, vec![]);
+                for a in args {
+                    self.infer(a, None);
+                }
+                self.fresh()
+            }
+        }
+    }
+
+    fn recv_fits(&mut self, s: &Scheme, rt: &Type) -> bool {
+        let snapshot = (self.subst.clone(), self.rsubst.clone());
+        let (params, ..) = self.instantiate(s);
+        let ok = params.first().is_some_and(|p| self.unify(p, rt));
+        (self.subst, self.rsubst) = snapshot;
+        ok
+    }
+
+    fn ctor_type(&mut self, info: &CtorInfo) -> (Type, HashMap<String, Type>) {
+        let map: HashMap<String, Type> = info.params.iter().map(|p| (p.clone(), self.fresh())).collect();
+        let ty = Type::Con(info.ty.clone(), info.params.iter().map(|p| map[p].clone()).collect());
+        (ty, map)
+    }
+
+    fn infer(&mut self, e: &Expr, exp: Option<&Type>) -> Type {
+        match &e.kind {
+            ExprKind::Int(_) => Type::int(),
+            ExprKind::Float(_) => Type::con("F64"),
+            ExprKind::Bool(_) => Type::bool(),
+            ExprKind::Unit => Type::unit(),
+            ExprKind::Str(parts) => {
+                for p in parts {
+                    if let StrPart::Expr(x) = p {
+                        self.infer(x, None);
+                    }
+                }
+                Type::str()
+            }
+            ExprKind::Placeholder => match self.lookup("_") {
+                Some(l) => l.ty.clone(),
+                None => {
+                    self.err("E_PLACEHOLDER", e.span, "'_' is only valid inside a call argument or a refinement".into());
+                    self.fresh()
+                }
+            },
+            ExprKind::Hole(name) => {
+                let t = exp.cloned().unwrap_or_else(|| self.fresh());
+                let locals: Vec<(String, Type)> = self.scopes.iter().flat_map(|s| s.iter().map(|(n, l)| (n.clone(), l.ty.clone()))).collect();
+                self.holes.push((e.span, name.clone(), t.clone(), locals));
+                t
+            }
+            ExprKind::Name(n) => self.infer_name(n, e.span),
+            ExprKind::Field(x, f) => {
+                let xt = self.infer(x, None);
+                let rt = self.resolve(&xt);
+                if let Type::Tuple(items) = &rt
+                    && let Ok(i) = f.parse::<usize>() {
+                        return match items.get(i) {
+                            Some(t) => t.clone(),
+                            None => {
+                                self.err("E_TUPLE_INDEX", e.span, format!("tuple {rt} has no element {i}"));
+                                self.fresh()
+                            }
+                        };
+                    }
+                if let Type::Con(n, args) = &rt {
+                    if let Some(TypeInfo { kind: TypeKind::New(inner), .. }) = self.types.get(n)
+                        && f == "raw" {
+                            return inner.clone();
+                        }
+                    if let Some(TypeInfo { params, kind: TypeKind::Record(fields) }) = self.types.get(n).cloned()
+                        && let Some((_, ft)) = fields.iter().find(|(fname, _)| fname == f) {
+                            let map: HashMap<String, Type> = params.iter().cloned().zip(args.iter().cloned()).collect();
+                            return subst_params(ft, &map);
+                        }
+                }
+                self.method(x, xt, f, &[], e.span)
+            }
+            ExprKind::Method { recv, name, targs, args } => {
+                if !targs.is_empty() {
+                    self.err("E_UNSUPPORTED", e.span, "explicit type arguments on methods are not supported yet".into());
+                }
+                let rt = self.infer(recv, None);
+                self.method(recv, rt, name, args, e.span)
+            }
+            ExprKind::Call(f, args) => {
+                if let ExprKind::Name(n) = &f.kind {
+                    if let Some(TypeInfo { kind: TypeKind::New(inner), .. }) = self.types.get(n).cloned() {
+                        if args.len() != 1 {
+                            self.err("E_ARITY", e.span, format!("newtype '{n}' wraps exactly one value"));
+                        }
+                        for a in args {
+                            let t = self.infer(a, Some(&inner));
+                            self.expect(&inner, &t, a.span);
+                        }
+                        return Type::con(n);
+                    }
+                    if self.lookup(n).is_none()
+                        && let Some(s) = self.fns.get(n).or_else(|| self.globals.get(n)).cloned() {
+                            return self.call_scheme(&s, n, None, args, e.span);
+                        }
+                }
+                let ft = self.infer(f, None);
+                self.call_value(ft, args, e.span)
+            }
+            ExprKind::Index(a, i) => {
+                let at = self.infer(a, None);
+                let elem = self.fresh();
+                self.expect(&Type::list(elem.clone()), &at, a.span);
+                let it = self.infer(i, Some(&Type::int()));
+                self.expect(&Type::int(), &it, i.span);
+                elem
+            }
+            ExprKind::Lambda { params, body, .. } => self.infer_lambda(params, body, exp, e.span),
+            ExprKind::Binary(op, l, r) => self.infer_binary(*op, l, r, e.span),
+            ExprKind::Unary(UnOp::Neg, x) => {
+                let t = self.infer(x, None);
+                let rt = self.resolve(&t);
+                if !rt.is_numeric() && !matches!(rt, Type::Var(_)) {
+                    self.err("E_OPERATOR", e.span, format!("cannot negate {rt}"));
+                }
+                t
+            }
+            ExprKind::Unary(UnOp::Not, x) => {
+                let t = self.infer(x, Some(&Type::bool()));
+                self.expect(&Type::bool(), &t, x.span);
+                Type::bool()
+            }
+            ExprKind::Range(a, b) => {
+                for x in [a, b] {
+                    let t = self.infer(x, Some(&Type::int()));
+                    self.expect(&Type::int(), &t, x.span);
+                }
+                Type::list(Type::int())
+            }
+            ExprKind::If(c, t, f) => {
+                let ct = self.infer(c, Some(&Type::bool()));
+                self.expect(&Type::bool(), &ct, c.span);
+                match f {
+                    None => {
+                        let tt = self.infer(t, Some(&Type::unit()));
+                        self.expect(&Type::unit(), &tt, t.span);
+                        Type::unit()
+                    }
+                    Some(f) => {
+                        let tt = self.infer(t, exp);
+                        let hint = match self.resolve(&tt) {
+                            Type::Var(_) => exp.cloned(),
+                            t => Some(t),
+                        };
+                        let ft = self.infer(f, hint.as_ref());
+                        self.expect(&tt, &ft, f.span);
+                        self.resolve(&tt)
+                    }
+                }
+            }
+            ExprKind::Match(s, arms) => {
+                let st = self.infer(s, None);
+                let out = exp.cloned().unwrap_or_else(|| self.fresh());
+                self.check_arms(&st, arms, &out);
+                let missing = self.missing_cases(&st, arms);
+                if !missing.is_empty() {
+                    let arms_hint = missing.iter().map(|m| format!("| {m} => ?")).collect::<Vec<_>>().join(" ");
+                    self.push_diag("E_NONEXHAUSTIVE", "error", e.span, format!("match does not cover: {}", missing.join(", ")), Some(format!("add {arms_hint}")), vec![]);
+                }
+                self.resolve(&out)
+            }
+            ExprKind::Catch(body, arms) => self.infer_catch(body, arms, exp, e.span),
+            ExprKind::Block(stmts) => {
+                self.scopes.push(HashMap::new());
+                let mut last = Type::unit();
+                for (i, s) in stmts.iter().enumerate() {
+                    let is_last = i + 1 == stmts.len();
+                    last = self.infer_stmt(s, if is_last { exp } else { None });
+                    if !is_last {
+                        last = Type::unit();
+                    }
+                }
+                self.scopes.pop();
+                last
+            }
+            ExprKind::Record { ctor, fields } => self.infer_record(ctor.as_deref(), fields, exp, e.span),
+            ExprKind::List(xs) => {
+                let elem = match exp.map(|t| self.resolve(t)) {
+                    Some(Type::Con(n, a)) if n == "List" => a[0].clone(),
+                    _ => self.fresh(),
+                };
+                for x in xs {
+                    let er = self.resolve(&elem);
+                    let t = self.infer(x, Some(&er));
+                    self.expect(&elem, &t, x.span);
+                }
+                Type::list(self.resolve(&elem))
+            }
+            ExprKind::Tuple(xs) | ExprKind::Par(xs) => {
+                let exps: Vec<Option<Type>> = match exp.map(|t| self.resolve(t)) {
+                    Some(Type::Tuple(ts)) if ts.len() == xs.len() => ts.into_iter().map(Some).collect(),
+                    _ => vec![None; xs.len()],
+                };
+                Type::Tuple(xs.iter().zip(exps).map(|(x, t)| self.infer(x, t.as_ref())).collect())
+            }
+            ExprKind::Raise(x) => {
+                let t = self.infer(x, None);
+                let rt = self.resolve(&t);
+                match &rt {
+                    Type::Con(n, _) if self.types.contains_key(n) => self.add_effect(format!("fail[{rt}]"), e.span, Some(rt.clone())),
+                    _ => self.err("E_RAISE_TYPE", e.span, format!("can only raise values of a declared error type, found {rt}")),
+                }
+                self.fresh()
+            }
+            ExprKind::Return(x) => {
+                if self.lambda_depth > 0 {
+                    self.err("E_RETURN_IN_LAMBDA", e.span, "'return' is not allowed inside a lambda".into());
+                }
+                let ret = self.cur_ret.clone().unwrap_or_else(Type::unit);
+                let t = self.infer(x, Some(&ret));
+                self.expect(&ret, &t, x.span);
+                self.fresh()
+            }
+        }
+    }
+
+    fn infer_name(&mut self, n: &str, span: Span) -> Type {
+        if let Some(l) = self.lookup(n) {
+            return l.ty.clone();
+        }
+        if n == "none" {
+            let t = self.fresh();
+            return Type::opt(t);
+        }
+        if let Some(info) = self.ctors.get(n).cloned() {
+            if info.fields.is_some() {
+                self.err("E_CTOR_FIELDS", span, format!("constructor '{n}' needs its fields: {n}{{...}}"));
+            }
+            return self.ctor_type(&info).0;
+        }
+        if let Some(s) = self.fns.get(n).or_else(|| self.globals.get(n)).cloned() {
+            let (params, ret, atoms, rvars, fails) = self.instantiate(&s);
+            let mut row = Row::closed(atoms);
+            row.var = rvars.first().copied();
+            for f in fails {
+                row.atoms.insert(format!("fail[{f}]"));
+            }
+            return Type::Fn(params, Box::new(ret), row);
+        }
+        let locals: Vec<String> = self.scopes.iter().flat_map(|s| s.keys().cloned()).collect();
+        let hint = suggest(n, locals.iter().chain(self.fns.keys()).chain(self.globals.keys()).chain(self.ctors.keys()));
+        self.push_diag("E_UNKNOWN_NAME", "error", span, format!("unknown name '{n}'"), hint, vec![]);
+        self.fresh()
+    }
+
+    fn infer_lambda(&mut self, params: &[String], body: &Expr, exp: Option<&Type>, span: Span) -> Type {
+        let (ps, ret, exp_row) = match exp.map(|t| self.resolve(t)) {
+            Some(Type::Fn(ps, r, row)) if ps.len() == params.len() => (ps, *r, Some(row)),
+            Some(Type::Fn(ps, _, _)) => {
+                self.err("E_ARITY", span, format!("lambda takes {} parameter(s), expected {}", params.len(), ps.len()));
+                (params.iter().map(|_| self.fresh()).collect(), self.fresh(), None)
+            }
+            _ => (params.iter().map(|_| self.fresh()).collect(), self.fresh(), None),
+        };
+        self.scopes.push(params.iter().cloned().zip(ps.iter().cloned()).map(|(n, t)| (n, Local { ty: t, mutable: false })).collect());
+        self.frames.push(Frame::new());
+        self.lambda_depth += 1;
+        let rr = self.resolve(&ret);
+        let bt = self.infer(body, Some(&rr));
+        self.expect(&ret, &bt, body.span);
+        self.lambda_depth -= 1;
+        let frame = self.frames.pop().unwrap();
+        self.scopes.pop();
+        let row = Row::closed(frame.keys().cloned());
+        if let Some(er) = exp_row
+            && !self.unify_row(&er, &row) {
+                let allowed = self.resolve_row(&er);
+                let extra: Vec<String> = row.atoms.difference(&allowed.atoms).cloned().collect();
+                self.err("E_EFFECT_NOT_ALLOWED", span, format!("this function value performs {} where only [{}] is allowed", extra.join(", "), allowed.atoms.iter().cloned().collect::<Vec<_>>().join(", ")));
+            }
+        Type::Fn(ps, Box::new(self.resolve(&ret)), row)
+    }
+
+    fn infer_binary(&mut self, op: BinOp, l: &Expr, r: &Expr, span: Span) -> Type {
+        use BinOp::*;
+        if matches!(op, And | Or) {
+            for x in [l, r] {
+                let t = self.infer(x, Some(&Type::bool()));
+                self.expect(&Type::bool(), &t, x.span);
+            }
+            return Type::bool();
+        }
+        let lt = self.infer(l, None);
+        let lr = self.resolve(&lt);
+        let rt = self.infer(r, Some(&lr));
+        self.expect(&lt, &rt, r.span);
+        let t = self.resolve(&lt);
+        let known = !matches!(t, Type::Var(_));
+        match op {
+            Add | Sub | Mul | Div | Rem | Pow => {
+                let ok = t.is_numeric() || (op == Add && (t == Type::str() || matches!(&t, Type::Con(n, _) if n == "List")));
+                if known && !ok {
+                    self.err("E_OPERATOR", span, format!("operator '{}' is not defined for {t}", op.symbol()));
+                }
+                t
+            }
+            Lt | Le | Gt | Ge => {
+                if known && !t.is_numeric() && t != Type::str() {
+                    self.err("E_OPERATOR", span, format!("operator '{}' is not defined for {t}", op.symbol()));
+                }
+                Type::bool()
+            }
+            Eq | Ne => {
+                if matches!(t, Type::Fn(..)) {
+                    self.err("E_OPERATOR", span, "functions cannot be compared".into());
+                }
+                Type::bool()
+            }
+            And | Or => unreachable!(),
+        }
+    }
+
+    fn infer_record(&mut self, ctor: Option<&str>, fields: &[(String, Expr)], exp: Option<&Type>, span: Span) -> Type {
+        let (ty, decl, name) = match ctor {
+            Some(c) => {
+                if let Some(info) = self.ctors.get(c).cloned() {
+                    let (ty, map) = self.ctor_type(&info);
+                    let Some(fs) = info.fields else {
+                        self.err("E_CTOR_FIELDS", span, format!("constructor '{c}' has no fields; write '{c}'"));
+                        return ty;
+                    };
+                    (ty, fs.iter().map(|(n, t)| (n.clone(), subst_params(t, &map))).collect::<Vec<_>>(), c.to_string())
+                } else if let Some(TypeInfo { params, kind: TypeKind::Record(fs) }) = self.types.get(c).cloned() {
+                    let map: HashMap<String, Type> = params.iter().map(|p| (p.clone(), self.fresh())).collect();
+                    let ty = Type::Con(c.to_string(), params.iter().map(|p| map[p].clone()).collect());
+                    (ty, fs.iter().map(|(n, t)| (n.clone(), subst_params(t, &map))).collect(), c.to_string())
+                } else {
+                    let hint = suggest(c, self.ctors.keys().chain(self.types.keys()));
+                    self.push_diag("E_UNKNOWN_CTOR", "error", span, format!("unknown record or constructor '{c}'"), hint, vec![]);
+                    for (_, v) in fields {
+                        self.infer(v, None);
+                    }
+                    return self.fresh();
+                }
+            }
+            None => {
+                let names: BTreeSet<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+                let from_exp = match exp.map(|t| self.resolve(t)) {
+                    Some(Type::Con(n, args)) => match self.types.get(&n) {
+                        Some(TypeInfo { params, kind: TypeKind::Record(fs) }) => Some((n.clone(), params.clone(), fs.clone(), args)),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let found = from_exp.or_else(|| {
+                    let matches: Vec<_> = self
+                        .types
+                        .iter()
+                        .filter_map(|(n, i)| match &i.kind {
+                            TypeKind::Record(fs) if fs.iter().map(|(f, _)| f.as_str()).collect::<BTreeSet<_>>() == names => Some((n.clone(), i.params.clone(), fs.clone())),
+                            _ => None,
+                        })
+                        .collect();
+                    if matches.len() == 1 {
+                        let (n, ps, fs) = matches.into_iter().next().unwrap();
+                        let args = ps.iter().map(|_| Type::Var(u32::MAX)).collect();
+                        Some((n, ps, fs, args))
+                    } else {
+                        None
+                    }
+                });
+                let Some((n, params, fs, mut args)) = found else {
+                    self.push_diag("E_AMBIGUOUS_RECORD", "error", span, "cannot determine the record type of this literal".into(), Some("prefix it with the type name, e.g. Point{x: 1, y: 2}".into()), vec![]);
+                    for (_, v) in fields {
+                        self.infer(v, None);
+                    }
+                    return self.fresh();
+                };
+                for a in args.iter_mut() {
+                    if *a == Type::Var(u32::MAX) {
+                        *a = self.fresh();
+                    }
+                }
+                let map: HashMap<String, Type> = params.iter().cloned().zip(args.iter().cloned()).collect();
+                let ty = Type::Con(n.clone(), args);
+                (ty, fs.iter().map(|(f, t)| (f.clone(), subst_params(t, &map))).collect(), n)
+            }
+        };
+        self.record_types.insert((span.start, span.end), name.clone());
+        for (fname, fty) in &decl {
+            match fields.iter().find(|(n, _)| n == fname) {
+                Some((_, v)) => {
+                    let fr = self.resolve(fty);
+                    let t = self.infer(v, Some(&fr));
+                    self.expect(fty, &t, v.span);
+                }
+                None => self.err("E_FIELD_MISSING", span, format!("{name} is missing field '{fname}'")),
+            }
+        }
+        for (fname, v) in fields {
+            if !decl.iter().any(|(n, _)| n == fname) {
+                self.err("E_FIELD_UNKNOWN", v.span, format!("{name} has no field '{fname}'"));
+                self.infer(v, None);
+            }
+        }
+        self.resolve(&ty)
+    }
+
+    fn infer_catch(&mut self, body: &Expr, arms: &[Arm], exp: Option<&Type>, span: Span) -> Type {
+        self.frames.push(Frame::new());
+        let bt = self.infer(body, exp);
+        let frame = self.frames.pop().unwrap();
+        let ctor_ty = arms.iter().find_map(|a| match &a.pat {
+            Pat::Ctor { name, .. } => self.ctors.get(name).map(|c| c.ty.clone()),
+            _ => None,
+        });
+        let err_ty = match ctor_ty {
+            Some(n) => {
+                let info = self.ctors.values().find(|c| c.ty == n).cloned().unwrap();
+                self.ctor_type(&info).0
+            }
+            None => {
+                let fails: Vec<Type> = frame.values().filter_map(|(_, t)| t.clone()).collect();
+                if fails.len() == 1 {
+                    fails[0].clone()
+                } else {
+                    self.err("E_CATCH_TYPE", span, "cannot tell which error type this catch handles; match on its constructors".into());
+                    self.fresh()
+                }
+            }
+        };
+        self.check_arms(&err_ty, arms, &bt);
+        let err_ty = self.resolve(&err_ty);
+        let atom = format!("fail[{err_ty}]");
+        let exhaustive = self.missing_cases(&err_ty, arms).is_empty();
+        if !frame.contains_key(&atom) {
+            self.push_diag("W_CATCH_UNUSED", "warning", span, format!("body never raises {err_ty}"), None, vec![]);
+        }
+        for (a, (s, t)) in frame {
+            if !(exhaustive && a == atom) {
+                self.add_effect(a, s, t);
+            }
+        }
+        self.resolve(&bt)
+    }
+
+    fn check_arms(&mut self, st: &Type, arms: &[Arm], out: &Type) {
+        for a in arms {
+            self.scopes.push(HashMap::new());
+            self.check_pat(&a.pat, st);
+            if let Some(g) = &a.guard {
+                let gt = self.infer(g, Some(&Type::bool()));
+                self.expect(&Type::bool(), &gt, g.span);
+            }
+            let or = self.resolve(out);
+            let bt = self.infer(&a.body, Some(&or));
+            self.expect(out, &bt, a.body.span);
+            self.scopes.pop();
+        }
+    }
+
+    fn missing_cases(&self, st: &Type, arms: &[Arm]) -> Vec<String> {
+        let unguarded: Vec<&Pat> = arms.iter().filter(|a| a.guard.is_none()).map(|a| &a.pat).collect();
+        if unguarded.iter().any(|p| irrefutable(p)) {
+            return vec![];
+        }
+        let covered = |name: &str| {
+            unguarded.iter().any(|p| match p {
+                Pat::Ctor { name: n, args } if n == name => match args {
+                    CtorArgs::None => true,
+                    CtorArgs::Positional(xs) => xs.iter().all(irrefutable),
+                    CtorArgs::Record(fs) => fs.iter().all(|(_, p)| irrefutable(p)),
+                },
+                Pat::Bool(b) => (if *b { "true" } else { "false" }) == name,
+                _ => false,
+            })
+        };
+        let needed: Vec<String> = match self.resolve(st) {
+            Type::Con(n, _) if n == "Bool" => vec!["true".into(), "false".into()],
+            Type::Con(n, _) if n == "Opt" => vec!["some(_)".into(), "none".into()],
+            Type::Con(n, _) if n == "Res" => vec!["ok(_)".into(), "err(_)".into()],
+            Type::Con(n, _) => match self.types.get(&n) {
+                Some(TypeInfo { kind: TypeKind::Sum(vs), .. }) => vs.clone(),
+                _ => vec!["_".into()],
+            },
+            _ => vec!["_".into()],
+        };
+        needed
+            .into_iter()
+            .filter(|n| {
+                let key = n.split('(').next().unwrap();
+                n == "_" || !covered(key)
+            })
+            .map(|n| match self.ctors.get(&n) {
+                Some(CtorInfo { fields: Some(_), .. }) => format!("{n}{{..}}"),
+                _ => n,
+            })
+            .collect()
+    }
+
+    fn check_pat(&mut self, p: &Pat, ty: &Type) {
+        match p {
+            Pat::Wild => {}
+            Pat::Bind(n) => {
+                let t = self.resolve(ty);
+                self.bind(n, t, false);
+            }
+            Pat::Int(_) => self.expect(ty, &Type::int(), Span::default()),
+            Pat::Str(_) => self.expect(ty, &Type::str(), Span::default()),
+            Pat::Bool(_) => self.expect(ty, &Type::bool(), Span::default()),
+            Pat::Tuple(xs) => {
+                let ts: Vec<Type> = xs.iter().map(|_| self.fresh()).collect();
+                if !self.unify(&Type::Tuple(ts.clone()), ty) {
+                    let t = self.resolve(ty);
+                    self.err("E_PATTERN_TYPE", Span::default(), format!("tuple pattern of {} elements cannot match {t}", xs.len()));
+                }
+                for (x, t) in xs.iter().zip(&ts) {
+                    self.check_pat(x, t);
+                }
+            }
+            Pat::Ctor { name, args } => {
+                let builtin = match name.as_str() {
+                    "some" => Some((Type::opt(self.fresh()), 1)),
+                    "none" => Some((Type::opt(self.fresh()), 0)),
+                    "ok" => Some((Type::app("Res", vec![self.fresh(), self.fresh()]), 1)),
+                    "err" => Some((Type::app("Res", vec![self.fresh(), self.fresh()]), 1)),
+                    _ => None,
+                };
+                if let Some((bt, n)) = builtin {
+                    self.expect(ty, &bt, Span::default());
+                    let Type::Con(_, targs) = self.resolve(&bt) else { unreachable!() };
+                    let inner = if name == "err" { targs[1].clone() } else { targs[0].clone() };
+                    match args {
+                        CtorArgs::Positional(xs) if xs.len() == n => xs.iter().for_each(|x| self.check_pat(x, &inner)),
+                        CtorArgs::None if n == 0 => {}
+                        _ => self.err("E_PATTERN_ARITY", Span::default(), format!("'{name}' pattern takes {n} argument(s)")),
+                    }
+                    return;
+                }
+                let (pt, fields) = if let Some(info) = self.ctors.get(name).cloned() {
+                    let (t, map) = self.ctor_type(&info);
+                    (t, info.fields.map(|fs| fs.into_iter().map(|(n, t)| (n, subst_params(&t, &map))).collect::<Vec<_>>()))
+                } else if let Some(TypeInfo { params, kind: TypeKind::Record(fs) }) = self.types.get(name).cloned() {
+                    let map: HashMap<String, Type> = params.iter().map(|p| (p.clone(), self.fresh())).collect();
+                    let t = Type::Con(name.clone(), params.iter().map(|p| map[p].clone()).collect());
+                    (t, Some(fs.into_iter().map(|(n, t)| (n, subst_params(&t, &map))).collect()))
+                } else {
+                    let hint = suggest(name, self.ctors.keys());
+                    self.push_diag("E_UNKNOWN_CTOR", "error", Span::default(), format!("unknown constructor '{name}' in pattern"), hint, vec![]);
+                    return;
+                };
+                if !self.unify(ty, &pt) {
+                    let (a, b) = (self.resolve(ty), self.resolve(&pt));
+                    self.err("E_PATTERN_TYPE", Span::default(), format!("pattern '{name}' has type {b} but the value has type {a}"));
+                }
+                match args {
+                    CtorArgs::None => {}
+                    CtorArgs::Positional(_) => self.err("E_PATTERN_ARITY", Span::default(), format!("use field syntax for '{name}': {name}{{field}}")),
+                    CtorArgs::Record(fs) => {
+                        let decl = fields.unwrap_or_default();
+                        for (f, sub) in fs {
+                            match decl.iter().find(|(n, _)| n == f) {
+                                Some((_, t)) => self.check_pat(sub, &t.clone()),
+                                None => self.err("E_FIELD_UNKNOWN", Span::default(), format!("'{name}' has no field '{f}'")),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn infer_stmt(&mut self, s: &Stmt, exp: Option<&Type>) -> Type {
+        match s {
+            Stmt::Expr(e) => self.infer(e, exp),
+            Stmt::Let(p, e) => {
+                let t = self.infer(e, None);
+                if !irrefutable(p) {
+                    self.err("E_REFUTABLE_LET", e.span, "this pattern can fail to match; use 'match' instead".into());
+                }
+                self.check_pat(p, &t);
+                Type::unit()
+            }
+            Stmt::Var(n, e) => {
+                let t = self.infer(e, None);
+                self.bind(n, t, true);
+                Type::unit()
+            }
+            Stmt::Assign(n, e, span) => match self.lookup(n).cloned() {
+                Some(Local { ty, mutable: true }) => {
+                    let tr = self.resolve(&ty);
+                    let t = self.infer(e, Some(&tr));
+                    self.expect(&ty, &t, e.span);
+                    Type::unit()
+                }
+                Some(_) => {
+                    self.err("E_ASSIGN_IMMUTABLE", *span, format!("'{n}' is not mutable; declare it with 'var'"));
+                    Type::unit()
+                }
+                None => {
+                    self.err("E_UNKNOWN_NAME", *span, format!("unknown name '{n}'"));
+                    Type::unit()
+                }
+            },
+            Stmt::For(p, it, body) => {
+                let t = self.infer(it, None);
+                let elem = self.fresh();
+                self.expect(&Type::list(elem.clone()), &t, it.span);
+                self.scopes.push(HashMap::new());
+                let et = self.resolve(&elem);
+                self.check_pat(p, &et);
+                let bt = self.infer(body, Some(&Type::unit()));
+                self.expect(&Type::unit(), &bt, body.span);
+                self.scopes.pop();
+                Type::unit()
+            }
+        }
+    }
+}
+
+fn subst_params(t: &Type, map: &HashMap<String, Type>) -> Type {
+    match t {
+        Type::Param(p) => map.get(p).cloned().unwrap_or_else(|| t.clone()),
+        Type::Con(n, a) => Type::Con(n.clone(), a.iter().map(|x| subst_params(x, map)).collect()),
+        Type::Tuple(xs) => Type::Tuple(xs.iter().map(|x| subst_params(x, map)).collect()),
+        Type::Fn(ps, r, row) => Type::Fn(ps.iter().map(|x| subst_params(x, map)).collect(), Box::new(subst_params(r, map)), row.clone()),
+        Type::Var(_) => t.clone(),
+    }
+}
+
+fn subst_rows(t: &Type, rmap: &HashMap<String, u32>) -> Type {
+    match t {
+        Type::Fn(ps, r, row) => {
+            let mut row = row.clone();
+            let params: Vec<String> = row.atoms.iter().filter(|a| rmap.contains_key(*a)).cloned().collect();
+            for p in params {
+                row.atoms.remove(&p);
+                row.var = Some(rmap[&p]);
+            }
+            Type::Fn(ps.iter().map(|x| subst_rows(x, rmap)).collect(), Box::new(subst_rows(r, rmap)), row)
+        }
+        Type::Con(n, a) => Type::Con(n.clone(), a.iter().map(|x| subst_rows(x, rmap)).collect()),
+        Type::Tuple(xs) => Type::Tuple(xs.iter().map(|x| subst_rows(x, rmap)).collect()),
+        _ => t.clone(),
+    }
+}

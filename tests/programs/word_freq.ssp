@@ -1,0 +1,12 @@
+fn top_words(text: Str, k: Int where _ >= 0) -> List[(Str, Int)]
+  post r.len <= k
+= text.lower.words.counts.sort_by((-_.1, _.0)).take(k)
+
+fn main() -> Unit ! log
+= do
+  for (w, n) in top_words("the cat and the hat and the bat", 3)
+    log("{w}: {n}")
+
+test top_two = top_words("b a b c a b", 2) == [("b", 3), ("a", 2)]
+test empty = top_words("", 5) == []
+test limit = top_words("a b c d", 2).len == 2

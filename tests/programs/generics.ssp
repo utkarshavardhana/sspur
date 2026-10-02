@@ -1,0 +1,42 @@
+type Pair[A, B] = {first: A, second: B}
+type Tree[T] = Leaf | Node{left: Tree[T], value: T, right: Tree[T]}
+
+fn swap[A, B](p: Pair[A, B]) -> Pair[B, A]
+= Pair{first: p.second, second: p.first}
+
+fn twice[A, e](x: A, f: A -> A ! e) -> A ! e
+= f(f(x))
+
+fn compose[A, B, C](f: A -> B, g: B -> C) -> A -> C
+= x => g(f(x))
+
+fn insert(t: Tree[Int], x: Int) -> Tree[Int]
+= match t
+  | Leaf => Node{left: Leaf, value: x, right: Leaf}
+  | Node{left, value, right} => if x < value then Node{left: insert(left, x), value, right} else Node{left, value, right: insert(right, x)}
+
+fn to_list[T](t: Tree[T]) -> List[T]
+= match t
+  | Leaf => []
+  | Node{left, value, right} => to_list(left) + [value] + to_list(right)
+
+fn size[T](t: Tree[T]) -> Int
+= match t
+  | Leaf => 0
+  | Node{left, right} => size(left) + 1 + size(right)
+
+fn loud_inc(x: Int) -> Int ! log
+= do
+  log("inc {x}")
+  x + 1
+
+fn main() -> Unit ! log
+= do
+  log("twice loud: {twice(1, loud_inc)}")
+  log("tree: {to_list([5, 3, 8, 1, 4].fold(Leaf, insert))}")
+
+test swap_ok = swap(Pair{first: 1, second: "a"}) == Pair{first: "a", second: 1}
+test twice_pure = twice(3, _ * 2) == 12
+test compose_ok = compose(_ + 1, _ * 10)(2) == 30
+test tree_sorted = to_list([5, 3, 8, 1, 4].fold(Leaf, insert)) == [1, 3, 4, 5, 8]
+test tree_size = size([5, 3, 8].fold(Leaf, insert)) == 3

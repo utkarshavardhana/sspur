@@ -6,7 +6,21 @@ SSPUR is not text. A program is a typed, content-addressed graph of definitions.
 
 ## Status
 
-Phase 1: design. Nothing compiles yet.
+- **Phase 1 (design):** done.
+- **Phase 2 (compiler core):** in progress. The parser, printer, type and effect checker, content hashing, interpreter, and CLI all work. All 11 suite programs typecheck and pass their tests. The spec-only model evaluation is not done yet.
+
+## Quick start
+
+```
+cargo build --release
+./target/release/sspur check tests/programs/orders.ssp
+./target/release/sspur run   tests/programs/orders.ssp
+./target/release/sspur test  tests/programs/orders.ssp
+./target/release/sspur hash  tests/programs/orders.ssp
+./target/release/sspur fmt   tests/programs/orders.ssp
+```
+
+Add `--json` to `check` to get machine-readable diagnostics, including fix ops.
 
 ## Layout
 
@@ -21,7 +35,9 @@ Phase 1: design. Nothing compiles yet.
 | `docs/adr/` | Architecture decision records |
 | `schema/` | JSON schemas for nodes, ops, diagnostics |
 | `bench/` | Token benchmark: SSP-T vs Python, TypeScript, Go, Rust |
-| `examples/` | SSP-T sample programs |
+| `examples/` | SSP-T sample programs (design targets; may use features not implemented yet) |
+| `crates/` | Compiler: `sspur-syntax`, `sspur-check`, `sspur-hash`, `sspur-eval`, `sspur-cli` |
+| `tests/programs/` | Executable suite programs, each with tests |
 
 ## Token benchmark
 

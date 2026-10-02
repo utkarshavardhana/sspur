@@ -1,0 +1,28 @@
+type NetErr = Timeout{attempt: Int} | Refused
+
+fn flaky(attempt: Int, succeed_on: Int) -> Str ! fail[NetErr]
+= if attempt < succeed_on then raise Timeout{attempt} else "response after {attempt} attempts"
+
+fn backoff(attempt: Int) -> Opt[Str] ! log
+= do
+  log("attempt {attempt} timed out, backing off {100 * 2 ** (attempt - 1)}ms")
+  none
+
+fn with_retry(tries: Int where _ > 0, succeed_on: Int) -> Str ! fail[NetErr], log
+= do
+  var result = none
+  for i in 1..tries + 1
+    if result.is_none then do
+      result := catch some(flaky(i, succeed_on))
+        | Timeout{attempt} => backoff(attempt)
+        | Refused => none
+  result.ok_or(Refused)
+
+fn main() -> Unit ! log
+= catch log(with_retry(5, 3))
+  | _ => log("gave up")
+
+test eventually = with_retry(5, 3) == "response after 3 attempts"
+test gives_up = catch with_retry(2, 5) == "never"
+  | Refused => true
+  | _ => false

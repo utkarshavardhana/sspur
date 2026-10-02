@@ -1,0 +1,6 @@
+[package]
+name = "sspur-syntax"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

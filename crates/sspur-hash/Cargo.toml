@@ -1,0 +1,8 @@
+[package]
+name = "sspur-hash"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sspur-syntax.workspace = true
+blake3.workspace = true

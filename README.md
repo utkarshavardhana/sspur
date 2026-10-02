@@ -31,6 +31,8 @@ Add `--json` to `check` to get machine-readable diagnostics, including fix ops.
 | `docs/02-graph-model.md` | Nodes, hashing, namespaces, the op protocol, query API |
 | `docs/03-text-projection.md` | SSP-T, the token-optimized text encoding |
 | `docs/04-deploy-model.md` | Services, stores, effects-as-permissions, hot swap |
+| `docs/05-systems-layer.md` | C++-level systems features and the parity matrix |
+| `docs/06-ai-native-constructs.md` | AI-native types and structures: Guess, Emb, taint types, Delta, Id handles, decision tables, alt, solve, saga |
 | `docs/roadmap.md` | Phases and exit criteria |
 | `docs/adr/` | Architecture decision records |
 | `schema/` | JSON schemas for nodes, ops, diagnostics |

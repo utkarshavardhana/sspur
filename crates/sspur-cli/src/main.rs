@@ -229,9 +229,24 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             ExitCode::SUCCESS
         }
         "native" if args.has("--emit-c") => {
-            print!("{}", sspur_native::cgen::c_source(&loaded.module));
+            print!("{}", sspur_native::cgen::c_source(&loaded.module, &loaded.check));
             ExitCode::SUCCESS
         }
+        "native" if args.has("--release") => match sspur_native::cgen::compile_release(&loaded.module, &loaded.check, "-O2") {
+            Ok(c) => {
+                for f in &c.functions {
+                    println!("native  {f}");
+                }
+                for (f, why) in &c.skipped {
+                    println!("interp  {f}  ({why})");
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("release compilation failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
         "native" => match sspur_native::compile(&loaded.module) {
             Ok(c) => {
                 for f in &c.functions {
@@ -266,6 +281,21 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             println!("{} passed, {failed} failed", results.len() - failed);
             if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
         }
+        "fuzz" if args.has("--differential") => {
+            let opts = Options { cases: args.num("--cases", 300), seed: args.num("--seed", 7) as u64, edge: args.has("--edge") };
+            let it = native_interp(&loaded, args);
+            let mut bad = 0;
+            for r in it.differential(&opts) {
+                match r.mismatch {
+                    Some((a, i, n)) => {
+                        bad += 1;
+                        println!("DIFF  {}({}): interpreter {i} | native {n}", r.name, a.join(", "));
+                    }
+                    None => println!("same  {} ({} cases)", r.name, r.cases),
+                }
+            }
+            if bad == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+        }
         "fuzz" => {
             let opts = Options { cases: args.num("--cases", 200), seed: args.num("--seed", 7) as u64, edge: args.has("--edge") };
             let reports = interp(&loaded).fuzz(&opts);
@@ -290,7 +320,7 @@ fn native_interp(l: &Loaded, args: &Args) -> Interp {
     let mut it = interp(l);
     if args.has("--release") {
         let opt = if args.has("--O3") { "-O3" } else { "-O2" };
-        match sspur_native::cgen::compile_release(&l.module, opt) {
+        match sspur_native::cgen::compile_release(&l.module, &l.check, opt) {
             Ok(c) => {
                 c.set_max_depth(1_000_000);
                 it.set_native(c);
@@ -312,7 +342,15 @@ fn native_interp(l: &Loaded, args: &Args) -> Interp {
 }
 
 pub fn interp(l: &Loaded) -> Interp {
-    Interp::new(&l.module, l.check.record_types.clone(), l.check.user_methods.clone())
+    let mut it = Interp::new(&l.module, l.check.record_types.clone(), l.check.user_methods.clone());
+    it.float_sums = l
+        .check
+        .expr_types
+        .iter()
+        .filter(|((_, _, tag), t)| matches!(tag, 4 | 5) && matches!(t, sspur_check::Type::Con(n, a) if n == "F64" && a.is_empty()))
+        .map(|((s, e, _), _)| (*s, *e))
+        .collect();
+    it
 }
 
 fn fail_diags(src: &str, label: &str, d: &[Diag], json: bool) -> ExitCode {

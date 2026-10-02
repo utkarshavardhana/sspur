@@ -534,6 +534,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "libloading",
+ "sspur-check",
  "sspur-syntax",
 ]
 

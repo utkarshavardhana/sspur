@@ -44,6 +44,8 @@ pub struct Interp {
     depth: Cell<u32>,
     pub fuel: Cell<u64>,
     native: Option<sspur_native::Compiled>,
+    pub bypass_native: Cell<bool>,
+    pub float_sums: HashSet<(u32, u32)>,
 }
 
 const MAX_DEPTH: u32 = 20_000;
@@ -75,6 +77,8 @@ impl Interp {
             depth: Cell::new(0),
             fuel: Cell::new(u64::MAX),
             native: None,
+            bypass_native: Cell::new(false),
+            float_sums: HashSet::new(),
         };
         for d in &m.defs {
             match d {
@@ -175,8 +179,12 @@ impl Interp {
         self.native = Some(c);
     }
 
+    pub fn native_has(&self, name: &str) -> bool {
+        self.native.as_ref().is_some_and(|n| n.has(name))
+    }
+
     pub fn call_fn(&self, f: &FnDef, args: Vec<Value>) -> R {
-        if let Some(n) = &self.native {
+        if let Some(n) = self.native.as_ref().filter(|_| !self.bypass_native.get()) {
             let raw: Option<Vec<i64>> = args
                 .iter()
                 .map(|a| match a {
@@ -194,6 +202,15 @@ impl Interp {
                         Err(msg) => trap(msg),
                     };
                 }
+            if n.has(&f.name)
+                && let Some(nargs) = args.iter().map(to_nval).collect::<Option<Vec<_>>>()
+                && let Some(r) = n.call_rich(&f.name, &nargs)
+            {
+                return match r {
+                    Ok(v) => Ok(from_nval(v)),
+                    Err(msg) => trap(msg),
+                };
+            }
         }
         let globals = self.globals.clone();
         self.call_fn_in(f, args, &globals)
@@ -310,6 +327,9 @@ impl Interp {
     }
 
     fn method(&self, span: Span, name: &str, recv: Value, args: Vec<Value>) -> R {
+        if name == "sum" && self.float_sums.contains(&(span.start, span.end)) && matches!(&recv, Value::List(xs) if xs.is_empty()) {
+            return Ok(Value::Float(0.0));
+        }
         if self.user_methods.contains(&(span.start, span.end))
             && let Some(f) = self.fns.get(name).cloned() {
                 let mut all = vec![recv];
@@ -693,6 +713,51 @@ fn arith(op: BinOp, a: Value, b: Value) -> R {
         (Value::Str(x), Value::Str(y)) if op == Add => Ok(Value::str(&format!("{x}{y}"))),
         (Value::List(x), Value::List(y)) if op == Add => Ok(Value::list(x.iter().chain(y.iter()).cloned().collect())),
         (a, b) => trap(format!("operator '{}' cannot apply to {a} and {b}", op.symbol())),
+    }
+}
+
+fn nfields(fs: &value::Fields) -> Option<Vec<(String, sspur_native::nval::NVal)>> {
+    fs.iter().map(|(n, v)| Some((n.to_string(), to_nval(v)?))).collect()
+}
+
+pub fn to_nval(v: &Value) -> Option<sspur_native::nval::NVal> {
+    use sspur_native::nval::NVal;
+    Some(match v {
+        Value::Unit => NVal::Unit,
+        Value::Int(n) => NVal::Int(*n),
+        Value::Bool(b) => NVal::Bool(*b),
+        Value::Float(x) => NVal::Float(*x),
+        Value::Record(n, fs) => NVal::Rec(n.to_string(), nfields(fs)?),
+        Value::Variant(n, fs) => NVal::Variant(
+            n.to_string(),
+            match fs {
+                Some(fs) => Some(nfields(fs)?),
+                None => None,
+            },
+        ),
+        Value::List(xs) => NVal::List(xs.iter().map(to_nval).collect::<Option<_>>()?),
+        Value::Tuple(xs) => NVal::Tuple(xs.iter().map(to_nval).collect::<Option<_>>()?),
+        Value::Opt(o) => NVal::Opt(match o {
+            Some(x) => Some(Box::new(to_nval(x)?)),
+            None => None,
+        }),
+        _ => return None,
+    })
+}
+
+pub fn from_nval(v: sspur_native::nval::NVal) -> Value {
+    use sspur_native::nval::NVal;
+    let fields = |fs: Vec<(String, NVal)>| Rc::new(fs.into_iter().map(|(n, v)| (Rc::<str>::from(n.as_str()), from_nval(v))).collect::<Vec<_>>());
+    match v {
+        NVal::Unit => Value::Unit,
+        NVal::Int(n) => Value::Int(n),
+        NVal::Bool(b) => Value::Bool(b),
+        NVal::Float(x) => Value::Float(x),
+        NVal::Rec(n, fs) => Value::Record(n.as_str().into(), fields(fs)),
+        NVal::Variant(n, fs) => Value::Variant(n.as_str().into(), fs.map(fields)),
+        NVal::List(xs) => Value::list(xs.into_iter().map(from_nval).collect()),
+        NVal::Tuple(xs) => Value::Tuple(Rc::new(xs.into_iter().map(from_nval).collect())),
+        NVal::Opt(o) => Value::Opt(o.map(|x| Rc::new(from_nval(*x)))),
     }
 }
 

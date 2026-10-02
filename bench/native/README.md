@@ -23,4 +23,21 @@ sspur native --emit-c compute_big.ssp # the generated C
 
 - Every tier produces identical output and identical trap messages (`crates/sspur-native/tests/parity.rs` checks all three tiers against each other).
 - A cold release build adds about 0.6s of clang time. After that, the cache under `~/.cache/sspur/native/` (keyed by a BLAKE3 hash of the generated C and the optimization flags) makes it free.
+## Typical code: records, lists, sum types, floats (`typical.ssp`)
+
+| Build | Time | vs tuned C++ |
+|---|---|---|
+| C++ idiomatic (`shared_ptr` tree, `vector`) | 0.82s | 3.7x |
+| C++ hand-tuned (arena-allocated raw pointers) | 0.22s | 1.00x |
+| SSPUR release | 0.24s | **1.09x** (includes about 10ms of parse, typecheck, and library load) |
+
+What got it there:
+- Lists are immutable vectors that grow in place when you push onto the buffer's current end, so they're O(1) amortized while keeping value semantics.
+- Payloadless constructors are shared static singletons.
+- A sum type with exactly one payloadless variant and one payload variant is a nullable pointer with no tag (like Rust's `Option<Box<T>>`).
+- The arena is 8-byte aligned and non-thread-local.
+- List methods compile their lambdas inline, so `xs.filter(..).map(..).sum` becomes loops with no closures.
+
+`sspur fuzz --differential --release` runs every native function and its interpreted version on random inputs and requires identical results or traps. It found one interpreter bug, now fixed: summing an empty `List[F64]` returned `0` instead of `0.0`.
+
 - The SSPUR release tier slightly beats the hand-written C++ because the generator puts trap paths behind `__builtin_expect` and passes recursion depth and status in registers rather than memory.

@@ -57,6 +57,47 @@ impl Interp {
         names.into_iter().map(|n| self.fuzz_fn(&self.fns[n].clone(), opts, &mut rng)).collect()
     }
 
+    pub fn differential(&self, opts: &Options) -> Vec<DiffReport> {
+        let mut names: Vec<String> = self.fns.keys().filter(|n| self.native_has(n)).cloned().collect();
+        names.sort();
+        let mut rng = Rng(opts.seed.max(1));
+        let saved = self.output.replace(Some(vec![]));
+        let mut out = Vec::new();
+        for n in names {
+            let f = self.fns[&n].clone();
+            let mut rep = DiffReport { name: n.clone(), cases: 0, mismatch: None };
+            if f.params.iter().any(|p| has_fn_type(&p.ty)) {
+                out.push(rep);
+                continue;
+            }
+            let mut attempts = 0;
+            while rep.cases < opts.cases && attempts < opts.cases * 10 {
+                attempts += 1;
+                let Some(args) = f.params.iter().map(|p| self.generate(&p.ty, &mut rng, opts, 0)).collect::<Option<Vec<_>>>() else { continue };
+                self.bypass_native.set(true);
+                self.depth.set(0);
+                self.fuel.set(FUEL);
+                let interp = self.call_fn(&f, args.clone());
+                self.fuel.set(u64::MAX);
+                self.bypass_native.set(false);
+                let interp = match interp {
+                    Err(Ctrl::Trap(m)) if m == crate::OUT_OF_FUEL || m.starts_with("stack overflow") => continue,
+                    other => describe_result(other),
+                };
+                self.depth.set(0);
+                let native = describe_result(self.call_fn(&f, args.clone()));
+                rep.cases += 1;
+                if interp != native {
+                    rep.mismatch = Some((args.iter().map(|a| crate::value::Quoted(a).to_string()).collect(), interp, native));
+                    break;
+                }
+            }
+            out.push(rep);
+        }
+        *self.output.borrow_mut() = saved;
+        out
+    }
+
     fn skip_reason(&self, f: &FnDef) -> Option<String> {
         if f.params.is_empty() {
             return Some("no parameters".into());
@@ -266,6 +307,21 @@ impl Interp {
 
     fn gen_fields(&self, fs: &[Field], subst: &dyn Fn(&Ty) -> Ty, rng: &mut Rng, opts: &Options, depth: u32) -> Option<Vec<(Rc<str>, Value)>> {
         fs.iter().map(|f| Some((Rc::<str>::from(f.name.as_str()), self.generate(&subst(&f.ty), rng, opts, depth + 1)?))).collect()
+    }
+}
+
+pub struct DiffReport {
+    pub name: String,
+    pub cases: usize,
+    pub mismatch: Option<(Vec<String>, String, String)>,
+}
+
+fn describe_result(r: crate::R) -> String {
+    match r {
+        Ok(v) => format!("ok {}", crate::value::Quoted(&v)),
+        Err(Ctrl::Raise(v)) => format!("raise {}", crate::value::Quoted(&v)),
+        Err(Ctrl::Trap(m)) => format!("trap {m}"),
+        Err(Ctrl::Return(v)) => format!("ok {}", crate::value::Quoted(&v)),
     }
 }
 

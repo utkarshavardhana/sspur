@@ -1,0 +1,47 @@
+type Item = {sku: Int, qty: Int where _ > 0, price: Int where _ >= 0}
+type Tree = Leaf | Node{left: Tree, value: Int, right: Tree}
+type P = {x: F64, y: F64, vx: F64, vy: F64}
+
+fn make_items(n: Int) -> List[Item]
+= (0..n).map(i => Item{sku: i, qty: i % 7 + 1, price: i % 13})
+
+fn order_total(items: List[Item]) -> Int
+= items.filter(_.price > 3).map(_.price * _.qty).sum
+
+fn orders_bench(n: Int) -> Int
+= order_total(make_items(n))
+
+fn insert(t: Tree, x: Int) -> Tree
+= match t
+  | Leaf => Node{left: Leaf, value: x, right: Leaf}
+  | Node{left, value, right} => if x < value then Node{left: insert(left, x), value, right} else if x > value then Node{left, value, right: insert(right, x)} else t
+
+fn tree_sum(t: Tree) -> Int
+= match t
+  | Leaf => 0
+  | Node{left, value, right} => tree_sum(left) + value + tree_sum(right)
+
+fn tree_bench(n: Int) -> Int
+= do
+  var t = Leaf
+  var k = 7
+  for i in 0..n
+    k := (k * 1103515245 + 12345) % 2147483648
+    t := insert(t, k % 1000000)
+  tree_sum(t)
+
+fn step(p: P, dt: F64) -> P
+= {x: p.x + p.vx * dt, y: p.y + p.vy * dt, vx: if p.x > 100.0 or p.x < 0.0 then -p.vx else p.vx, vy: p.vy - 9.8 * dt}
+
+fn sim_bench(n: Int, steps: Int) -> F64
+= do
+  var ps = (0..n).map(i => P{x: i.to_f64 % 100.0, y: 0.0, vx: 1.5, vy: 2.0})
+  for s in 0..steps
+    ps := ps.map(p => step(p, 0.01))
+  ps.map(_.x + _.y).sum
+
+fn main() -> Unit ! log
+= do
+  log("orders {orders_bench(3000000)}")
+  log("tree {tree_bench(400000)}")
+  log("sim {sim_bench(20000, 400)}")

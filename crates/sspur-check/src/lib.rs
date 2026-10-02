@@ -33,6 +33,27 @@ pub struct CheckOutput {
     pub record_types: HashMap<(u32, u32), String>,
     pub user_methods: HashSet<(u32, u32)>,
     pub sigs: BTreeMap<String, String>,
+    pub expr_types: HashMap<ExprKey, Type>,
+    pub fn_types: HashMap<String, (Vec<Type>, Type)>,
+    pub records: HashMap<String, (Vec<String>, Vec<(String, Type)>)>,
+    pub sums: HashMap<String, (Vec<String>, Vec<(String, Option<Vec<(String, Type)>>)>)>,
+}
+
+pub type ExprKey = (u32, u32, u8);
+
+pub fn expr_key(e: &Expr) -> ExprKey {
+    let tag = match &e.kind {
+        ExprKind::Lambda { .. } => 1,
+        ExprKind::Block(_) => 2,
+        ExprKind::Call(..) => 3,
+        ExprKind::Method { .. } => 4,
+        ExprKind::Field(..) => 5,
+        ExprKind::Binary(..) => 6,
+        ExprKind::Placeholder => 7,
+        ExprKind::Name(_) => 8,
+        _ => 0,
+    };
+    (e.span.start, e.span.end, tag)
 }
 
 impl CheckOutput {
@@ -113,6 +134,8 @@ struct Checker {
     user_methods: HashSet<(u32, u32)>,
     fail_types: HashMap<String, Type>,
     cur_params: Vec<(String, Type)>,
+    pending_types: Vec<(ExprKey, Type)>,
+    expr_types: HashMap<ExprKey, Type>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -181,6 +204,8 @@ pub fn check(m: &Module) -> CheckOutput {
         user_methods: HashSet::new(),
         fail_types: HashMap::new(),
         cur_params: vec![],
+        pending_types: vec![],
+        expr_types: HashMap::new(),
     };
     c.load_builtins();
     c.collect(m);
@@ -194,6 +219,25 @@ pub fn check(m: &Module) -> CheckOutput {
             Def::Test(t) => c.check_test(t),
             Def::Type(t) => c.check_type_refines(t),
         }
+        for (k, t) in std::mem::take(&mut c.pending_types) {
+            let r = c.resolve(&t);
+            c.expr_types.insert(k, r);
+        }
+    }
+    let fn_types = c.fns.iter().map(|(n, s)| (n.clone(), (s.params.clone(), s.ret.clone()))).collect();
+    let mut records = HashMap::new();
+    let mut sums = HashMap::new();
+    for (n, info) in &c.types {
+        match &info.kind {
+            TypeKind::Record(fs) => {
+                records.insert(n.clone(), (info.params.clone(), fs.clone()));
+            }
+            TypeKind::Sum(vs) => {
+                let variants = vs.iter().map(|v| (v.clone(), c.ctors.get(v).and_then(|ci| ci.fields.clone()))).collect();
+                sums.insert(n.clone(), (info.params.clone(), variants));
+            }
+            _ => {}
+        }
     }
     if m.profile.as_deref().is_some_and(|p| p != "app") {
         c.diags.push(Diag {
@@ -206,7 +250,7 @@ pub fn check(m: &Module) -> CheckOutput {
             fix: vec![],
         });
     }
-    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs }
+    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums }
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -819,6 +863,12 @@ impl Checker {
     }
 
     fn infer(&mut self, e: &Expr, exp: Option<&Type>) -> Type {
+        let t = self.infer_kind(e, exp);
+        self.pending_types.push((expr_key(e), t.clone()));
+        t
+    }
+
+    fn infer_kind(&mut self, e: &Expr, exp: Option<&Type>) -> Type {
         match &e.kind {
             ExprKind::Int(_) => Type::int(),
             ExprKind::Float(_) => Type::con("F64"),

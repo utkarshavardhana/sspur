@@ -6,7 +6,8 @@ fn run(src: &str, f: &str, args: &[i64]) -> Result<i64, String> {
     let jit = compile(&m).unwrap();
     assert!(jit.functions.iter().any(|n| n == f), "{f} not native: {:?}", jit.skipped);
     let a = jit.call(f, args).unwrap();
-    let release = sspur_native::cgen::compile_release(&m, "-O2").unwrap();
+    let check = sspur_check::check(&m);
+    let release = sspur_native::cgen::compile_release(&m, &check, "-O2").unwrap();
     let b = release.call(f, args).unwrap();
     assert_eq!(a, b, "Cranelift and release tiers disagree on {f}{args:?}");
     a

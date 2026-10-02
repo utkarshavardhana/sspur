@@ -1,0 +1,221 @@
+use sspur_check::{CheckOutput, Type};
+use std::collections::HashMap;
+use std::fmt;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NVal {
+    Unit,
+    Int(i64),
+    Bool(bool),
+    Float(f64),
+    Rec(String, Vec<(String, NVal)>),
+    Variant(String, Option<Vec<(String, NVal)>>),
+    List(Vec<NVal>),
+    Opt(Option<Box<NVal>>),
+    Tuple(Vec<NVal>),
+}
+
+#[derive(Clone, Default)]
+pub struct Layouts {
+    pub records: HashMap<String, (Vec<String>, Vec<(String, Type)>)>,
+    pub sums: HashMap<String, (Vec<String>, Vec<(String, Option<Vec<(String, Type)>>)>)>,
+}
+
+impl Layouts {
+    pub fn from_check(c: &CheckOutput) -> Self {
+        Layouts { records: c.records.clone(), sums: c.sums.clone() }
+    }
+}
+
+pub fn subst(t: &Type, params: &[String], args: &[Type]) -> Type {
+    match t {
+        Type::Param(p) => params.iter().position(|x| x == p).map_or_else(|| t.clone(), |i| args[i].clone()),
+        Type::Con(n, a) => Type::Con(n.clone(), a.iter().map(|x| subst(x, params, args)).collect()),
+        Type::Tuple(xs) => Type::Tuple(xs.iter().map(|x| subst(x, params, args)).collect()),
+        other => other.clone(),
+    }
+}
+
+impl Layouts {
+    pub fn record_fields(&self, name: &str, args: &[Type]) -> Option<Vec<(String, Type)>> {
+        let (ps, fs) = self.records.get(name)?;
+        Some(fs.iter().map(|(n, t)| (n.clone(), subst(t, ps, args))).collect())
+    }
+
+    pub fn sum_variants(&self, name: &str, args: &[Type]) -> Option<Vec<(String, Option<Vec<(String, Type)>>)>> {
+        let (ps, vs) = self.sums.get(name)?;
+        Some(vs.iter().map(|(v, fs)| (v.clone(), fs.as_ref().map(|fs| fs.iter().map(|(n, t)| (n.clone(), subst(t, ps, args))).collect()))).collect())
+    }
+
+    pub fn encode(&self, v: &NVal, t: &Type, out: &mut Vec<i64>) -> Option<()> {
+        match (v, t) {
+            (NVal::Unit, _) => out.push(0),
+            (NVal::Int(n), _) => out.push(*n),
+            (NVal::Bool(b), _) => out.push(i64::from(*b)),
+            (NVal::Float(x), _) => out.push(x.to_bits() as i64),
+            (NVal::Tuple(xs), Type::Tuple(ts)) => {
+                for (x, t) in xs.iter().zip(ts) {
+                    self.encode(x, t, out)?;
+                }
+            }
+            (NVal::List(xs), Type::Con(n, a)) if n == "List" => {
+                out.push(xs.len() as i64);
+                for x in xs {
+                    self.encode(x, &a[0], out)?;
+                }
+            }
+            (NVal::Opt(o), Type::Con(n, a)) if n == "Opt" => match o {
+                None => out.push(0),
+                Some(x) => {
+                    out.push(1);
+                    self.encode(x, &a[0], out)?;
+                }
+            },
+            (NVal::Rec(_, fs), Type::Con(n, a)) => {
+                let decl = self.record_fields(n, a)?;
+                for ((_, fv), (_, ft)) in fs.iter().zip(&decl) {
+                    self.encode(fv, ft, out)?;
+                }
+            }
+            (NVal::Variant(c, fs), Type::Con(n, a)) => {
+                let vs = self.sum_variants(n, a)?;
+                let tag = vs.iter().position(|(v, _)| v == c)?;
+                out.push(tag as i64);
+                if let (Some(fs), Some(Some(decl))) = (fs, vs.get(tag).map(|v| &v.1)) {
+                    for ((_, fv), (_, ft)) in fs.iter().zip(decl) {
+                        self.encode(fv, ft, out)?;
+                    }
+                }
+            }
+            _ => return None,
+        }
+        Some(())
+    }
+
+    pub fn decode(&self, words: &[i64], pos: &mut usize, t: &Type) -> Option<NVal> {
+        let mut next = || {
+            let w = *words.get(*pos)?;
+            *pos += 1;
+            Some(w)
+        };
+        Some(match t {
+            Type::Con(n, a) => match n.as_str() {
+                "Int" => NVal::Int(next()?),
+                "Bool" => NVal::Bool(next()? != 0),
+                "F64" => NVal::Float(f64::from_bits(next()? as u64)),
+                "Unit" => {
+                    next()?;
+                    NVal::Unit
+                }
+                "List" => {
+                    let len = next()?;
+                    let mut xs = Vec::with_capacity(len.max(0) as usize);
+                    for _ in 0..len {
+                        xs.push(self.decode(words, pos, &a[0])?);
+                    }
+                    NVal::List(xs)
+                }
+                "Opt" => {
+                    if next()? == 0 {
+                        NVal::Opt(None)
+                    } else {
+                        NVal::Opt(Some(Box::new(self.decode(words, pos, &a[0])?)))
+                    }
+                }
+                _ => {
+                    if let Some(fs) = self.record_fields(n, a) {
+                        let mut out = Vec::new();
+                        for (fname, ft) in fs {
+                            out.push((fname, self.decode(words, pos, &ft)?));
+                        }
+                        NVal::Rec(n.clone(), out)
+                    } else {
+                        let vs = self.sum_variants(n, a)?;
+                        let tag = next()? as usize;
+                        let (vname, fields) = vs.get(tag)?.clone();
+                        match fields {
+                            None => NVal::Variant(vname, None),
+                            Some(fs) => {
+                                let mut out = Vec::new();
+                                for (fname, ft) in fs {
+                                    out.push((fname, self.decode(words, pos, &ft)?));
+                                }
+                                NVal::Variant(vname, Some(out))
+                            }
+                        }
+                    }
+                }
+            },
+            Type::Tuple(ts) => {
+                let mut out = Vec::new();
+                for t in ts {
+                    out.push(self.decode(words, pos, t)?);
+                }
+                NVal::Tuple(out)
+            }
+            _ => return None,
+        })
+    }
+}
+
+fn fields(f: &mut fmt::Formatter<'_>, fs: &[(String, NVal)]) -> fmt::Result {
+    write!(f, "{{")?;
+    for (i, (n, v)) in fs.iter().enumerate() {
+        if i > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "{n}: {v}")?;
+    }
+    write!(f, "}}")
+}
+
+impl fmt::Display for NVal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NVal::Unit => write!(f, "()"),
+            NVal::Int(n) => write!(f, "{n}"),
+            NVal::Bool(b) => write!(f, "{b}"),
+            NVal::Float(x) => write!(f, "{x:?}"),
+            NVal::Rec(n, fs) => {
+                write!(f, "{n}")?;
+                fields(f, fs)
+            }
+            NVal::Variant(n, None) => write!(f, "{n}"),
+            NVal::Variant(n, Some(fs)) => {
+                write!(f, "{n}")?;
+                fields(f, fs)
+            }
+            NVal::List(xs) => {
+                write!(f, "[")?;
+                for (i, x) in xs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{x}")?;
+                }
+                write!(f, "]")
+            }
+            NVal::Opt(None) => write!(f, "none"),
+            NVal::Opt(Some(x)) => write!(f, "some({x})"),
+            NVal::Tuple(xs) => {
+                write!(f, "(")?;
+                for (i, x) in xs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{x}")?;
+                }
+                write!(f, ")")
+            }
+        }
+    }
+}
+
+pub fn scalar_display(t: &Type, bits: i64) -> String {
+    match t {
+        Type::Con(n, _) if n == "Bool" => (bits != 0).to_string(),
+        Type::Con(n, _) if n == "F64" => format!("{:?}", f64::from_bits(bits as u64)),
+        Type::Con(n, _) if n == "Unit" => "()".into(),
+        _ => bits.to_string(),
+    }
+}

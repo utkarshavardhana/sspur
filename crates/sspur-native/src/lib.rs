@@ -8,26 +8,47 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 pub mod cgen;
+pub mod nval;
+
+use nval::{scalar_display, Layouts, NVal};
+use sspur_check::Type;
 
 const MAX_ARITY: usize = 6;
 const DEFAULT_MAX_DEPTH: i64 = 10_000;
 
-const T_OVERFLOW: i64 = 1;
-const T_DIV_ZERO: i64 = 2;
-const T_PRE: i64 = 3;
-const T_POST: i64 = 4;
+pub(crate) const T_OVERFLOW: i64 = 1;
+pub(crate) const T_DIV_ZERO: i64 = 2;
+pub(crate) const T_PRE: i64 = 3;
+pub(crate) const T_POST: i64 = 4;
 const T_PARAM: i64 = 5;
 const T_NEG_EXP: i64 = 6;
-const T_DEPTH: i64 = 7;
+pub(crate) const T_DEPTH: i64 = 7;
+pub(crate) const T_INDEX: i64 = 8;
+pub(crate) const T_UNWRAP: i64 = 9;
+pub(crate) const T_NOMATCH: i64 = 10;
+pub(crate) const T_REFINE: i64 = 11;
 
 #[repr(C)]
-#[derive(Default)]
 struct Status {
     code: i64,
     func: i64,
     clause: i64,
     value: i64,
     limit: i64,
+    rbuf: *mut i64,
+    rlen: i64,
+}
+
+impl Default for Status {
+    fn default() -> Self {
+        Status { code: 0, func: 0, clause: 0, value: 0, limit: 0, rbuf: std::ptr::null_mut(), rlen: 0 }
+    }
+}
+
+pub(crate) struct RichFn {
+    pub(crate) ptr: *const u8,
+    pub(crate) params: Vec<Type>,
+    pub(crate) ret: Type,
 }
 
 extern "C" fn sspur_pow(base: i64, exp: i64, st: *mut Status) -> i64 {
@@ -57,6 +78,10 @@ struct Inner {
     ptrs: HashMap<String, (*const u8, usize)>,
     defs: Vec<FnDef>,
     index: HashMap<String, usize>,
+    rich: HashMap<String, RichFn>,
+    layouts: Layouts,
+    refines: Vec<(String, String, Type)>,
+    free: Option<unsafe extern "C" fn(*mut i64)>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -106,6 +131,50 @@ impl Compiled {
         Some(if st.code == 0 { Ok(r) } else { Err(self.message(&st)) })
     }
 
+    pub fn has(&self, name: &str) -> bool {
+        self.inner.ptrs.contains_key(name) || self.inner.rich.contains_key(name)
+    }
+
+    pub fn call_rich(&self, name: &str, args: &[NVal]) -> Option<Result<NVal, String>> {
+        let f = self.inner.rich.get(name)?;
+        if f.params.len() != args.len() {
+            return None;
+        }
+        let mut words = Vec::new();
+        for (a, t) in args.iter().zip(&f.params) {
+            self.inner.layouts.encode(a, t, &mut words)?;
+        }
+        words.push(0);
+        let mut st = Status { limit: self.max_depth.get(), ..Status::default() };
+        let mut out: *mut i64 = std::ptr::null_mut();
+        let mut out_len: i64 = 0;
+        let entry = unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut Status, *mut *mut i64, *mut i64) -> i64>(f.ptr) };
+        let code = entry(words.as_ptr(), &mut st, &mut out, &mut out_len);
+        if code != 0 {
+            return Some(Err(self.message(&st)));
+        }
+        let slice = unsafe { std::slice::from_raw_parts(out, out_len as usize) };
+        let mut pos = 0;
+        let v = self.inner.layouts.decode(slice, &mut pos, &f.ret);
+        if let Some(free) = self.inner.free {
+            unsafe { free(out) };
+        }
+        Some(v.ok_or_else(|| "native result could not be decoded".to_string()))
+    }
+
+    fn decode_rbuf(&self, st: &Status, t: &Type) -> Option<String> {
+        if st.rbuf.is_null() {
+            return None;
+        }
+        let slice = unsafe { std::slice::from_raw_parts(st.rbuf, st.rlen as usize) };
+        let mut pos = 0;
+        let v = self.inner.layouts.decode(slice, &mut pos, t).map(|v| v.to_string());
+        if let Some(free) = self.inner.free {
+            unsafe { free(st.rbuf) };
+        }
+        v
+    }
+
     pub fn returns_bool(&self, name: &str) -> bool {
         self.inner.index.get(name).is_some_and(|i| kind_of(self.inner.defs[*i].ret.as_ref()) == Some(Kind::Bool))
     }
@@ -130,6 +199,19 @@ impl Compiled {
             (T_DIV_ZERO, _) => "division by zero".into(),
             (T_NEG_EXP, _) => "negative exponent".into(),
             (T_DEPTH, Some(f)) => format!("stack overflow in {}", f.name),
+            (T_INDEX, _) => format!("index {} out of bounds for list of length {}", st.value, st.clause),
+            (T_UNWRAP, _) => "unwrapped none with .get; check with is_some, match on some/none, or use .or(default)".into(),
+            (T_NOMATCH, _) => "no match arm".into(),
+            (T_REFINE, _) => {
+                let (ctx, expr, t) = &self.inner.refines[st.clause as usize];
+                let v = self.decode_rbuf(st, t).unwrap_or_else(|| scalar_display(t, st.value));
+                format!("contract violated: {ctx} where {expr} (value = {v})")
+            }
+            (T_POST, Some(f)) if self.inner.rich.contains_key(&f.name) => {
+                let t = &self.inner.rich[&f.name].ret;
+                let v = self.decode_rbuf(st, t).unwrap_or_else(|| scalar_display(t, st.value));
+                format!("contract violated: post {} in {} (r = {v})", printer::expr(&f.posts[st.clause as usize], 0), f.name)
+            }
             (T_PRE, Some(f)) => format!("contract violated: pre {} in {}", printer::expr(&f.pres[st.clause as usize], 0), f.name),
             (T_POST, Some(f)) => format!(
                 "contract violated: post {} in {} (r = {})",
@@ -307,7 +389,34 @@ pub(crate) fn assemble(defs: Vec<FnDef>, ptrs: HashMap<String, (*const u8, usize
     let index: HashMap<String, usize> = defs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
     let mut functions: Vec<String> = ptrs.keys().cloned().collect();
     functions.sort();
-    Compiled { max_depth: std::cell::Cell::new(DEFAULT_MAX_DEPTH), functions, skipped, inner: Rc::new(Inner { _keep: keep, ptrs, defs, index }) }
+    Compiled {
+        max_depth: std::cell::Cell::new(DEFAULT_MAX_DEPTH),
+        functions,
+        skipped,
+        inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich: HashMap::new(), layouts: Layouts::default(), refines: vec![], free: None }),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assemble_rich(
+    defs: Vec<FnDef>,
+    ptrs: HashMap<String, (*const u8, usize)>,
+    rich: HashMap<String, RichFn>,
+    skipped: BTreeMap<String, String>,
+    keep: Box<dyn std::any::Any>,
+    layouts: Layouts,
+    refines: Vec<(String, String, Type)>,
+    free: unsafe extern "C" fn(*mut i64),
+) -> Compiled {
+    let index: HashMap<String, usize> = defs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
+    let mut functions: Vec<String> = rich.keys().cloned().collect();
+    functions.sort();
+    Compiled {
+        max_depth: std::cell::Cell::new(DEFAULT_MAX_DEPTH),
+        functions,
+        skipped,
+        inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich, layouts, refines, free: Some(free) }),
+    }
 }
 
 pub fn compile(m: &Module) -> Result<Compiled, String> {

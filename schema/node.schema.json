@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sspur.dev/schema/node.json",
+  "title": "SSPUR node (wire form)",
+  "type": "object",
+  "required": ["hash", "kind", "body", "deps", "meta"],
+  "properties": {
+    "hash": {"type": "string", "pattern": "^#[a-z2-7]{52}$"},
+    "kind": {"enum": ["type", "fn", "const", "trait", "impl", "effect", "svc", "ep", "store", "queue", "sched", "test", "req", "proof", "migrate"]},
+    "body": {"type": "string", "description": "Base64 canonical CBOR AST"},
+    "deps": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "meta": {
+      "type": "object",
+      "properties": {
+        "names": {"type": "array", "items": {"type": "string"}},
+        "profile": {"enum": ["app", "sys", "bare"]},
+        "prov": {"type": "object", "properties": {
+          "req": {"type": "array", "items": {"type": "string"}},
+          "agent": {"type": "string"}, "reason": {"type": "string"}, "at": {"type": "string", "format": "date-time"}}},
+        "status": {"type": "object", "properties": {
+          "typecheck": {"enum": ["ok", "err"]},
+          "contracts": {"type": "array", "items": {"enum": ["proven", "checked", "assumed"]}}}},
+        "cost": {"type": "object", "properties": {
+          "time": {"type": "string"}, "alloc": {"type": "string"},
+          "est_p50_ms": {"type": "number"}, "est_usd_per_1m": {"type": "number"}}}
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sspur.dev/schema/diagnostic.json",
+  "title": "SSPUR diagnostic",
+  "type": "object",
+  "required": ["code", "at", "msg"],
+  "additionalProperties": false,
+  "properties": {
+    "code": {"type": "string", "pattern": "^[EWI]_[A-Z0-9_]+$"},
+    "at": {"type": "object", "required": ["node"], "properties": {
+      "node": {"type": "string", "pattern": "^#[a-z2-7]{4,52}$"},
+      "ast": {"type": "array", "items": {"type": "integer", "minimum": 0}}}},
+    "msg": {"type": "string", "maxLength": 200},
+    "expected": {"type": "string"},
+    "actual": {"type": "string"},
+    "fix": {"type": "array", "items": {"$ref": "https://sspur.dev/schema/ops.json#/$defs/op"}}
+  }
+}

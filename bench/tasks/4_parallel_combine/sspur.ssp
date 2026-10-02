@@ -1,0 +1,6 @@
+type Summary = {name: Str, item_count: Int, total: Money[USD]}
+
+fn summary(id: UserId) -> Summary ! net, fail[ApiErr]
+= do
+  (u, c) = par(get_user(id), get_cart(id))
+  {name: u.name, item_count: c.items.len, total: c.items.map(_.price * _.qty).sum}

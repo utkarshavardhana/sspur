@@ -1,0 +1,18 @@
+profile sys
+
+type Ring[T, N: U64 where _ > 0] = {buf: [Opt[T]; N], head: U64 where _ < N, len: U64 where _ <= N}
+
+fn ring[T, N]() -> Ring[T, N] = {buf: [none; N], head: 0, len: 0}
+
+fn push[T, N](r: &mut Ring[T, N], x: own T) -> Res[(), T]
+= if r.len == N then err(x) else do
+  r.buf[(r.head + r.len) % N] := some(x)
+  r.len := r.len + 1
+  ok(())
+
+fn pop[T, N](r: &mut Ring[T, N]) -> Opt[T]
+= if r.len == 0 then none else do
+  x = r.buf[r.head].take
+  r.head := (r.head + 1) % N
+  r.len := r.len - 1
+  x

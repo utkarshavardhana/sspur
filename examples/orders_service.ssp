@@ -1,0 +1,12 @@
+type Item = {sku: Str, qty: Int where _ > 0, price: Money[USD]} derive Json
+type Order = {id: OrderId, items: List[Item] where _.len > 0} derive Json
+
+store Orders = table[OrderId, Order] keys(id)
+
+svc orders
+  ep post "/orders" (o: Order) -> Order ! db.write[Orders]
+  = do
+    db.put(Orders, o.id, o)
+    o
+  ep get "/orders/{id}" (id: OrderId) -> Opt[Order] ! db.read[Orders]
+  = db.get(Orders, id)

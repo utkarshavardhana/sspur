@@ -1,0 +1,11 @@
+type User = {id: Str, name: Str} derive Json
+type FetchErr = Status{code: Int} | Exhausted
+
+fn fetch_user(url: Url, tries: Int where _ > 0) -> User ! net, time, fail[FetchErr | DecodeErr]
+= do
+  for n in 0..tries
+    match attempt(http.get(url, timeout: 2s))
+    | some(r) if r.code < 400 => return r.json[User]
+    | some(r) if r.code < 500 => raise Status{code: r.code}
+    | _ => sleep(100ms * 2 ** n)
+  raise Exhausted

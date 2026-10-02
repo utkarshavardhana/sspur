@@ -1,0 +1,4 @@
+fn word_lengths(s: Str) -> List[Int]
+= s.split(" ").filter(w => w.len > 0).map(w => w.len)
+
+test word_lengths_basic = word_lengths("a  bcd e") == [1, 3, 1]

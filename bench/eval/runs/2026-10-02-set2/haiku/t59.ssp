@@ -1,0 +1,10 @@
+fn simulate(actions: List[Action]) -> List[Str]
+= do
+  var state = Idle
+  var messages = []
+  for action in actions
+    do
+      var (new_state, msg) = step(state, action)
+      state := new_state
+      if msg != "" then messages := messages.push(msg)
+  messages

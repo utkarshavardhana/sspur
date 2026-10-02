@@ -51,15 +51,29 @@ pub fn children(e: &Expr) -> Vec<&Expr> {
             for s in stmts {
                 match s {
                     Stmt::Let(_, x) | Stmt::Var(_, x) | Stmt::Assign(_, x, _) | Stmt::Expr(x) => out.push(x),
-                    Stmt::For(_, a, b) => {
+                    Stmt::For(_, a, b) | Stmt::While(a, b) => {
                         out.push(a);
                         out.push(b);
+                    }
+                    Stmt::Fn(f) => {
+                        out.extend(f.pres.iter().chain(f.posts.iter()).chain(f.examples.iter()));
+                        out.push(&f.body);
                     }
                 }
             }
         }
         ExprKind::Record { fields, .. } => out.extend(fields.iter().map(|(_, x)| x)),
         ExprKind::List(xs) | ExprKind::Tuple(xs) | ExprKind::Par(xs) => out.extend(xs.iter()),
+        ExprKind::Table(rows) => {
+            for r in rows {
+                for c in &r.cells {
+                    if let Cell::Cond(e) = c {
+                        out.push(e);
+                    }
+                }
+                out.push(&r.out);
+            }
+        }
         ExprKind::With(base, ups) => {
             out.push(base);
             for (p, v) in ups {
@@ -134,15 +148,29 @@ pub fn walk_expr_mut(e: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
             for s in stmts {
                 match s {
                     Stmt::Let(_, x) | Stmt::Var(_, x) | Stmt::Assign(_, x, _) | Stmt::Expr(x) => walk_expr_mut(x, f),
-                    Stmt::For(_, a, b) => {
+                    Stmt::For(_, a, b) | Stmt::While(a, b) => {
                         walk_expr_mut(a, f);
                         walk_expr_mut(b, f);
+                    }
+                    Stmt::Fn(d) => {
+                        d.pres.iter_mut().chain(d.posts.iter_mut()).chain(d.examples.iter_mut()).for_each(|x| walk_expr_mut(x, f));
+                        walk_expr_mut(&mut d.body, f);
                     }
                 }
             }
         }
         ExprKind::Record { fields, .. } => fields.iter_mut().for_each(|(_, x)| walk_expr_mut(x, f)),
         ExprKind::List(xs) | ExprKind::Tuple(xs) | ExprKind::Par(xs) => xs.iter_mut().for_each(|x| walk_expr_mut(x, f)),
+        ExprKind::Table(rows) => {
+            for r in rows {
+                for c in &mut r.cells {
+                    if let Cell::Cond(e) = c {
+                        walk_expr_mut(e, f);
+                    }
+                }
+                walk_expr_mut(&mut r.out, f);
+            }
+        }
         ExprKind::With(base, ups) => {
             walk_expr_mut(base, f);
             for (p, v) in ups {
@@ -178,29 +206,31 @@ pub fn strip_spans(m: &mut Module) {
                     strip_tparam(p);
                 }
             }
-            Def::Fn(f) => {
-                f.span = z;
-                f.sig_span = z;
-                f.tparams.iter_mut().for_each(strip_tparam);
-                for p in &mut f.params {
-                    strip_ty(&mut p.ty);
-                    if let Some(r) = &mut p.refine {
-                        strip_expr(r);
-                    }
-                }
-                if let Some(r) = &mut f.ret {
-                    strip_ty(r);
-                }
-                f.effects.iter_mut().for_each(strip_effect);
-                f.pres.iter_mut().chain(f.posts.iter_mut()).chain(f.examples.iter_mut()).for_each(strip_expr);
-                strip_expr(&mut f.body);
-            }
+            Def::Fn(f) => strip_fn(f),
             Def::Test(t) => {
                 t.span = z;
                 strip_expr(&mut t.body);
             }
         }
     }
+}
+
+fn strip_fn(f: &mut FnDef) {
+    f.span = Span::default();
+    f.sig_span = Span::default();
+    f.tparams.iter_mut().for_each(strip_tparam);
+    for p in &mut f.params {
+        strip_ty(&mut p.ty);
+        if let Some(r) = &mut p.refine {
+            strip_expr(r);
+        }
+    }
+    if let Some(r) = &mut f.ret {
+        strip_ty(r);
+    }
+    f.effects.iter_mut().for_each(strip_effect);
+    f.pres.iter_mut().chain(f.posts.iter_mut()).chain(f.examples.iter_mut()).for_each(strip_expr);
+    strip_expr(&mut f.body);
 }
 
 fn strip_tparam(p: &mut TParam) {
@@ -249,6 +279,9 @@ fn strip_expr(e: &mut Expr) {
             for s in stmts {
                 if let Stmt::Assign(_, _, sp) = s {
                     *sp = Span::default();
+                }
+                if let Stmt::Fn(f) = s {
+                    strip_fn(f);
                 }
             }
         }

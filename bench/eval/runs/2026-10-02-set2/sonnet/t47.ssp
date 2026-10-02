@@ -1,0 +1,30 @@
+fn exec(stack: List[Int], cmd: Str) -> List[Int] ! fail[CmdErr]
+= do
+  parts = cmd.split(" ")
+  head = parts.first.or("")
+  if head == "push" then push_cmd(stack, parts)
+  else if head == "pop" then pop_cmd(stack)
+  else if head == "add" then add_cmd(stack)
+  else raise Unknown{cmd: head}
+
+fn push_cmd(stack: List[Int], parts: List[Str]) -> List[Int] ! fail[CmdErr]
+= if parts.len < 2 then raise MissingArg{cmd: "push"}
+  else match parts[1].to_int
+    | some(v) => stack.push(v)
+    | none => raise MissingArg{cmd: "push"}
+
+fn add_cmd(stack: List[Int]) -> List[Int] ! fail[CmdErr]
+= if stack.len < 2 then raise MissingArg{cmd: "add"}
+  else stack.take(stack.len - 2).push(stack[stack.len - 1] + stack[stack.len - 2])
+
+fn pop_cmd(stack: List[Int]) -> List[Int] ! fail[CmdErr]
+= if stack.is_empty then raise MissingArg{cmd: "pop"}
+  else stack.take(stack.len - 1)
+
+fn run_cmds(cmds: List[Str]) -> List[Int] ! fail[CmdErr]
+= cmds.fold([], (s, c) => exec(s, c))
+
+fn run_all(cmds: List[Str]) -> Str
+= catch run_cmds(cmds).map(_.str).join(",")
+  | Unknown{cmd} => "unknown: {cmd}"
+  | MissingArg{cmd} => "missing: {cmd}"

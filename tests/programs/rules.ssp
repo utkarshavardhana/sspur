@@ -1,0 +1,27 @@
+type Zone = Local | Domestic | Remote
+
+rule shipping(kg: Int, zone: Zone, prime: Bool) -> Int
+  | kg <= 1, _, true => 0
+  | kg <= 1, Local, false => 3
+  | kg <= 5, Local, _ => 5
+  | _, Remote, _ => 12
+  | _, _, _ => 8
+
+rule grade(score: Int) -> Str
+  pre score >= 0 and score <= 100
+  | score >= 90 => "A"
+  | score >= 75 => "B"
+  | score >= 50 => "C"
+  | _ => "F"
+
+fn main() -> Unit ! log
+= do
+  log("1kg prime remote: {shipping(1, Remote, true)}")
+  log("3kg local: {shipping(3, Local, false)}")
+  log("grades: {[95, 80, 51, 10].map(grade)}")
+
+test free = shipping(1, Domestic, true) == 0
+test local_small = shipping(1, Local, false) == 3
+test remote = shipping(9, Remote, false) == 12
+test fallback = shipping(9, Domestic, true) == 8
+test grades = [95, 80, 51, 10].map(grade) == ["A", "B", "C", "F"]

@@ -1,0 +1,10 @@
+fn held(v: Vending) -> Int
+= match v
+  | Idle => 0
+  | HasCoins{cents} => cents
+
+fn step(v: Vending, a: Action) -> (Vending, Str)
+= match a
+  | Coin{cents} => (HasCoins{cents: held(v) + cents}, "")
+  | Buy{price} => if held(v) >= price then (Idle, "vend change {held(v) - price}") else (v, "need {price - held(v)}")
+  | Refund => (Idle, "refund {held(v)}")

@@ -1,0 +1,11 @@
+fn fib_list(n: Int where _ >= 0) -> List[Int]
+= do
+  var out = []
+  var a = 0
+  var b = 1
+  for i in 0..n
+    out := out.push(a)
+    t = a + b
+    a := b
+    b := t
+  out

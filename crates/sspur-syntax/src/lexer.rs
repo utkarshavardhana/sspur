@@ -23,7 +23,7 @@ pub struct Token {
 pub const KEYWORDS: &[&str] = &[
     "fn", "type", "test", "var", "for", "in", "if", "then", "else", "match", "catch", "do", "raise",
     "return", "with", "profile", "derive", "where", "pre", "post", "dec", "cost", "new", "true",
-    "false", "and", "or", "not", "par", "ex", "trait", "impl", "store", "svc", "queue", "effect",
+    "false", "and", "or", "not", "par", "ex", "while", "rule", "trait", "impl", "store", "svc", "queue", "effect",
 ];
 
 const SYMBOLS: &[&str] = &[
@@ -149,7 +149,6 @@ fn lex_string(src: &str, start: usize) -> Result<(String, usize), SyntaxError> {
     let mut out = String::new();
     let quote = src[start..].chars().next().unwrap();
     let mut chars = src[start + 1..].char_indices();
-    let mut depth = 0;
     let mut skip_to = 0;
     while let Some((off, ch)) = chars.next() {
         let pos = start + 1 + off;
@@ -157,19 +156,13 @@ fn lex_string(src: &str, start: usize) -> Result<(String, usize), SyntaxError> {
             continue;
         }
         match ch {
-            '{' => {
-                depth += 1;
-                out.push(ch);
-            }
-            '}' if depth > 0 => {
-                depth -= 1;
-                out.push(ch);
-            }
-            '"' | '\'' if depth > 0 => {
-                let (_, end) = lex_string(src, pos)?;
-                out.push_str(&src[pos..end]);
-                skip_to = end;
-            }
+            '{' => match interp_end(src, pos) {
+                Some(end) => {
+                    out.push_str(&src[pos..=end]);
+                    skip_to = end + 1;
+                }
+                None => out.push_str("\\{"),
+            },
             c if c == quote => return Ok((out, pos + 1)),
             '\\' => match chars.next() {
                 Some((_, 'n')) => out.push('\n'),
@@ -187,6 +180,32 @@ fn lex_string(src: &str, start: usize) -> Result<(String, usize), SyntaxError> {
         }
     }
     Err(SyntaxError::new("E_LEX_STRING", "unterminated string".into(), Span::new(start, start + 1)))
+}
+
+fn interp_end(src: &str, open: usize) -> Option<usize> {
+    let bytes = src.as_bytes();
+    let mut depth = 0;
+    let mut i = open;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            b'"' | b'\'' if depth > 0 => {
+                let (_, end) = lex_string(src, i).ok()?;
+                i = end;
+                continue;
+            }
+            b'\n' => return None,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 fn lex_number(src: &str, start: usize) -> Result<(Tok, usize), SyntaxError> {

@@ -112,6 +112,28 @@ struct Checker {
     record_types: HashMap<(u32, u32), String>,
     user_methods: HashSet<(u32, u32)>,
     fail_types: HashMap<String, Type>,
+    cur_params: Vec<(String, Type)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Point {
+    Int(i64),
+    Bool(bool),
+    Ctor(String),
+    Str(String),
+    Other,
+}
+
+impl std::fmt::Display for Point {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Point::Int(n) => write!(f, "{n}"),
+            Point::Bool(b) => write!(f, "{b}"),
+            Point::Ctor(c) => write!(f, "{c}"),
+            Point::Str(s) => write!(f, "{s:?}"),
+            Point::Other => write!(f, "<other>"),
+        }
+    }
 }
 
 const BUILTIN_TYPES: &[(&str, usize)] = &[
@@ -131,6 +153,10 @@ const BUILTIN_TYPES: &[(&str, usize)] = &[
     ("List", 1),
     ("Opt", 1),
     ("Res", 2),
+    ("Secret", 1),
+    ("Pii", 1),
+    ("Untrusted", 1),
+    ("Guess", 1),
     ("Map", 2),
 ];
 
@@ -154,6 +180,7 @@ pub fn check(m: &Module) -> CheckOutput {
         record_types: HashMap::new(),
         user_methods: HashSet::new(),
         fail_types: HashMap::new(),
+        cur_params: vec![],
     };
     c.load_builtins();
     c.collect(m);
@@ -437,6 +464,22 @@ impl Checker {
         self.cur_def = Some(f.name.clone());
         let scheme = self.fns[&f.name].clone();
         self.tparams = scheme.tparams.clone();
+        self.check_fn_body(f, &scheme);
+        self.report_holes();
+        self.tparams.clear();
+        self.cur_def = None;
+    }
+
+    fn local_fn_type(&mut self, s: &Scheme) -> Type {
+        let mut row = Row::closed(s.atoms.iter().cloned());
+        for f in &s.fails {
+            let atom = self.fail_atom(f);
+            row.atoms.insert(atom);
+        }
+        Type::Fn(s.params.clone(), Box::new(s.ret.clone()), row)
+    }
+
+    fn check_fn_body(&mut self, f: &FnDef, scheme: &Scheme) {
         let mut scope = HashMap::new();
         for (p, t) in f.params.iter().zip(&scheme.params) {
             scope.insert(p.name.clone(), Local { ty: t.clone(), mutable: false });
@@ -466,12 +509,16 @@ impl Checker {
 
         self.scopes.push(scope);
         self.frames.push(Frame::new());
-        self.cur_ret = Some(scheme.ret.clone());
+        let saved_ret = self.cur_ret.replace(scheme.ret.clone());
+        let saved_params = std::mem::replace(&mut self.cur_params, f.params.iter().map(|p| p.name.clone()).zip(scheme.params.iter().cloned()).collect());
+        let saved_depth = std::mem::replace(&mut self.lambda_depth, 0);
         let t = self.infer(&f.body, Some(&scheme.ret));
         self.expect(&scheme.ret, &t, f.body.span);
         let frame = self.frames.pop().unwrap();
         self.scopes.pop();
-        self.cur_ret = None;
+        self.cur_ret = saved_ret;
+        self.cur_params = saved_params;
+        self.lambda_depth = saved_depth;
 
         let mut declared: BTreeSet<String> = scheme.atoms.clone();
         for ft in &scheme.fails {
@@ -498,9 +545,6 @@ impl Checker {
                 }
             }
         }
-        self.report_holes();
-        self.tparams.clear();
-        self.cur_def = None;
     }
 
     fn check_test(&mut self, t: &TestDef) {
@@ -729,6 +773,22 @@ impl Checker {
             }
             _ => String::new(),
         };
+        if name == "str" && self.type_has(&rr, "Secret") {
+            self.push_diag("E_SECRET_LEAK", "error", span, format!("'.str' on {rr} would leak a secret"), None, vec![]);
+        }
+        if matches!(con.as_str(), "Secret" | "Pii" | "Untrusted" | "Guess") && matches!(name, "expose" | "trust" | "accept") {
+            let reason = match args.first().map(|a| &a.kind) {
+                Some(ExprKind::Str(parts)) => match parts.as_slice() {
+                    [StrPart::Lit(s)] if !s.trim().is_empty() => Some(s.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            match reason {
+                Some(r) => self.push_diag("A_DECLASSIFY", "audit", span, format!("{con} value declassified with .{name}: {r}"), None, vec![]),
+                None => self.push_diag("E_REASON_REQUIRED", "error", span, format!(".{name} on {con} needs a non-empty string literal reason"), Some(format!(".{name}(\"why this is safe\")")), vec![]),
+            }
+        }
         let found = self.methods.get(&(con.clone(), name.to_string())).or_else(|| self.methods.get(&("*".to_string(), name.to_string()))).cloned();
         match found {
             Some(s) => self.call_scheme(&s, name, Some((rt, recv.span)), args, span),
@@ -767,7 +827,13 @@ impl Checker {
             ExprKind::Str(parts) => {
                 for p in parts {
                     if let StrPart::Expr(x) = p {
-                        self.infer(x, None);
+                        let t = self.infer(x, None);
+                        let t = self.resolve(&t);
+                        if self.type_has(&t, "Secret") {
+                            self.push_diag("E_SECRET_LEAK", "error", x.span, format!("interpolating {t} would leak a secret into a string"), Some("use .check(...) or .map(...); .expose(\"reason\") only where a raw value is truly required".into()), vec![]);
+                        } else if self.type_has(&t, "Untrusted") {
+                            self.push_diag("E_UNTRUSTED_INTERP", "error", x.span, format!("interpolating {t} builds a string from unvalidated input"), Some("validate it first: u.validate(parse_fn)".into()), vec![]);
+                        }
                     }
                 }
                 Type::str()
@@ -799,6 +865,19 @@ impl Checker {
                             }
                         };
                     }
+                if let Type::Var(_) = rt {
+                    let owners: Vec<(String, Vec<String>)> = self
+                        .types
+                        .iter()
+                        .filter(|(_, i)| matches!(&i.kind, TypeKind::Record(fs) if fs.iter().any(|(n, _)| n == f)))
+                        .map(|(n, i)| (n.clone(), i.params.clone()))
+                        .collect();
+                    if let [(owner, params)] = owners.as_slice() {
+                        let args: Vec<Type> = params.iter().map(|_| self.fresh()).collect();
+                        self.unify(&Type::Con(owner.clone(), args), &xt);
+                        return self.infer(e, exp);
+                    }
+                }
                 if let Type::Con(n, args) = &rt {
                     if let Some(TypeInfo { kind: TypeKind::New(inner), .. }) = self.types.get(n)
                         && f == "raw" {
@@ -904,6 +983,16 @@ impl Checker {
             ExprKind::Catch(body, arms) => self.infer_catch(body, arms, exp, e.span),
             ExprKind::Block(stmts) => {
                 self.scopes.push(HashMap::new());
+                for s in stmts {
+                    if let Stmt::Fn(f) = s {
+                        if !f.tparams.is_empty() {
+                            self.err("E_UNSUPPORTED", f.sig_span, format!("local function '{}' cannot be generic; define it at top level", f.name));
+                        }
+                        let sch = self.scheme_of(f);
+                        let ty = self.local_fn_type(&sch);
+                        self.bind(&f.name, ty, false);
+                    }
+                }
                 let mut last = Type::unit();
                 for (i, s) in stmts.iter().enumerate() {
                     let is_last = i + 1 == stmts.len();
@@ -946,6 +1035,33 @@ impl Checker {
                     _ => self.err("E_RAISE_TYPE", e.span, format!("can only raise values of a declared error type, found {rt}")),
                 }
                 self.fresh()
+            }
+            ExprKind::Table(rows) => {
+                let params = self.cur_params.clone();
+                let out = exp.cloned().unwrap_or_else(|| self.fresh());
+                for (i, r) in rows.iter().enumerate() {
+                    if r.cells.len() != params.len() {
+                        self.err("E_RULE_ARITY", e.span, format!("row {} has {} cells but the rule has {} parameters", i + 1, r.cells.len(), params.len()));
+                        continue;
+                    }
+                    self.scopes.push(HashMap::new());
+                    for (c, (_, pt)) in r.cells.iter().zip(&params) {
+                        match c {
+                            Cell::Any => {}
+                            Cell::Pat(p) => self.check_pat(p, pt),
+                            Cell::Cond(x) => {
+                                let t = self.infer(x, Some(&Type::bool()));
+                                self.expect(&Type::bool(), &t, x.span);
+                            }
+                        }
+                    }
+                    let or = self.resolve(&out);
+                    let ot = self.infer(&r.out, Some(&or));
+                    self.expect(&out, &ot, r.out.span);
+                    self.scopes.pop();
+                }
+                self.analyze_table(rows, &params, e.span);
+                self.resolve(&out)
             }
             ExprKind::With(base, ups) => {
                 let bt = self.infer(base, exp);
@@ -1084,6 +1200,10 @@ impl Checker {
                     self.err("E_OPERATOR", span, format!("operator '{}' is not defined for {t}", op.symbol()));
                 }
                 t
+            }
+            _ if self.type_has(&t, "Secret") => {
+                self.push_diag("E_SECRET_COMPARE", "error", span, format!("comparing {t} directly can leak it through timing or logs"), Some("use s.check(x => x == expected)".into()), vec![]);
+                Type::bool()
             }
             Lt | Le | Gt | Ge => {
                 if known && !t.is_numeric() && t != Type::str() {
@@ -1256,6 +1376,9 @@ impl Checker {
                 _ => false,
             })
         };
+        if let Type::Tuple(ts) = self.resolve(st) {
+            return self.missing_tuple_cases(&ts, &unguarded);
+        }
         let needed: Vec<String> = match self.resolve(st) {
             Type::Con(n, _) if n == "Bool" => vec!["true".into(), "false".into()],
             Type::Con(n, _) if n == "Opt" => vec!["some(_)".into(), "none".into()],
@@ -1277,6 +1400,193 @@ impl Checker {
                 _ => n,
             })
             .collect()
+    }
+
+    fn type_has(&self, t: &Type, name: &str) -> bool {
+        self.type_has_depth(t, name, 0)
+    }
+
+    fn type_has_depth(&self, t: &Type, name: &str, depth: u32) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        if contains_con(t, name) {
+            return true;
+        }
+        let mut stack = vec![t.clone()];
+        while let Some(t) = stack.pop() {
+            match t {
+                Type::Con(n, args) => {
+                    stack.extend(args);
+                    let fields: Vec<Type> = match self.types.get(&n).map(|i| &i.kind) {
+                        Some(TypeKind::Record(fs)) => fs.iter().map(|(_, t)| t.clone()).collect(),
+                        Some(TypeKind::Sum(vs)) => vs.iter().filter_map(|v| self.ctors.get(v)).flat_map(|c| c.fields.clone().unwrap_or_default()).map(|(_, t)| t).collect(),
+                        _ => vec![],
+                    };
+                    if fields.iter().any(|f| self.type_has_depth(f, name, depth + 1)) {
+                        return true;
+                    }
+                }
+                Type::Tuple(xs) => stack.extend(xs),
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn analyze_table(&mut self, rows: &[TableRow], params: &[(String, Type)], span: Span) {
+        if rows.iter().any(|r| r.cells.len() != params.len()) {
+            return;
+        }
+        let mut spaces: Vec<Vec<Point>> = Vec::new();
+        for (i, (name, t)) in params.iter().enumerate() {
+            let t = self.resolve(t);
+            let column: Vec<&Cell> = rows.iter().map(|r| &r.cells[i]).collect();
+            let space = if t == Type::bool() {
+                vec![Point::Bool(true), Point::Bool(false)]
+            } else if t == Type::int() {
+                let mut consts = Vec::new();
+                for c in &column {
+                    match c {
+                        Cell::Cond(e) => collect_consts(e, name, &mut consts),
+                        Cell::Pat(Pat::Int(n)) => consts.push(*n),
+                        _ => {}
+                    }
+                }
+                let mut pts: Vec<i64> = if consts.is_empty() { vec![0] } else { consts.iter().flat_map(|c| [c.saturating_sub(1), *c, c.saturating_add(1)]).collect() };
+                pts.sort();
+                pts.dedup();
+                pts.into_iter().map(Point::Int).collect()
+            } else if t == Type::str() {
+                let mut pts: Vec<Point> = column.iter().filter_map(|c| if let Cell::Pat(Pat::Str(s)) = c { Some(Point::Str(s.clone())) } else { None }).collect();
+                pts.dedup();
+                pts.push(Point::Other);
+                pts
+            } else if let Some(ctors) = self.ctor_space(&t) {
+                ctors.into_iter().map(Point::Ctor).collect()
+            } else {
+                vec![Point::Other]
+            };
+            spaces.push(space);
+        }
+        let total: usize = spaces.iter().map(Vec::len).product();
+        if total > 20_000 {
+            self.push_diag("W_RULE_UNCHECKED", "warning", span, format!("rule has {total} input classes; gap and overlap analysis skipped"), None, vec![]);
+            return;
+        }
+        let mut first_hits = vec![false; rows.len()];
+        let mut gaps: Vec<String> = Vec::new();
+        for idx in 0..total {
+            let mut rem = idx;
+            let point: Vec<&Point> = spaces
+                .iter()
+                .map(|s| {
+                    let p = &s[rem % s.len()];
+                    rem /= s.len();
+                    p
+                })
+                .collect();
+            let mut matched = None;
+            for (ri, r) in rows.iter().enumerate() {
+                let mut all = true;
+                for (ci, c) in r.cells.iter().enumerate() {
+                    match cell_matches(c, &params[ci].0, point[ci]) {
+                        Some(true) => {}
+                        Some(false) => {
+                            all = false;
+                            break;
+                        }
+                        None => {
+                            self.push_diag("W_RULE_UNCHECKED", "warning", span, format!("row {} uses a condition the analyzer cannot evaluate; gap and overlap analysis skipped", ri + 1), Some("use comparisons of one parameter against integer literals, constructors, or literals".into()), vec![]);
+                            return;
+                        }
+                    }
+                }
+                if all {
+                    matched = Some(ri);
+                    break;
+                }
+            }
+            match matched {
+                Some(ri) => first_hits[ri] = true,
+                None if gaps.len() < 3 => gaps.push(params.iter().zip(&point).map(|((n, _), p)| format!("{n} = {p}")).collect::<Vec<_>>().join(", ")),
+                None => {}
+            }
+        }
+        if !gaps.is_empty() {
+            let hint = format!("add a row such as | {} => ?", vec!["_"; params.len()].join(", "));
+            self.push_diag("E_RULE_GAP", "error", span, format!("no row matches: {}", gaps.join("; ")), Some(hint), vec![]);
+        }
+        for (ri, hit) in first_hits.iter().enumerate() {
+            if !hit {
+                self.push_diag("E_RULE_SHADOWED", "error", rows[ri].out.span, format!("row {} can never fire: earlier rows cover all of its inputs", ri + 1), None, vec![]);
+            }
+        }
+    }
+
+    fn ctor_space(&self, t: &Type) -> Option<Vec<String>> {
+        match self.resolve(t) {
+            Type::Con(n, _) if n == "Bool" => Some(vec!["true".into(), "false".into()]),
+            Type::Con(n, _) if n == "Opt" => Some(vec!["some".into(), "none".into()]),
+            Type::Con(n, _) if n == "Res" => Some(vec!["ok".into(), "err".into()]),
+            Type::Con(n, _) => match self.types.get(&n) {
+                Some(TypeInfo { kind: TypeKind::Sum(vs), .. }) => Some(vs.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn missing_tuple_cases(&self, ts: &[Type], arms: &[&Pat]) -> Vec<String> {
+        let spaces: Vec<Vec<String>> = ts.iter().map(|t| self.ctor_space(t).unwrap_or_else(|| vec!["_".into()])).collect();
+        let total: usize = spaces.iter().map(Vec::len).product();
+        if total > 4096 {
+            return vec!["_".into()];
+        }
+        let covers = |p: &Pat, c: &str| match p {
+            Pat::Wild | Pat::Bind(_) => true,
+            Pat::Bool(b) => (if *b { "true" } else { "false" }) == c,
+            Pat::Ctor { name, args } => {
+                name == c
+                    && match args {
+                        CtorArgs::None => true,
+                        CtorArgs::Positional(xs) => xs.iter().all(irrefutable),
+                        CtorArgs::Record(fs) => fs.iter().all(|(_, p)| irrefutable(p)),
+                    }
+            }
+            _ => false,
+        };
+        let mut missing = Vec::new();
+        for idx in 0..total {
+            let mut rem = idx;
+            let combo: Vec<&String> = spaces
+                .iter()
+                .map(|s| {
+                    let c = &s[rem % s.len()];
+                    rem /= s.len();
+                    c
+                })
+                .collect();
+            let hit = arms.iter().any(|p| match p {
+                Pat::Tuple(ps) if ps.len() == combo.len() => ps.iter().zip(&combo).all(|(p, c)| covers(p, c)),
+                _ => false,
+            });
+            if !hit {
+                let shown: Vec<String> = combo
+                    .iter()
+                    .map(|c| match self.ctors.get(*c) {
+                        Some(CtorInfo { fields: Some(_), .. }) => format!("{c}{{..}}"),
+                        _ if c.as_str() == "some" || c.as_str() == "ok" || c.as_str() == "err" => format!("{c}(_)"),
+                        _ => (*c).clone(),
+                    })
+                    .collect();
+                missing.push(format!("({})", shown.join(", ")));
+                if missing.len() >= 5 {
+                    break;
+                }
+            }
+        }
+        missing
     }
 
     fn check_pat(&mut self, p: &Pat, ty: &Type) {
@@ -1383,6 +1693,19 @@ impl Checker {
                     Type::unit()
                 }
             },
+            Stmt::Fn(f) => {
+                let sch = self.scheme_of(f);
+                self.check_fn_body(f, &sch);
+                Type::unit()
+            }
+            Stmt::While(c, body) => {
+                let ct = self.infer(c, Some(&Type::bool()));
+                self.expect(&Type::bool(), &ct, c.span);
+                let bt = self.infer(body, Some(&Type::unit()));
+                self.expect(&Type::unit(), &bt, body.span);
+                self.add_effect("div".into(), c.span, None);
+                Type::unit()
+            }
             Stmt::For(p, it, body) => {
                 let t = self.infer(it, None);
                 let elem = self.fresh();
@@ -1396,6 +1719,91 @@ impl Checker {
                 Type::unit()
             }
         }
+    }
+}
+
+fn collect_consts(e: &Expr, name: &str, out: &mut Vec<i64>) {
+    match &e.kind {
+        ExprKind::Binary(BinOp::And | BinOp::Or, a, b) => {
+            collect_consts(a, name, out);
+            collect_consts(b, name, out);
+        }
+        ExprKind::Unary(UnOp::Not, a) => collect_consts(a, name, out),
+        ExprKind::Binary(_, a, b) => {
+            if let (ExprKind::Name(n), ExprKind::Int(c)) | (ExprKind::Int(c), ExprKind::Name(n)) = (&a.kind, &b.kind)
+                && n == name {
+                    out.push(*c);
+                }
+        }
+        _ => {}
+    }
+}
+
+fn eval_cond(e: &Expr, name: &str, p: &Point) -> Option<bool> {
+    match &e.kind {
+        ExprKind::Bool(b) => Some(*b),
+        ExprKind::Name(n) if n == name => match p {
+            Point::Bool(b) => Some(*b),
+            _ => None,
+        },
+        ExprKind::Unary(UnOp::Not, a) => eval_cond(a, name, p).map(|b| !b),
+        ExprKind::Binary(BinOp::And, a, b) => Some(eval_cond(a, name, p)? && eval_cond(b, name, p)?),
+        ExprKind::Binary(BinOp::Or, a, b) => Some(eval_cond(a, name, p)? || eval_cond(b, name, p)?),
+        ExprKind::Binary(op, a, b) => {
+            let Point::Int(v) = p else { return None };
+            let (l, r) = match (&a.kind, &b.kind) {
+                (ExprKind::Name(n), ExprKind::Int(c)) if n == name => (*v, *c),
+                (ExprKind::Int(c), ExprKind::Name(n)) if n == name => (*c, *v),
+                _ => return None,
+            };
+            Some(match op {
+                BinOp::Lt => l < r,
+                BinOp::Le => l <= r,
+                BinOp::Gt => l > r,
+                BinOp::Ge => l >= r,
+                BinOp::Eq => l == r,
+                BinOp::Ne => l != r,
+                _ => return None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn cell_matches(c: &Cell, name: &str, p: &Point) -> Option<bool> {
+    match c {
+        Cell::Any => Some(true),
+        Cell::Cond(e) => eval_cond(e, name, p),
+        Cell::Pat(pat) => match (pat, p) {
+            (Pat::Wild | Pat::Bind(_), _) => Some(true),
+            (Pat::Int(a), Point::Int(b)) => Some(a == b),
+            (Pat::Bool(a), Point::Bool(b)) => Some(a == b),
+            (Pat::Str(a), Point::Str(b)) => Some(a == b),
+            (Pat::Str(_), Point::Other) => Some(false),
+            (Pat::Ctor { name: n, args }, Point::Ctor(c)) => {
+                let irrefutable_args = match args {
+                    CtorArgs::None => true,
+                    CtorArgs::Positional(xs) => xs.iter().all(irrefutable),
+                    CtorArgs::Record(fs) => fs.iter().all(|(_, p)| irrefutable(p)),
+                };
+                if n != c {
+                    Some(false)
+                } else if irrefutable_args {
+                    Some(true)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        },
+    }
+}
+
+fn contains_con(t: &Type, name: &str) -> bool {
+    match t {
+        Type::Con(n, args) => n == name || args.iter().any(|a| contains_con(a, name)),
+        Type::Tuple(xs) => xs.iter().any(|x| contains_con(x, name)),
+        _ => false,
     }
 }
 

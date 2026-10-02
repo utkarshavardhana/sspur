@@ -1,0 +1,10 @@
+fn step(v: Vending, a: Action) -> (Vending, Str)
+= match (v, a)
+  | (Idle, Coin{cents}) => (HasCoins{cents}, "")
+  | (HasCoins{cents: c}, Coin{cents: added}) => (HasCoins{cents: c + added}, "")
+  | (Idle, Buy{price}) => (Idle, "need " + price.str)
+  | (HasCoins{cents: c}, Buy{price}) =>
+    if c >= price then (Idle, "vend change " + (c - price).str)
+    else (HasCoins{cents: c}, "need " + (price - c).str)
+  | (Idle, Refund) => (Idle, "refund 0")
+  | (HasCoins{cents: c}, Refund) => (Idle, "refund " + c.str)

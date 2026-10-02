@@ -1,0 +1,2 @@
+fn frequencies[A](xs: List[A]) -> Map[A, Int]
+= xs.fold(empty_map(), (m, x) => m.put(x, m.get(x).or(0) + 1))

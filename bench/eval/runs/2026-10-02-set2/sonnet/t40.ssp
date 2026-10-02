@@ -1,0 +1,5 @@
+fn is_palindrome_num(n: Int) -> Bool
+  pre n >= 0
+= n.str == n.str.reverse
+
+test palindrome_basic = is_palindrome_num(121) and not is_palindrome_num(123)

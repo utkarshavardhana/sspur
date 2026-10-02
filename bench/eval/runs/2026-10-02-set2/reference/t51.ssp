@@ -1,0 +1,2 @@
+fn zip_with[A, B, C](xs: List[A], ys: List[B], f: (A, B) -> C) -> List[C]
+= xs.zip(ys).map(p => f(p.0, p.1))

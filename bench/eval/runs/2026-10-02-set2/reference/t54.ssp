@@ -1,0 +1,7 @@
+fn inorder(t: Tree) -> List[Int]
+= match t
+  | Leaf => []
+  | Node{left, value, right} => inorder(left) + [value] + inorder(right)
+
+fn kth_smallest(t: Tree, k: Int) -> Opt[Int]
+= if k < 1 then none else inorder(t).get(k - 1)

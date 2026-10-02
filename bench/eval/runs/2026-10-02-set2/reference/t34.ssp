@@ -1,0 +1,2 @@
+fn dedupe_adjacent(xs: List[Int]) -> List[Int]
+= xs.fold([], (acc, x) => if acc.last == some(x) then acc else acc.push(x))

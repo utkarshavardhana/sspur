@@ -24,6 +24,9 @@ pub enum Value {
     New(Rc<str>, Rc<Value>),
     Closure(Rc<Closure>),
     Func(Rc<FnDef>),
+    LocalFn(Rc<FnDef>, Rc<Env>),
+    Wrap(Rc<str>, Rc<Value>),
+    Guess(Rc<Value>, f64),
     Builtin(Rc<str>),
 }
 
@@ -76,7 +79,9 @@ impl Value {
             Value::Res(_) => 10,
             Value::Map(_) => 11,
             Value::New(..) => 12,
-            Value::Closure(_) | Value::Func(_) | Value::Builtin(_) => 13,
+            Value::Wrap(..) => 14,
+            Value::Guess(..) => 15,
+            Value::Closure(_) | Value::Func(_) | Value::LocalFn(..) | Value::Builtin(_) => 13,
         }
     }
 
@@ -126,7 +131,8 @@ impl Ord for Value {
                 (Err(_), Ok(_)) => Ordering::Greater,
             },
             (Map(a), Map(b)) => a.iter().cmp(b.iter()),
-            (New(n1, a), New(n2, b)) => n1.cmp(n2).then_with(|| a.cmp(b)),
+            (New(n1, a), New(n2, b)) | (Wrap(n1, a), Wrap(n2, b)) => n1.cmp(n2).then_with(|| a.cmp(b)),
+            (Guess(a, c1), Guess(b, c2)) => a.cmp(b).then_with(|| c1.total_cmp(c2)),
             _ => self.rank().cmp(&other.rank()),
         }
     }
@@ -216,8 +222,12 @@ impl fmt::Display for Value {
                 write!(f, "}}")
             }
             Value::New(n, v) => write!(f, "{n}({})", Quoted(v)),
+            Value::Wrap(k, _) if &**k == "Secret" => write!(f, "<secret>"),
+            Value::Wrap(k, _) if &**k == "Pii" => write!(f, "<redacted>"),
+            Value::Wrap(_, v) => write!(f, "untrusted({})", Quoted(v)),
+            Value::Guess(v, c) => write!(f, "guess({}, {c})", Quoted(v)),
             Value::Closure(_) => write!(f, "<fn>"),
-            Value::Func(d) => write!(f, "<fn {}>", d.name),
+            Value::Func(d) | Value::LocalFn(d, _) => write!(f, "<fn {}>", d.name),
             Value::Builtin(n) => write!(f, "<builtin {n}>"),
         }
     }

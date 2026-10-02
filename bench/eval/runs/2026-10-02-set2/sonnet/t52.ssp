@@ -1,0 +1,6 @@
+fn fib_go(k: Int, a: Int, b: Int) -> List[Int]
+= if k == 0 then [] else [a] + fib_go(k - 1, b, a + b)
+
+fn fib_list(n: Int) -> List[Int]
+  pre n >= 0
+= fib_go(n, 0, 1)

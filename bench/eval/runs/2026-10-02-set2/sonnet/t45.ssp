@@ -1,0 +1,7 @@
+fn lower_item(b: Item, x: Item) -> Item
+= if x.price < b.price then x else b
+
+fn cheapest(items: List[Item]) -> Opt[Str]
+= match items.first
+  | none => none
+  | some(f) => some(items.fold(f, lower_item).name)

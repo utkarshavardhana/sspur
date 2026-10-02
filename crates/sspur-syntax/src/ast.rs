@@ -222,6 +222,20 @@ pub enum ExprKind {
     Raise(Box<Expr>),
     Return(Box<Expr>),
     With(Box<Expr>, Vec<(Vec<PathSeg>, Expr)>),
+    Table(Vec<TableRow>),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableRow {
+    pub cells: Vec<Cell>,
+    pub out: Expr,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Cell {
+    Any,
+    Pat(Pat),
+    Cond(Expr),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -244,6 +258,8 @@ pub enum Stmt {
     Assign(String, Expr, Span),
     Expr(Expr),
     For(Pat, Expr, Expr),
+    While(Expr, Expr),
+    Fn(Box<FnDef>),
 }
 
 #[derive(Clone, Debug, PartialEq)]

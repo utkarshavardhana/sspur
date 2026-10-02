@@ -1,0 +1,14 @@
+fn shift_letters(s: Str, k: Int) -> Str
+= do
+  var result = ""
+  for c in s.chars do
+    if c >= "a" and c <= "z" then
+      do
+        var char_code = c.get(0) - "a".get(0)
+        var shifted = (char_code + k) % 26
+        if shifted < 0 then shifted := shifted + 26
+        var new_char = ("a".get(0) + shifted).str
+        result := result + new_char
+    else
+      result := result + c
+  result

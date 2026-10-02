@@ -41,7 +41,7 @@ impl Rng {
     }
 }
 
-const ALLOWED_EFFECTS: &[&str] = &["fail", "log"];
+const ALLOWED_EFFECTS: &[&str] = &["fail", "log", "div"];
 const MAX_DEPTH: u32 = 4;
 const FUEL: u64 = 200_000;
 
@@ -203,6 +203,8 @@ impl Interp {
                     Value::Res(Err(Rc::new(self.generate(&arg(1), rng, opts, depth + 1)?)))
                 }
             }
+            "Secret" | "Pii" | "Untrusted" => Value::Wrap(name.as_str().into(), Rc::new(self.generate(&arg(0), rng, opts, depth + 1)?)),
+            "Guess" => Value::Guess(Rc::new(self.generate(&arg(0), rng, opts, depth + 1)?), rng.below(101) as f64 / 100.0),
             "Map" => {
                 let mut m = BTreeMap::new();
                 for _ in 0..if deep { 0 } else { rng.below(5) } {

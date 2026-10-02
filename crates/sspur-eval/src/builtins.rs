@@ -3,7 +3,7 @@ use crate::{trap, Ctrl, Interp, R};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-const GLOBALS: &[&str] = &["log", "some", "ok", "err", "empty_map", "min", "max"];
+const GLOBALS: &[&str] = &["log", "some", "ok", "err", "empty_map", "min", "max", "secret", "pii", "untrusted", "guess"];
 
 pub fn is_global(n: &str) -> bool {
     GLOBALS.contains(&n)
@@ -45,6 +45,17 @@ impl Interp {
             "ok" => Value::Res(Ok(Rc::new(a.remove(0)))),
             "err" => Value::Res(Err(Rc::new(a.remove(0)))),
             "empty_map" => Value::Map(Rc::new(BTreeMap::new())),
+            "secret" => Value::Wrap("Secret".into(), Rc::new(a.remove(0))),
+            "pii" => Value::Wrap("Pii".into(), Rc::new(a.remove(0))),
+            "untrusted" => Value::Wrap("Untrusted".into(), Rc::new(a.remove(0))),
+            "guess" => {
+                let v = a.remove(0);
+                let Value::Float(c) = a[0] else { return trap("guess confidence must be F64") };
+                if !(0.0..=1.0).contains(&c) {
+                    return trap(format!("guess confidence {c} is outside [0, 1]"));
+                }
+                Value::Guess(Rc::new(v), c)
+            }
             "min" => {
                 let (x, y) = (a.remove(0), a.remove(0));
                 if y < x { y } else { x }
@@ -74,6 +85,24 @@ impl Interp {
                 _ => trap(format!("no method '{name}' on Res")),
             },
             Value::Map(m) => map_method(name, &m, a),
+            Value::Wrap(kind, inner) => match name {
+                "map" => Ok(Value::Wrap(kind, Rc::new(self.apply(&a[0], vec![(*inner).clone()])?))),
+                "check" => self.apply(&a[0], vec![(*inner).clone()]),
+                "expose" | "trust" => Ok((*inner).clone()),
+                "validate" => self.apply(&a[0], vec![(*inner).clone()]),
+                _ => trap(format!("no method '{name}' on {kind}")),
+            },
+            Value::Guess(inner, c) => match name {
+                "conf" => Ok(Value::Float(c)),
+                "map" => Ok(Value::Guess(Rc::new(self.apply(&a[0], vec![(*inner).clone()])?), c)),
+                "verify" => Ok(if boolean(self.apply(&a[0], vec![(*inner).clone()])?)? { Value::some((*inner).clone()) } else { Value::Opt(None) }),
+                "at_least" => match a[0] {
+                    Value::Float(min) => Ok(if c >= min { Value::some((*inner).clone()) } else { Value::Opt(None) }),
+                    _ => trap("at_least expects F64"),
+                },
+                "accept" => Ok((*inner).clone()),
+                _ => trap(format!("no method '{name}' on Guess")),
+            },
             Value::Int(n) => match name {
                 "abs" => n.checked_abs().map(Value::Int).map_or_else(|| trap("integer overflow"), Ok),
                 "to_f64" => Ok(Value::Float(n as f64)),
@@ -216,6 +245,10 @@ impl Interp {
         Ok(match name {
             "or" => o.map_or_else(|| a.remove(0), |v| (*v).clone()),
             "is_some" => Value::Bool(o.is_some()),
+            "get" => match o {
+                Some(v) => (*v).clone(),
+                None => return trap("unwrapped none with .get; check with is_some, match on some/none, or use .or(default)"),
+            },
             "is_none" => Value::Bool(o.is_none()),
             "map" => match o {
                 Some(v) => Value::some(self.apply(&a[0], vec![(*v).clone()])?),

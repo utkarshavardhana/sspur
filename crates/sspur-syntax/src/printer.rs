@@ -92,17 +92,38 @@ pub fn print_sig(f: &FnDef) -> String {
 }
 
 fn print_fn(f: &FnDef) -> String {
+    print_fn_at(f, 0)
+}
+
+fn print_fn_at(f: &FnDef, ind: usize) -> String {
     let mut s = print_sig(f);
+    let c = pad(ind + 2);
     for p in &f.pres {
-        s.push_str(&format!("\n  pre {}", expr(p, 2)));
+        s.push_str(&format!("\n{c}pre {}", expr(p, ind + 2)));
     }
     for p in &f.posts {
-        s.push_str(&format!("\n  post {}", expr(p, 2)));
+        s.push_str(&format!("\n{c}post {}", expr(p, ind + 2)));
     }
     for p in &f.examples {
-        s.push_str(&format!("\n  ex {}", expr(p, 2)));
+        s.push_str(&format!("\n{c}ex {}", expr(p, ind + 2)));
     }
-    s.push_str(&format!("\n= {}", expr(&f.body, 0)));
+    if let ExprKind::Table(rows) = &f.body.kind {
+        s.replace_range(..2, "rule");
+        for r in rows {
+            let cells: Vec<String> = r
+                .cells
+                .iter()
+                .map(|c| match c {
+                    Cell::Any => "_".to_string(),
+                    Cell::Pat(p) => pat(p),
+                    Cell::Cond(e) => expr(e, ind + 2),
+                })
+                .collect();
+            s.push_str(&format!("\n{c}| {} => {}", cells.join(", "), expr(&r.out, ind + 2)));
+        }
+        return s;
+    }
+    s.push_str(&format!("\n{}= {}", pad(ind), expr(&f.body, ind)));
     s
 }
 
@@ -154,7 +175,8 @@ fn prec_of(e: &Expr) -> u8 {
         | ExprKind::Block(_)
         | ExprKind::Raise(_)
         | ExprKind::Return(_)
-        | ExprKind::With(..) => 0,
+        | ExprKind::With(..)
+        | ExprKind::Table(_) => 0,
         _ => 10,
     }
 }
@@ -254,6 +276,7 @@ pub fn expr(e: &Expr, ind: usize) -> String {
         ExprKind::Par(xs) => format!("par({})", list(xs, ind)),
         ExprKind::Raise(x) => format!("raise {}", expr(x, ind)),
         ExprKind::Return(x) => format!("return {}", expr(x, ind)),
+        ExprKind::Table(_) => "<rule table>".into(),
         ExprKind::With(base, ups) => {
             let items: Vec<String> = ups.iter().map(|(p, v)| format!("{} := {}", path(p, ind), expr(v, ind))).collect();
             format!("{} with {}", operand(base, 1, ind), items.join(", "))
@@ -310,8 +333,19 @@ fn stmt(s: &Stmt, ind: usize) -> String {
                 }
                 s
             }
-            _ => format!("for {} in {}\n{}{}", pat(p), expr(it, ind), pad(ind + 2), expr(body, ind + 2)),
+            _ => format!("for {} in {}\n{}{}", pat(p), expr(it, ind), pad(ind + 2), branch(body, ind + 2)),
         },
+        Stmt::While(c, body) => match &body.kind {
+            ExprKind::Block(stmts) => {
+                let mut s = format!("while {}", expr(c, ind));
+                for st in stmts {
+                    s.push_str(&format!("\n{}{}", pad(ind + 2), stmt(st, ind + 2)));
+                }
+                s
+            }
+            _ => format!("while {}\n{}{}", expr(c, ind), pad(ind + 2), branch(body, ind + 2)),
+        },
+        Stmt::Fn(f) => print_fn_at(f, ind),
     }
 }
 

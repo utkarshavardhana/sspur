@@ -1,0 +1,12 @@
+fn is_balanced(s: Str) -> Bool
+= do
+  var stack = []
+  var ok = true
+  for c in s.chars
+    if "([{".contains(c) then stack := stack.push(c)
+    else if ")]}".contains(c) then
+      if stack.last == some(opener(c)) then stack := stack.take(stack.len - 1) else ok := false
+  ok and stack.is_empty
+
+fn opener(c: Str) -> Str
+= if c == ")" then "(" else if c == "]" then "[" else "{"

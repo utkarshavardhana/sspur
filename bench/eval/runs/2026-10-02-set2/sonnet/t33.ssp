@@ -1,0 +1,4 @@
+fn transpose(m: List[List[Int]]) -> List[List[Int]]
+= if m.is_empty then [] else m[0].enumerate().map(p => m.map(r => r[p.0]))
+
+test transpose_basic = transpose([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]]

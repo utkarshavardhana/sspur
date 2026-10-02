@@ -1,0 +1,44 @@
+type User = {email: Pii[Str], password: Secret[Str], plan: Str}
+type Sentiment = Positive | Negative | Neutral
+
+fn login(u: User, attempt: Str) -> Bool
+= u.password.check(_ == attempt)
+
+fn audit_line(u: User) -> Str
+= "user {u.email} on plan {u.plan}"
+
+fn domain(u: User) -> Pii[Str]
+= u.email.map(e => e.split("@").last.or(""))
+
+fn parse_age(raw: Untrusted[Str]) -> Opt[Int]
+= raw.validate(s => valid_age(s))
+
+fn valid_age(s: Str) -> Opt[Int]
+= match s.trim.to_int
+  | some(n) if n >= 0 and n < 150 => some(n)
+  | _ => none
+
+fn classify(text: Str) -> Guess[Sentiment]
+= if text.contains("great") then guess(Positive, 0.93) else if text.contains("bad") then guess(Negative, 0.71) else guess(Neutral, 0.4)
+
+fn route(text: Str) -> Str
+= match classify(text).at_least(0.9)
+  | some(Positive) => "auto-reply"
+  | some(_) => "triage"
+  | none => "human review"
+
+fn sample() -> User
+= {email: pii("asha@example.com"), password: secret("hunter2"), plan: "pro"}
+
+fn main() -> Unit ! log
+= do
+  log(audit_line(sample()))
+  log("login ok: {login(sample(), "hunter2")}")
+  log("route: {route("this is great")} / {route("bad service")}")
+
+test login_ok = login(sample(), "hunter2") and not login(sample(), "nope")
+test redacted = audit_line(sample()) == "user <redacted> on plan pro"
+test domain_hidden = domain(sample()).expose("test assertion") == "example.com"
+test age_valid = parse_age(untrusted(" 42 ")) == some(42)
+test age_invalid = parse_age(untrusted("200")) == none and parse_age(untrusted("x")) == none
+test routing = route("great") == "auto-reply" and route("bad") == "human review"

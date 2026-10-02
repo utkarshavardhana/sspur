@@ -182,6 +182,21 @@ impl Renamer<'_> {
                 }
                 fields.iter_mut().for_each(|(_, x)| self.expr(x, scope));
             }
+            ExprKind::Table(rows) => {
+                for r in rows {
+                    let mut binds = HashSet::new();
+                    for c in &mut r.cells {
+                        match c {
+                            Cell::Pat(p) => self.pat(p, &mut binds),
+                            Cell::Cond(e) => self.expr(e, scope),
+                            Cell::Any => {}
+                        }
+                    }
+                    scope.push(binds);
+                    self.expr(&mut r.out, scope);
+                    scope.pop();
+                }
+            }
             ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) => {
                 self.expr(s, scope);
                 for a in arms {
@@ -196,7 +211,8 @@ impl Renamer<'_> {
                 }
             }
             ExprKind::Block(stmts) => {
-                scope.push(HashSet::new());
+                let local_fns: HashSet<String> = stmts.iter().filter_map(|s| if let Stmt::Fn(f) = s { Some(f.name.clone()) } else { None }).collect();
+                scope.push(local_fns);
                 for s in stmts {
                     match s {
                         Stmt::Expr(x) => self.expr(x, scope),
@@ -211,6 +227,27 @@ impl Renamer<'_> {
                             scope.last_mut().unwrap().insert(n.clone());
                         }
                         Stmt::Assign(_, x, _) => self.expr(x, scope),
+                        Stmt::While(c, body) => {
+                            self.expr(c, scope);
+                            self.expr(body, scope);
+                        }
+                        Stmt::Fn(f) => {
+                            let shadow = f.tparams.iter().any(|p| p.name == self.from);
+                            for p in &mut f.params {
+                                if !shadow {
+                                    self.ty(&mut p.ty);
+                                }
+                            }
+                            if let (Some(t), false) = (&mut f.ret, shadow) {
+                                self.ty(t);
+                            }
+                            scope.push(f.params.iter().map(|p| p.name.clone()).chain(["r".to_string()]).collect());
+                            for x in f.pres.iter_mut().chain(f.posts.iter_mut()).chain(f.examples.iter_mut()) {
+                                self.expr(x, scope);
+                            }
+                            self.expr(&mut f.body, scope);
+                            scope.pop();
+                        }
                         Stmt::For(p, it, body) => {
                             self.expr(it, scope);
                             let mut binds = HashSet::new();

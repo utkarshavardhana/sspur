@@ -11,7 +11,7 @@ pub fn parse(src: &str) -> PResult<Module> {
     Ok(m)
 }
 
-const BUILTIN_TYPE_NAMES: &[&str] = &["Int", "I8", "I16", "I32", "U8", "U16", "U32", "U64", "F32", "F64", "Bool", "Str", "Unit", "List", "Opt", "Res", "Map"];
+const BUILTIN_TYPE_NAMES: &[&str] = &["Int", "I8", "I16", "I32", "U8", "U16", "U32", "U64", "F32", "F64", "Bool", "Str", "Unit", "List", "Opt", "Res", "Map", "Secret", "Pii", "Untrusted", "Guess"];
 
 fn normalize(m: &mut Module) {
     let names: Vec<String> = m.defs.iter().filter_map(|d| if let Def::Type(t) = d { Some(t.name.clone()) } else { None }).collect();
@@ -194,6 +194,7 @@ impl Parser {
         match self.peek() {
             Tok::Kw("type") => self.type_def().map(Def::Type),
             Tok::Kw("fn") => self.fn_def().map(Def::Fn),
+            Tok::Kw("rule") => self.rule_def().map(Def::Fn),
             Tok::Kw("test") => {
                 self.bump();
                 let name = self.expect_ident()?;
@@ -399,8 +400,75 @@ impl Parser {
         Ok(out)
     }
 
+    fn rule_def(&mut self) -> PResult<FnDef> {
+        let start = self.span();
+        self.toks[self.pos].tok = Tok::Kw("fn");
+        let mut f = self.fn_header(start)?;
+        let mut rows = Vec::new();
+        let body_start = self.span();
+        loop {
+            if self.newline_then(|t| matches!(t, Tok::Sym("|"))).is_some() {
+                self.bump();
+            }
+            if !self.eat_sym("|") {
+                break;
+            }
+            let mut cells = Vec::new();
+            loop {
+                cells.push(self.cell()?);
+                if !self.eat_sym(",") {
+                    break;
+                }
+            }
+            self.expect_sym("=>")?;
+            let out = self.expr()?;
+            rows.push(TableRow { cells, out });
+        }
+        if rows.is_empty() {
+            return self.err("E_PARSE_RULE", "a rule needs at least one '| cells => result' row");
+        }
+        f.body = Expr::new(ExprKind::Table(rows), body_start.to(self.prev_span()));
+        f.span = start.to(self.prev_span());
+        Ok(f)
+    }
+
+    fn cell(&mut self) -> PResult<Cell> {
+        if self.is_sym("_") && matches!(self.peek_at(1), Tok::Sym("," | "=>")) {
+            self.bump();
+            return Ok(Cell::Any);
+        }
+        let looks_like_pat = match self.peek() {
+            Tok::Ident(n) => is_upper(n) || n == "none" || ((n == "some" || n == "ok" || n == "err") && matches!(self.peek_at(1), Tok::Sym("("))),
+            Tok::Int(_) | Tok::Str(_) | Tok::Kw("true" | "false") => true,
+            _ => false,
+        };
+        if looks_like_pat {
+            let saved = self.pos;
+            if let Ok(p) = self.pat()
+                && matches!(self.peek(), Tok::Sym("," | "=>")) {
+                    return Ok(Cell::Pat(p));
+                }
+            self.pos = saved;
+        }
+        Ok(Cell::Cond(self.binary(1)?))
+    }
+
     fn fn_def(&mut self) -> PResult<FnDef> {
-        let start = self.expect_kw("fn")?;
+        let start = self.span();
+        let mut f = self.fn_header(start)?;
+        if self.newline_then(|t| matches!(t, Tok::Sym("="))).is_some() {
+            let Tok::Newline(c) = *self.peek() else { unreachable!() };
+            self.line_indent = c;
+            self.bump();
+        }
+        self.expect_sym("=")?;
+        f.body = self.block_or_seq()?;
+        f.span = start.to(self.prev_span());
+        Ok(f)
+    }
+
+    fn fn_header(&mut self, start: Span) -> PResult<FnDef> {
+        self.expect_kw("fn")?;
         let name = self.expect_ident()?;
         let tparams = self.tparams()?;
         self.expect_sym("(")?;
@@ -436,13 +504,7 @@ impl Parser {
                 break;
             }
         }
-        if self.newline_then(|t| matches!(t, Tok::Sym("="))).is_some() {
-            let Tok::Newline(c) = *self.peek() else { unreachable!() };
-            self.line_indent = c;
-            self.bump();
-        }
-        self.expect_sym("=")?;
-        let body = self.block_or_seq()?;
+        let body = Expr::new(ExprKind::Unit, self.prev_span());
         Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, body, span: start.to(self.prev_span()), sig_span })
     }
 
@@ -454,7 +516,7 @@ impl Parser {
         let start = first.span;
         let mut stmts = vec![Stmt::Expr(first)];
         while self.eat_sym(";") {
-            stmts.push(self.stmt()?);
+            stmts.extend(self.stmt()?);
         }
         Ok(Expr::new(ExprKind::Block(stmts), start.to(self.prev_span())))
     }
@@ -683,7 +745,7 @@ impl Parser {
             }
             self.line_indent = c;
             self.bump();
-            stmts.push(self.stmt()?);
+            stmts.extend(self.stmt()?);
         }
         self.line_indent = outer;
         if let [Stmt::Expr(_)] = stmts.as_slice() {
@@ -693,36 +755,67 @@ impl Parser {
         Ok(Expr::new(ExprKind::Block(stmts), start.to(self.prev_span())))
     }
 
-    fn stmt(&mut self) -> PResult<Stmt> {
+    fn loop_body(&mut self) -> PResult<Expr> {
+        if matches!(self.peek(), Tok::Newline(c) if *c > self.line_indent) {
+            return self.block();
+        }
+        if self.is_kw("do") && matches!(self.peek_at(1), Tok::Newline(_)) {
+            self.bump();
+            return self.block();
+        }
+        self.branch()
+    }
+
+    fn stmt(&mut self) -> PResult<Vec<Stmt>> {
+        if self.is_kw("fn") {
+            let indent = self.line_indent;
+            let f = self.fn_def()?;
+            self.line_indent = indent;
+            return Ok(vec![Stmt::Fn(Box::new(f))]);
+        }
         if self.eat_kw("var") {
+            if self.is_sym("(") {
+                let p = self.pat()?;
+                self.expect_sym("=")?;
+                let value = self.expr()?;
+                let mut names = Vec::new();
+                pat_binds(&p, &mut names);
+                let mut out = vec![Stmt::Let(p, value)];
+                for n in names {
+                    let span = self.prev_span();
+                    out.push(Stmt::Var(n.clone(), Expr::new(ExprKind::Name(n), span)));
+                }
+                return Ok(out);
+            }
             let name = self.expect_ident()?;
             self.expect_sym("=")?;
-            return Ok(Stmt::Var(name, self.expr()?));
+            return Ok(vec![Stmt::Var(name, self.expr()?)]);
         }
         if self.eat_kw("for") {
             let pat = self.pat()?;
             self.expect_kw("in")?;
             let iter = self.expr()?;
-            let body = if matches!(self.peek(), Tok::Newline(c) if *c > self.line_indent) {
-                self.block()?
-            } else {
-                self.expr()?
-            };
-            return Ok(Stmt::For(pat, iter, body));
+            let body = self.loop_body()?;
+            return Ok(vec![Stmt::For(pat, iter, body)]);
+        }
+        if self.eat_kw("while") {
+            let cond = self.expr()?;
+            let body = self.loop_body()?;
+            return Ok(vec![Stmt::While(cond, body)]);
         }
         if let (Tok::Ident(name), Tok::Sym(":=")) = (self.peek().clone(), self.peek_at(1)) {
             let span = self.span();
             self.bump();
             self.bump();
-            return Ok(Stmt::Assign(name, self.expr()?, span));
+            return Ok(vec![Stmt::Assign(name, self.expr()?, span)]);
         }
         let saved = self.pos;
         if let Ok(p) = self.pat()
             && self.eat_sym("=") {
-                return Ok(Stmt::Let(p, self.expr()?));
+                return Ok(vec![Stmt::Let(p, self.expr()?)]);
             }
         self.pos = saved;
-        Ok(Stmt::Expr(self.expr()?))
+        Ok(vec![Stmt::Expr(self.expr()?)])
     }
 
     fn pat(&mut self) -> PResult<Pat> {
@@ -1072,10 +1165,12 @@ impl Parser {
                 return Err(SyntaxError::new("E_LEX_STRING", "unclosed '{' in string".into(), span));
             };
             let inner = &rest[i + 1..i + close];
-            let mut e = parse_expr(inner).map_err(|mut e| {
-                e.span = span;
-                e
-            })?;
+            let parsed = if inner.trim().is_empty() { None } else { parse_expr(inner).ok() };
+            let Some(mut e) = parsed else {
+                lit.push_str(&rest[i..=i + close]);
+                rest = &rest[i + close + 1..];
+                continue;
+            };
             reset_spans(&mut e, span);
             if !lit.is_empty() {
                 parts.push(StrPart::Lit(std::mem::take(&mut lit)));
@@ -1088,6 +1183,16 @@ impl Parser {
             parts.push(StrPart::Lit(lit));
         }
         Ok(parts)
+    }
+}
+
+fn pat_binds(p: &Pat, out: &mut Vec<String>) {
+    match p {
+        Pat::Bind(n) => out.push(n.clone()),
+        Pat::Tuple(xs) => xs.iter().for_each(|x| pat_binds(x, out)),
+        Pat::Ctor { args: CtorArgs::Positional(xs), .. } => xs.iter().for_each(|x| pat_binds(x, out)),
+        Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().for_each(|(_, x)| pat_binds(x, out)),
+        _ => {}
     }
 }
 

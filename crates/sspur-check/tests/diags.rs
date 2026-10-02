@@ -107,3 +107,25 @@ fn newtypes_do_not_mix() {
     assert!(codes(&format!("{base}fn g() -> Str\n= u(UserId(\"a\"))")).is_empty());
     assert_eq!(codes(&format!("{base}fn g() -> Str\n= u(OrderId(\"a\"))")), vec!["E_TYPE_MISMATCH"]);
 }
+
+#[test]
+fn secrets_cannot_leak() {
+    let base = "type U = {pw: Secret[Str]}\n";
+    assert_eq!(codes(&format!("{base}fn f(u: U) -> Str\n= \"pw={{u.pw}}\"")), vec!["E_SECRET_LEAK"]);
+    assert_eq!(codes(&format!("{base}fn f(u: U) -> Str\n= \"{{u}}\"")), vec!["E_SECRET_LEAK"], "secrets nested in records are caught");
+    assert_eq!(codes(&format!("{base}fn f(u: U) -> Str\n= u.pw.str")), vec!["E_SECRET_LEAK"]);
+    assert_eq!(codes(&format!("{base}fn f(u: U) -> Bool\n= u.pw == secret(\"x\")")), vec!["E_SECRET_COMPARE"]);
+    assert_eq!(codes(&format!("{base}fn f(u: U) -> Str\n= u.pw.expose(\"\")")), vec!["E_REASON_REQUIRED"]);
+    assert_eq!(codes(&format!("{base}fn f(u: U) -> Str ! log\n= u.pw.map(p => do_log(p))\nfn do_log(p: Str) -> Str ! log\n= do\n  log(p)\n  p"))[0], "E_EFFECT_NOT_ALLOWED");
+    let ok = diags(&format!("{base}fn f(u: U) -> Str\n= u.pw.expose(\"hashing for storage\")"));
+    assert!(ok.iter().all(|d| !d.is_error()));
+    assert_eq!(ok[0].code, "A_DECLASSIFY");
+}
+
+#[test]
+fn untrusted_and_guess_must_be_handled() {
+    assert_eq!(codes("fn q(name: Untrusted[Str]) -> Str\n= \"SELECT * WHERE n = '{name}'\""), vec!["E_UNTRUSTED_INTERP"]);
+    assert_eq!(codes("fn q(name: Untrusted[Str]) -> Str\n= name + \"x\"")[0], "E_TYPE_MISMATCH");
+    assert_eq!(codes("fn f(g: Guess[Int]) -> Int\n= g + 1")[0], "E_TYPE_MISMATCH");
+    assert!(codes("fn f(g: Guess[Int]) -> Int\n= g.at_least(0.8).or(0)").is_empty());
+}

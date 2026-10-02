@@ -1,0 +1,12 @@
+fn longest_word(s: Str) -> Str
+= do
+  var words = s.split(" ")
+  var filtered = words.filter(w => not w.is_empty)
+  if filtered.is_empty then ""
+  else
+    do
+      var longest = filtered.first.get
+      for w in filtered.drop(1) do
+        if w.len > longest.len then
+          longest := w
+      longest

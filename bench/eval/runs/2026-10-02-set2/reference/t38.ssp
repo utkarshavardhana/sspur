@@ -1,0 +1,2 @@
+fn word_lengths(s: Str) -> List[Int]
+= s.split(" ").filter(w => not w.is_empty).map(_.len)

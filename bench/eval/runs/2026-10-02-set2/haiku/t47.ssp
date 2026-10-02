@@ -1,0 +1,28 @@
+fn run_all(cmds: List[Str]) -> Str
+= do
+  var stack = []
+  var messages = []
+  for cmd in cmds do
+    parts = cmd.split(" ")
+    first_word = parts.first.or("")
+    match first_word
+    | "push" =>
+      if parts.len < 2 then messages := messages.push("missing: push")
+      else
+        num_str = parts.get(1).or("")
+        parsed = catch num_str.to_int
+          | _ => none
+        match parsed
+        | none => messages := messages.push("missing: push")
+        | some(n) => stack := stack.push(n)
+    | "pop" =>
+      if stack.is_empty then messages := messages.push("missing: pop")
+      else stack := stack.take(stack.len - 1)
+    | "add" =>
+      if stack.len < 2 then messages := messages.push("missing: add")
+      else do
+        a = stack.get(stack.len - 1).or(0)
+        b = stack.get(stack.len - 2).or(0)
+        stack := stack.take(stack.len - 2).push(a + b)
+    | _ => messages := messages.push("unknown: " + first_word)
+  stack.map(_.str).join(",")

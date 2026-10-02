@@ -1,0 +1,2 @@
+fn restock(items: List[Item], name: Str, n: Int) -> List[Item]
+= items.map(item => if item.name == name then item with qty := item.qty + n else item)

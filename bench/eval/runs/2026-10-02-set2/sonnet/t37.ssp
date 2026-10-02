@@ -1,0 +1,12 @@
+fn alphabet() -> Str
+= "abcdefghijklmnopqrstuvwxyz"
+
+fn shift_char(c: Str, k: Int) -> Str
+= match alphabet().chars.enumerate().find(p => p.1 == c)
+  | some(p) => alphabet().get(((p.0 + k) % 26 + 26) % 26).or(c)
+  | none => c
+
+fn shift_letters(s: Str, k: Int) -> Str
+= s.chars.map(c => shift_char(c, k)).join("")
+
+test shift_basic = shift_letters("abz", 1) == "bca"

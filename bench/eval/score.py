@@ -4,8 +4,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SSPUR = os.environ.get("SSPUR", os.path.join(HERE, "../../target/release/sspur"))
 
 
-def score(answers):
-    tasks = json.load(open(os.path.join(HERE, "tasks.json")))
+def score(answers, tasks_file="tasks.json"):
+    tasks = json.load(open(os.path.join(HERE, tasks_file)))
     results = []
     for t in tasks:
         path = os.path.join(answers, t["id"] + ".ssp")
@@ -29,7 +29,7 @@ def score(answers):
 
 
 if __name__ == "__main__":
-    res = score(sys.argv[1])
+    res = score(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "tasks.json")
     for i, s, m in res:
         print(f"{i}  {s:8} {m}")
     ok = sum(1 for _, s, _ in res if s == "pass")

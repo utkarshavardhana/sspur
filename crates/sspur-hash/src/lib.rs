@@ -170,6 +170,11 @@ impl<'a> Hasher<'a> {
                         }
                     }
                     ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, &mut add)),
+                    ExprKind::Table(rows) => rows.iter().flat_map(|r| r.cells.iter()).for_each(|c| {
+                        if let Cell::Pat(p) = c {
+                            pat_names(p, &mut add)
+                        }
+                    }),
                     ExprKind::Block(stmts) => {
                         for s in stmts {
                             if let Stmt::Let(p, _) | Stmt::For(p, _, _) = s {
@@ -526,6 +531,11 @@ impl<'a> Hasher<'a> {
                 enc.uint(stmts.len() as u64);
                 let n = enc.locals.len();
                 for s in stmts {
+                    if let Stmt::Fn(f) = s {
+                        enc.locals.push(f.name.clone());
+                    }
+                }
+                for s in stmts {
                     self.stmt(enc, s, group);
                 }
                 enc.locals.truncate(n);
@@ -570,6 +580,29 @@ impl<'a> Hasher<'a> {
             ExprKind::Return(x) => {
                 enc.tag(b'<');
                 self.expr(enc, x, group);
+            }
+            ExprKind::Table(rows) => {
+                enc.tag(b'T');
+                enc.uint(rows.len() as u64);
+                for r in rows {
+                    let n = enc.locals.len();
+                    enc.uint(r.cells.len() as u64);
+                    for c in &r.cells {
+                        match c {
+                            Cell::Any => enc.tag(b'_'),
+                            Cell::Pat(p) => {
+                                enc.tag(b'p');
+                                self.pat(enc, p, group);
+                            }
+                            Cell::Cond(e) => {
+                                enc.tag(b'c');
+                                self.expr(enc, e, group);
+                            }
+                        }
+                    }
+                    self.expr(enc, &r.out, group);
+                    enc.locals.truncate(n);
+                }
             }
             ExprKind::With(base, ups) => {
                 enc.tag(b'W');
@@ -620,6 +653,39 @@ impl<'a> Hasher<'a> {
                 enc.tag(b':');
                 self.name(enc, n, group);
                 self.expr(enc, e, group);
+            }
+            Stmt::While(c, body) => {
+                enc.tag(b'w');
+                self.expr(enc, c, group);
+                self.expr(enc, body, group);
+            }
+            Stmt::Fn(f) => {
+                enc.tag(b'n');
+                enc.uint(f.params.len() as u64);
+                for p in &f.params {
+                    self.ty(enc, &p.ty, group);
+                }
+                match &f.ret {
+                    Some(t) => self.ty(enc, t, group),
+                    None => enc.tag(b'u'),
+                }
+                let mut effs: Vec<String> = f.effects.iter().map(printer::effect).collect();
+                effs.sort();
+                enc.uint(effs.len() as u64);
+                effs.iter().for_each(|e| enc.str(e));
+                let n = enc.locals.len();
+                enc.locals.extend(f.params.iter().map(|p| p.name.clone()));
+                for p in &f.params {
+                    self.opt_refine(enc, p.refine.as_ref(), group);
+                }
+                enc.uint(f.pres.len() as u64);
+                f.pres.iter().for_each(|x| self.expr(enc, x, group));
+                enc.locals.push("r".into());
+                enc.uint(f.posts.len() as u64);
+                f.posts.iter().for_each(|x| self.expr(enc, x, group));
+                enc.locals.pop();
+                self.expr(enc, &f.body, group);
+                enc.locals.truncate(n);
             }
             Stmt::For(p, it, body) => {
                 enc.tag(b'4');

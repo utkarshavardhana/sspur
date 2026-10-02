@@ -1,0 +1,7 @@
+fn render(j: Json) -> Str
+= match j
+  | JNull => "null"
+  | JBool{b} => b.str
+  | JNum{n} => n.str
+  | JStr{s} => "\"{s}\""
+  | JArr{items} => "[" + items.map(render).join(",") + "]"

@@ -1,0 +1,5 @@
+fn word_lengths(s: Str) -> List[Int]
+= do
+  var words = s.split(" ")
+  var filtered = words.filter(w => not w.is_empty)
+  filtered.map(w => w.len)

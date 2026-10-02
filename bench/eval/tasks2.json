@@ -1,0 +1,321 @@
+[
+ {
+  "id": "t31",
+  "sig": "fn max_subarray(xs: List[Int]) -> Int",
+  "desc": "Largest sum of a non-empty contiguous sublist. Require xs to be non-empty.",
+  "tests": [
+   "max_subarray([-2, 1, -3, 4, -1, 2, 1, -5, 4]) == 6",
+   "max_subarray([-3, -1, -2]) == -1",
+   "max_subarray([5]) == 5"
+  ]
+ },
+ {
+  "id": "t32",
+  "sig": "fn rotate(xs: List[Int], k: Int) -> List[Int]",
+  "desc": "Rotate left by k positions (k >= 0, may exceed the length). An empty list stays empty.",
+  "tests": [
+   "rotate([1, 2, 3, 4, 5], 2) == [3, 4, 5, 1, 2]",
+   "rotate([1, 2, 3], 3) == [1, 2, 3]",
+   "rotate([1, 2, 3], 7) == [2, 3, 1]",
+   "rotate([], 4) == []"
+  ]
+ },
+ {
+  "id": "t33",
+  "sig": "fn transpose(m: List[List[Int]]) -> List[List[Int]]",
+  "desc": "Transpose a rectangular matrix given as rows. An empty matrix gives [].",
+  "tests": [
+   "transpose([[1, 2, 3], [4, 5, 6]]) == [[1, 4], [2, 5], [3, 6]]",
+   "transpose([]) == []",
+   "transpose([[7]]) == [[7]]"
+  ]
+ },
+ {
+  "id": "t34",
+  "sig": "fn dedupe_adjacent(xs: List[Int]) -> List[Int]",
+  "desc": "Collapse runs of equal adjacent values into one value.",
+  "tests": [
+   "dedupe_adjacent([1, 1, 2, 2, 2, 1, 3, 3]) == [1, 2, 1, 3]",
+   "dedupe_adjacent([]) == []",
+   "dedupe_adjacent([4]) == [4]"
+  ]
+ },
+ {
+  "id": "t35",
+  "sig": "fn merge_sorted(a: List[Int], b: List[Int]) -> List[Int]",
+  "desc": "Merge two ascending lists into one ascending list (keep duplicates).",
+  "tests": [
+   "merge_sorted([1, 4, 9], [2, 4, 10]) == [1, 2, 4, 4, 9, 10]",
+   "merge_sorted([], [3]) == [3]",
+   "merge_sorted([1], []) == [1]"
+  ]
+ },
+ {
+  "id": "t36",
+  "sig": "fn is_balanced(s: Str) -> Bool",
+  "desc": "True if the brackets (), [], {} in s are balanced and properly nested. Ignore all other characters.",
+  "tests": [
+   "is_balanced(\"a(b[c]\\{d})e\")",
+   "not is_balanced(\"(]\")",
+   "not is_balanced(\"((\")",
+   "is_balanced(\"\")",
+   "not is_balanced(\"())(\")",
+   "is_balanced(\"\\{[()]}\")"
+  ]
+ },
+ {
+  "id": "t37",
+  "sig": "fn shift_letters(s: Str, k: Int) -> Str",
+  "desc": "Shift each lowercase letter a-z by k positions, wrapping around (k may be negative or larger than 26). All other characters stay unchanged.",
+  "tests": [
+   "shift_letters(\"abc xyz\", 2) == \"cde zab\"",
+   "shift_letters(\"hello\", -1) == \"gdkkn\"",
+   "shift_letters(\"a-Z!\", 27) == \"b-Z!\""
+  ]
+ },
+ {
+  "id": "t38",
+  "sig": "fn word_lengths(s: Str) -> List[Int]",
+  "desc": "Lengths of the words in s, where words are separated by one or more spaces. Ignore empty pieces.",
+  "tests": [
+   "word_lengths(\"hi  there you\") == [2, 5, 3]",
+   "word_lengths(\"   \") == []",
+   "word_lengths(\"one\") == [3]"
+  ]
+ },
+ {
+  "id": "t39",
+  "sig": "fn longest_word(s: Str) -> Str",
+  "desc": "The longest word (words separated by spaces; ignore empty pieces). On ties, return the first. Return \"\" if there are no words.",
+  "tests": [
+   "longest_word(\"a bb ccc dd eee\") == \"ccc\"",
+   "longest_word(\"\") == \"\"",
+   "longest_word(\"  x  \") == \"x\""
+  ]
+ },
+ {
+  "id": "t40",
+  "sig": "fn is_palindrome_num(n: Int) -> Bool",
+  "desc": "True if the decimal digits of n read the same backwards. Require n >= 0.",
+  "tests": [
+   "is_palindrome_num(12321)",
+   "not is_palindrome_num(123)",
+   "is_palindrome_num(0)",
+   "is_palindrome_num(7)"
+  ]
+ },
+ {
+  "id": "t41",
+  "sig": "fn digit_sum(n: Int) -> Int",
+  "desc": "Sum of the decimal digits of n. Require n >= 0.",
+  "tests": [
+   "digit_sum(9875) == 29",
+   "digit_sum(0) == 0",
+   "digit_sum(1000000) == 1"
+  ]
+ },
+ {
+  "id": "t42",
+  "sig": "fn lcm_list(xs: List[Int]) -> Int",
+  "desc": "Least common multiple of a list of positive integers. An empty list gives 1.",
+  "tests": [
+   "lcm_list([4, 6, 8]) == 24",
+   "lcm_list([]) == 1",
+   "lcm_list([7, 3]) == 21",
+   "lcm_list([5]) == 5"
+  ]
+ },
+ {
+  "id": "t43",
+  "prelude": "type Item = {name: Str, price: Int, qty: Int}",
+  "sig": "fn restock(items: List[Item], name: Str, n: Int) -> List[Item]",
+  "desc": "Add n to the qty of every item with the given name; leave the others unchanged.",
+  "tests": [
+   "restock([Item{name: \"a\", price: 1, qty: 2}, Item{name: \"b\", price: 3, qty: 0}], \"b\", 5) == [Item{name: \"a\", price: 1, qty: 2}, Item{name: \"b\", price: 3, qty: 5}]",
+   "restock([], \"a\", 1) == []"
+  ]
+ },
+ {
+  "id": "t44",
+  "prelude": "type Item = {name: Str, price: Int, qty: Int}",
+  "sig": "fn inventory_value(items: List[Item]) -> Int",
+  "desc": "Sum of price * qty over all items.",
+  "tests": [
+   "inventory_value([Item{name: \"a\", price: 2, qty: 3}, Item{name: \"b\", price: 10, qty: 1}]) == 16",
+   "inventory_value([]) == 0"
+  ]
+ },
+ {
+  "id": "t45",
+  "prelude": "type Item = {name: Str, price: Int, qty: Int}",
+  "sig": "fn cheapest(items: List[Item]) -> Opt[Str]",
+  "desc": "Name of the item with the lowest price; on ties, the first one. none for an empty list.",
+  "tests": [
+   "cheapest([Item{name: \"a\", price: 5, qty: 1}, Item{name: \"b\", price: 2, qty: 1}, Item{name: \"c\", price: 2, qty: 9}]) == some(\"b\")",
+   "cheapest([]) == none"
+  ]
+ },
+ {
+  "id": "t46",
+  "prelude": "type CmdErr = Unknown{cmd: Str} | MissingArg{cmd: Str}",
+  "sig": "fn exec(stack: List[Int], cmd: Str) -> List[Int] ! fail[CmdErr]",
+  "desc": "Execute one command on a stack (the top is the end of the list). \"push N\" appends the integer N (raise MissingArg{cmd: \"push\"} if N is absent or not an integer). \"pop\" removes the top (MissingArg{cmd: \"pop\"} if the stack is empty). \"add\" pops two values and pushes their sum (MissingArg{cmd: \"add\"} if there are fewer than two). Anything else raises Unknown{cmd: <first word>}. Words are separated by single spaces.",
+  "tests": [
+   "catch exec([1], \"push 5\") == [1, 5]\n  | _ => false",
+   "catch exec([1, 2], \"add\") == [3]\n  | _ => false",
+   "catch exec([], \"pop\") == []\n  | MissingArg{cmd} => cmd == \"pop\"\n  | _ => false",
+   "catch exec([], \"jump 3\") == []\n  | Unknown{cmd} => cmd == \"jump\"\n  | _ => false",
+   "catch exec([], \"push x\") == []\n  | MissingArg{cmd} => cmd == \"push\"\n  | _ => false"
+  ]
+ },
+ {
+  "id": "t47",
+  "prelude": "type CmdErr = Unknown{cmd: Str} | MissingArg{cmd: Str}",
+  "sig": "fn run_all(cmds: List[Str]) -> Str",
+  "desc": "Run the commands in order, starting from an empty stack, with the same rules: \"push N\" appends integer N (MissingArg{cmd: \"push\"} if N is absent or not an integer), \"pop\" (MissingArg{cmd: \"pop\"} if empty), \"add\" (MissingArg{cmd: \"add\"} with fewer than two values), anything else Unknown{cmd: <first word>}. On success return the final stack joined by \",\". On Unknown{cmd} return \"unknown: <cmd>\". On MissingArg{cmd} return \"missing: <cmd>\". This function must not declare any effects.",
+  "tests": [
+   "run_all([\"push 1\", \"push 2\", \"add\", \"push 7\"]) == \"3,7\"",
+   "run_all([\"push 1\", \"fly\"]) == \"unknown: fly\"",
+   "run_all([\"add\"]) == \"missing: add\"",
+   "run_all([]) == \"\""
+  ]
+ },
+ {
+  "id": "t48",
+  "sig": "fn trace_sum(xs: List[Int]) -> Int ! log",
+  "desc": "Log \"total=<running total>\" after adding each element, then return the sum.",
+  "tests": [
+   "trace_sum([1, 2, 3]) == 6",
+   "trace_sum([]) == 0"
+  ]
+ },
+ {
+  "id": "t49",
+  "sig": "fn partition[A](xs: List[A], f: A -> Bool) -> (List[A], List[A])",
+  "desc": "Split xs into (elements where f is true, elements where f is false), preserving order.",
+  "tests": [
+   "partition([1, 2, 3, 4, 5], _ % 2 == 0) == ([2, 4], [1, 3, 5])",
+   "partition([\"a\"], s => s == \"b\") == ([], [\"a\"])"
+  ]
+ },
+ {
+  "id": "t50",
+  "sig": "fn frequencies[A](xs: List[A]) -> Map[A, Int]",
+  "desc": "Map each distinct element to how many times it occurs.",
+  "tests": [
+   "frequencies([\"a\", \"b\", \"a\"]).get(\"a\") == some(2)",
+   "frequencies([1, 1, 1]).get(1) == some(3)",
+   "frequencies([1]).get(2) == none",
+   "frequencies([3, 4, 3]).len == 2"
+  ]
+ },
+ {
+  "id": "t51",
+  "sig": "fn zip_with[A, B, C](xs: List[A], ys: List[B], f: (A, B) -> C) -> List[C]",
+  "desc": "Combine elements pairwise with f; the result has the length of the shorter list.",
+  "tests": [
+   "zip_with([1, 2, 3], [10, 20], (a, b) => a + b) == [11, 22]",
+   "zip_with([\"a\"], [3], (s, n) => s.repeat(n)) == [\"aaa\"]"
+  ]
+ },
+ {
+  "id": "t52",
+  "sig": "fn fib_list(n: Int) -> List[Int]",
+  "desc": "The first n Fibonacci numbers starting 0, 1, 1, 2, ... Require n >= 0.",
+  "tests": [
+   "fib_list(7) == [0, 1, 1, 2, 3, 5, 8]",
+   "fib_list(0) == []",
+   "fib_list(1) == [0]"
+  ]
+ },
+ {
+  "id": "t53",
+  "prelude": "type Tree = Leaf | Node{left: Tree, value: Int, right: Tree}",
+  "sig": "fn insert(t: Tree, x: Int) -> Tree",
+  "desc": "Binary search tree insert: smaller values go left, larger go right, duplicates are ignored.",
+  "tests": [
+   "insert(Leaf, 5) == Node{left: Leaf, value: 5, right: Leaf}",
+   "insert(insert(Leaf, 5), 3) == Node{left: Node{left: Leaf, value: 3, right: Leaf}, value: 5, right: Leaf}",
+   "insert(insert(Leaf, 5), 5) == Node{left: Leaf, value: 5, right: Leaf}"
+  ]
+ },
+ {
+  "id": "t54",
+  "prelude": "type Tree = Leaf | Node{left: Tree, value: Int, right: Tree}",
+  "sig": "fn kth_smallest(t: Tree, k: Int) -> Opt[Int]",
+  "desc": "The k-th smallest value (1-based) in a binary search tree, or none if k is out of range.",
+  "tests": [
+   "kth_smallest(Node{left: Node{left: Leaf, value: 1, right: Leaf}, value: 3, right: Node{left: Leaf, value: 8, right: Leaf}}, 2) == some(3)",
+   "kth_smallest(Leaf, 1) == none",
+   "kth_smallest(Node{left: Leaf, value: 4, right: Leaf}, 0) == none",
+   "kth_smallest(Node{left: Leaf, value: 4, right: Leaf}, 2) == none"
+  ]
+ },
+ {
+  "id": "t55",
+  "prelude": "type Tree = Leaf | Node{left: Tree, value: Int, right: Tree}",
+  "sig": "fn tree_height_balanced(t: Tree) -> Bool",
+  "desc": "True if at every node the heights of the left and right subtrees differ by at most 1 (a Leaf has height 0).",
+  "tests": [
+   "tree_height_balanced(Leaf)",
+   "tree_height_balanced(Node{left: Node{left: Leaf, value: 1, right: Leaf}, value: 2, right: Leaf})",
+   "not tree_height_balanced(Node{left: Node{left: Node{left: Leaf, value: 1, right: Leaf}, value: 2, right: Leaf}, value: 3, right: Leaf})"
+  ]
+ },
+ {
+  "id": "t56",
+  "prelude": "type Json = JNull | JBool{b: Bool} | JNum{n: Int} | JStr{s: Str} | JArr{items: List[Json]}",
+  "sig": "fn render(j: Json) -> Str",
+  "desc": "Render as compact JSON: null, true/false, the integer, a string wrapped in double quotes (no escaping needed), arrays as [a,b] with no spaces.",
+  "tests": [
+   "render(JArr{items: [JNum{n: 1}, JStr{s: \"x\"}, JNull, JBool{b: true}]}) == \"[1,\\\"x\\\",null,true]\"",
+   "render(JArr{items: []}) == \"[]\"",
+   "render(JNum{n: -3}) == \"-3\""
+  ]
+ },
+ {
+  "id": "t57",
+  "prelude": "type Json = JNull | JBool{b: Bool} | JNum{n: Int} | JStr{s: Str} | JArr{items: List[Json]}",
+  "sig": "fn sum_nums(j: Json) -> Int",
+  "desc": "Sum of all JNum values anywhere inside j.",
+  "tests": [
+   "sum_nums(JArr{items: [JNum{n: 1}, JArr{items: [JNum{n: 2}, JStr{s: \"9\"}]}, JNull]}) == 3",
+   "sum_nums(JNull) == 0"
+  ]
+ },
+ {
+  "id": "t58",
+  "prelude": "type Vending = Idle | HasCoins{cents: Int}\ntype Action = Coin{cents: Int} | Buy{price: Int} | Refund",
+  "sig": "fn step(v: Vending, a: Action) -> (Vending, Str)",
+  "desc": "Coin adds cents (Idle becomes HasCoins) and returns message \"\". Buy with enough cents returns (Idle, \"vend change <cents - price>\"); with too few (including Idle, which has 0 cents) it keeps the state and returns \"need <price - cents>\". Refund returns (Idle, \"refund <cents>\") (Idle refunds 0).",
+  "tests": [
+   "step(Idle, Coin{cents: 25}) == (HasCoins{cents: 25}, \"\")",
+   "step(HasCoins{cents: 25}, Coin{cents: 10}) == (HasCoins{cents: 35}, \"\")",
+   "step(HasCoins{cents: 50}, Buy{price: 35}) == (Idle, \"vend change 15\")",
+   "step(HasCoins{cents: 20}, Buy{price: 35}) == (HasCoins{cents: 20}, \"need 15\")",
+   "step(Idle, Refund) == (Idle, \"refund 0\")",
+   "step(Idle, Buy{price: 5}) == (Idle, \"need 5\")"
+  ]
+ },
+ {
+  "id": "t59",
+  "prelude": "type Vending = Idle | HasCoins{cents: Int}\ntype Action = Coin{cents: Int} | Buy{price: Int} | Refund",
+  "sig": "fn simulate(actions: List[Action]) -> List[Str]",
+  "desc": "Start Idle and apply each action with these rules: Coin adds cents (no message). Buy with enough cents goes Idle with message \"vend change <cents - price>\"; with too few it keeps the state with message \"need <price - cents>\". Refund goes Idle with message \"refund <cents>\". Return the messages of Buy and Refund actions in order.",
+  "tests": [
+   "simulate([Coin{cents: 25}, Buy{price: 30}, Coin{cents: 10}, Buy{price: 30}, Refund]) == [\"need 5\", \"vend change 5\", \"refund 0\"]",
+   "simulate([]) == []"
+  ]
+ },
+ {
+  "id": "t60",
+  "sig": "fn spiral(m: List[List[Int]]) -> List[Int]",
+  "desc": "Elements of a rectangular matrix in clockwise spiral order starting at the top-left.",
+  "tests": [
+   "spiral([[1, 2, 3], [4, 5, 6], [7, 8, 9]]) == [1, 2, 3, 6, 9, 8, 7, 4, 5]",
+   "spiral([[1, 2], [3, 4], [5, 6]]) == [1, 2, 4, 6, 5, 3]",
+   "spiral([]) == []",
+   "spiral([[1, 2, 3]]) == [1, 2, 3]"
+  ]
+ }
+]

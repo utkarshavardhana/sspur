@@ -1,0 +1,2 @@
+fn is_palindrome_num(n: Int where _ >= 0) -> Bool
+= n.str == n.str.reverse

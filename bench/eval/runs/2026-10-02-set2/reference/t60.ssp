@@ -1,0 +1,9 @@
+fn spiral(m: List[List[Int]]) -> List[Int]
+= match m.first
+  | none => []
+  | some(top) => top + spiral(rotate_ccw(m.drop(1)))
+
+fn rotate_ccw(m: List[List[Int]]) -> List[List[Int]]
+= match m.first
+  | none => []
+  | some(row) => (0..row.len).reverse.map(i => m.map(r => r[i]))

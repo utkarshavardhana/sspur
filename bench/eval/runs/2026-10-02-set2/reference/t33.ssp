@@ -1,0 +1,4 @@
+fn transpose(m: List[List[Int]]) -> List[List[Int]]
+= match m.first
+  | none => []
+  | some(row) => (0..row.len).map(i => m.map(r => r[i]))

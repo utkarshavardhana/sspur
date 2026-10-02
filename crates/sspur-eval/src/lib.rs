@@ -170,18 +170,23 @@ impl Interp {
     }
 
     pub fn call_fn(&self, f: &FnDef, args: Vec<Value>) -> R {
+        let globals = self.globals.clone();
+        self.call_fn_in(f, args, &globals)
+    }
+
+    fn call_fn_in(&self, f: &FnDef, args: Vec<Value>, parent: &Rc<Env>) -> R {
         let d = self.depth.get() + 1;
         if d > MAX_DEPTH {
             return trap(format!("stack overflow in {}", f.name));
         }
         self.depth.set(d);
-        let r = self.call_fn_inner(f, args);
+        let r = self.call_fn_inner(f, args, parent);
         self.depth.set(d - 1);
         r
     }
 
-    fn call_fn_inner(&self, f: &FnDef, args: Vec<Value>) -> R {
-        let env = Env::child(&self.globals);
+    fn call_fn_inner(&self, f: &FnDef, args: Vec<Value>, parent: &Rc<Env>) -> R {
+        let env = Env::child(parent);
         for (p, v) in f.params.iter().zip(args) {
             self.check_value_type(&p.ty, &v, &format!("parameter '{}' of {}", p.name, f.name))?;
             if let Some(r) = &p.refine {
@@ -194,7 +199,11 @@ impl Interp {
                 return trap(format!("contract violated: pre {} in {}", printer::expr(pre, 0), f.name));
             }
         }
-        let result = match self.eval(&f.body, &env) {
+        let body = match &f.body.kind {
+            ExprKind::Table(rows) => self.eval_table(rows, f, &env),
+            _ => self.eval(&f.body, &env),
+        };
+        let result = match body {
             Ok(v) | Err(Ctrl::Return(v)) => v,
             Err(c) => return Err(c),
         };
@@ -265,6 +274,7 @@ impl Interp {
                 self.eval(&c.body, &env)
             }
             Value::Func(d) => self.call_fn(d, args),
+            Value::LocalFn(d, env) => self.call_fn_in(d, args, env),
             Value::Builtin(n) => self.call_global(n, args),
             v => trap(format!("cannot call {v}")),
         }
@@ -397,6 +407,11 @@ impl Interp {
             },
             ExprKind::Block(stmts) => {
                 let env = Env::child(env);
+                for s in stmts {
+                    if let Stmt::Fn(f) = s {
+                        env.define(&f.name, Value::LocalFn(Rc::new((**f).clone()), env.clone()));
+                    }
+                }
                 let mut last = Value::Unit;
                 for s in stmts {
                     last = self.exec(s, &env)?;
@@ -435,6 +450,7 @@ impl Interp {
             ExprKind::Tuple(xs) | ExprKind::Par(xs) => Ok(Value::Tuple(Rc::new(self.eval_args(xs, env)?))),
             ExprKind::Raise(x) => Err(Ctrl::Raise(self.eval(x, env)?)),
             ExprKind::Return(x) => Err(Ctrl::Return(self.eval(x, env)?)),
+            ExprKind::Table(_) => trap("a rule table can only be the body of a rule"),
             ExprKind::With(base, ups) => {
                 let mut v = self.eval(base, env)?;
                 for (path, value) in ups {
@@ -454,6 +470,25 @@ impl Interp {
                 Ok(v)
             }
         }
+    }
+
+    fn eval_table(&self, rows: &[TableRow], f: &FnDef, env: &Rc<Env>) -> R {
+        'rows: for r in rows {
+            let inner = Env::child(env);
+            for (c, p) in r.cells.iter().zip(&f.params) {
+                let ok = match c {
+                    sspur_syntax::Cell::Any => true,
+                    sspur_syntax::Cell::Pat(pat) => self.bind_pat(pat, &env.get(&p.name).unwrap_or(Value::Unit), &inner),
+                    sspur_syntax::Cell::Cond(e) => self.truthy(e, &inner)?,
+                };
+                if !ok {
+                    continue 'rows;
+                }
+            }
+            return self.eval(&r.out, &inner);
+        }
+        let args: Vec<String> = f.params.iter().map(|p| format!("{} = {}", p.name, env.get(&p.name).map(|v| value::Quoted(&v).to_string()).unwrap_or_default())).collect();
+        trap(format!("no row of rule {} matched ({})", f.name, args.join(", ")))
     }
 
     fn set_path(&self, v: &Value, keys: &[Result<&str, i64>], nv: Value) -> R {
@@ -518,6 +553,13 @@ impl Interp {
                 match env.cell(n) {
                     Some(c) => *c.borrow_mut() = v,
                     None => return trap(format!("unbound name '{n}'")),
+                }
+                Ok(Value::Unit)
+            }
+            Stmt::Fn(_) => Ok(Value::Unit),
+            Stmt::While(c, body) => {
+                while self.truthy(c, env)? {
+                    self.eval(body, &Env::child(env))?;
                 }
                 Ok(Value::Unit)
             }

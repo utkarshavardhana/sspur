@@ -61,12 +61,15 @@ fn name[A, e](p: A, f: A -> A ! e) -> A ! e
 | `var x = e` | Mutable local |
 | `x := e` | Assign to a `var`. Also allowed directly as an `if` branch or match arm body |
 | `for p in list` + indented body | Loop over a `List` (or a range `a..b`, which excludes `b`) |
+| `while cond` + indented body | Loop while `cond` holds. Adds the `div` effect ("may not terminate"), which must be declared |
+| `var (a, b) = e` | Mutable destructuring |
+| `fn helper(...) -> T` + `= body` | Local function. It can see enclosing variables and can be recursive, but cannot be generic |
 | `e` | Expression statement |
 | `e1; e2` | Same as a two-line block |
 
 ## Expressions
 
-- Literals: `42`, `-3`, `0xff`, `1_000`, `3.14`, `true`, `"text {expr} more"` (interpolation; `\{` is a literal brace), `[1, 2]`, `(a, b)`, `()`, `none`, `some(x)`, `ok(x)`, `err(e)`.
+- Literals: `42`, `-3`, `0xff`, `1_000`, `3.14`, `true`, `"text {expr} more"`, `[1, 2]`, `(a, b)`, `()`, `none`, `some(x)`, `ok(x)`, `err(e)`. Interpolation: `{expr}` inside a string inserts the value. `\{` is a literal brace, and so is any `{...}` whose content is empty or is not a valid expression. For example, `"{a}"` interpolates `a`, while `"{}"` and `"([{"` are literal text.
 - Operators, from lowest to highest precedence: `or`, `and`, `not`, `== != < <= > >=`, `..`, `+ -`, `* / %`, `**`, unary `-`. `+` also concatenates `Str` and `List`. Integer overflow and division by zero trap.
 - `if c then a else b`. `else` may be omitted only when `a` is `Unit`. Use `then do` or `else do` followed by an indented block for multiple statements.
 - Records: `Point{x: 1, y: 2}` or `{x: 1, y: 2}` (the type is inferred from context or the field set). Shorthand `{x, y}` uses variables named `x` and `y`. Variants with fields: `Rect{w: 1.0, h: 2.0}`. Variants without fields: `Dot`.
@@ -94,6 +97,7 @@ Every function declares what it does after `!`. Undeclared effects are compile e
 | `log` | `log(msg: Str)` |
 | `fail[E]` | `raise e` where `e: E`, or calling a function with `fail[E]` |
 | Effect row `e` | Calling a function-typed parameter whose type has `! e` |
+| `div` | A `while` loop (the loop may not terminate) |
 
 Effects flow through lambdas: `xs.map(x => noisy(x))` performs `noisy`'s effects.
 
@@ -119,6 +123,30 @@ The parser accepts these common spellings and stores the canonical form:
 - `'single quoted'` strings
 - keyword expressions as operands, e.g. `total + catch f(x)` followed by its arms
 
+## Decision tables
+
+```
+type Zone = Local | Remote
+rule fee(kg: Int, zone: Zone, prime: Bool) -> Int
+  | kg <= 1, _, true => 0
+  | kg <= 5, Local, _ => 5
+  | _, Remote, _ => 12
+  | _, _, _ => 8
+```
+
+There is one cell per parameter. A cell is `_`, a pattern (constructor or literal), or a Bool condition on that parameter. The first matching row wins. The compiler reports `E_RULE_GAP`, with example inputs, when some input matches no row, and `E_RULE_SHADOWED` when a row can never fire.
+
+## Safety types
+
+| Type | Make | Use | Rules |
+|---|---|---|---|
+| `Secret[T]` | `secret(x)` | `.check(pred)`, `.map(f)`, `.expose("reason")` | Can't be interpolated, displayed (`.str`), or compared with `==` |
+| `Pii[T]` | `pii(x)` | `.map(f)`, `.expose("reason")` | Interpolation and display print `<redacted>` |
+| `Untrusted[T]` | `untrusted(x)` | `.validate(parse_fn)` (returns `Opt`), `.trust("reason")` | Can't be interpolated into strings |
+| `Guess[T]` | `guess(x, conf)` | `.conf`, `.at_least(0.9)`, `.verify(pred)` (both return `Opt`), `.map(f)`, `.accept("reason")` | Can't be used as a `T` without one of these |
+
+The reason must be a non-empty string literal. Every declassification is reported as an `A_DECLASSIFY` audit diagnostic. The functions passed to `map`, `check`, and `validate` must be pure.
+
 ## Contracts
 
 `pre`, `post` (with `r` as the result), and `where` refinements are checked at run time. A violation traps with the contract text. Contracts must be pure.
@@ -135,7 +163,7 @@ Global: `log(Str)`, `some(x)`, `ok(x)`, `err(e)`, `empty_map()`, `min(a, b)`, `m
 |---|---|
 | `List[A]` | `len is_empty map flat_map filter fold(init, (acc, x) => ..) any all find sort_by(key) sum push(x) concat(ys) take(n) drop(n) reverse sort unique contains(x) first last get(i) min max counts zip(ys) enumerate join(sep)` |
 | `Str` | `len is_empty lower upper trim split(sep) words chars take(n) drop(n) reverse get(i) first last contains starts_with ends_with replace(a, b) repeat(n) to_int is_alpha` (single characters are `Str`) |
-| `Opt[A]` | `or(default) is_some is_none map(f) ok_or(err)` (`ok_or` raises `err` when the option is `none`) |
+| `Opt[A]` | `or(default) is_some is_none get map(f) ok_or(err)` (`ok_or` raises `err` when the option is `none`; `get` traps on `none`) |
 | `Res[A, E]` | `is_ok get` (`get` raises the error) |
 | `Map[K, V]` | `get(k) put(k, v) remove(k) has(k) keys values items len` (immutable: `put` returns a new map) |
 | `Int` | `abs to_f64` |

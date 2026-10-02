@@ -23,4 +23,18 @@ This measures whether a model that has never seen SSPUR can write correct progra
 - Two compiler bugs were found while writing the reference solutions, and both were fixed before the runs: catch typing through lambda effect rows, and the placeholder scope inside list literals.
 - Caveat: Opus 5.5 is the same model family that designed the language.
 
+## Results, set 2 (held-out, 2026-10-02)
+
+`tasks2.json` is a fresh set of 30 tasks (t31 to t60), written after the tolerant-input change and validated with the author's solutions before any agent saw it. The compiler binary was frozen before the runs.
+
+| Model | Feedback | Held-out score | After the fixes below (post-hoc) |
+|---|---|---|---|
+| Sonnet 5.5 | none | **29/30 (97%)** | 30/30 |
+| Haiku 4.5 | none | **15/30 (50%)** | 23/30 (77%) |
+
+- Sonnet's only miss came from a real ergonomics bug: `"{}"` was parsed as an empty interpolation. Empty or unparseable `{...}` is now literal.
+- Haiku's misses: `opt.get` used as unwrap (8 tasks), local `fn` definitions in blocks, `while` loops, `var (a, b) = ...`, and a fully enumerated tuple `match` that the checker wrongly called non-exhaustive. All of these are now supported. `while` requires the `div` effect.
+- Haiku's 7 remaining failures are logic errors that the checker rejects correctly.
+- Writing the reference solutions found two more compiler bugs before the runs: a lone `{` in a string, and inferring a field access on a value of unknown type.
+
 `runs/2026-10-02/` contains every answer file, plus `reference/`, which holds the author's solutions used to validate the hidden tests.

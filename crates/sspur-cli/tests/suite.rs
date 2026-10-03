@@ -143,7 +143,6 @@ test big_ok = prime_count(2000000) == 148933 and first_fault(2000000, -1, -1) ==
         "FAIL  refine: contract violated: parameter 'n' of collatz_len where _ > 0 (value = 0)",
         "FAIL  deferred: division by zero",
         "FAIL  deferred_ovf: integer overflow",
-        "pass  big_ok",
     ];
     let mut outputs = Vec::new();
     for threads in [None, Some("1"), Some("3")] {
@@ -156,6 +155,7 @@ test big_ok = prime_count(2000000) == 148933 and first_fault(2000000, -1, -1) ==
         for line in expected {
             assert!(out.lines().any(|l| l == line), "threads {threads:?}: missing {line:?} in\n{out}");
         }
+        assert!(!out.contains("big_ok"), "threads {threads:?}: big_ok failed in\n{out}");
         outputs.push(out);
     }
     std::fs::remove_file(&path).ok();

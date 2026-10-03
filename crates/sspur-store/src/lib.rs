@@ -70,6 +70,8 @@ pub struct TxResult {
     pub changes: Vec<Change>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub diags: Vec<Diag>,
+    #[serde(skip)]
+    pub src: Option<String>,
 }
 
 impl TxResult {
@@ -79,6 +81,7 @@ impl TxResult {
             root: None,
             changes: vec![],
             diags: vec![Diag { code: code.into(), severity: "error", def: None, span: [0, 0], msg, hint: None, fix: vec![] }],
+            src: None,
         }
     }
 }
@@ -238,7 +241,7 @@ impl Store {
             }
         let current = match self.load_head() {
             Ok(l) => l,
-            Err(d) => return TxResult { ok: false, root: None, changes: vec![], diags: d },
+            Err(d) => return TxResult { ok: false, root: None, changes: vec![], diags: d, src: None },
         };
         let agent = tx.agent.unwrap_or_else(|| "unknown".into());
         let reason = tx.reason.unwrap_or_default();
@@ -253,10 +256,10 @@ impl Store {
         }
         let next = match load_src(render(&defs)) {
             Ok(l) => l,
-            Err(d) => return TxResult { ok: false, root: None, changes: vec![], diags: d },
+            Err(d) => return TxResult { ok: false, root: None, changes: vec![], diags: d, src: None },
         };
         if next.check.has_errors() {
-            return TxResult { ok: false, root: None, changes: vec![], diags: next.check.diags };
+            return TxResult { ok: false, root: None, changes: vec![], diags: next.check.diags, src: Some(next.src) };
         }
         if tx.gate.as_deref() == Some("tests") {
             let it = sspur_eval::Interp::new(&next.module, next.check.record_types.clone(), next.check.user_methods.clone(), next.check.gen_loops.clone());
@@ -266,7 +269,7 @@ impl Store {
                 .filter_map(|(n, r)| r.err().map(|e| Diag { code: "E_TEST_FAILED".into(), severity: "error", def: Some(n.clone()), span: [0, 0], msg: format!("test {n} failed: {e}"), hint: None, fix: vec![] }))
                 .collect();
             if !failed.is_empty() {
-                return TxResult { ok: false, root: None, changes: vec![], diags: failed };
+                return TxResult { ok: false, root: None, changes: vec![], diags: failed, src: None };
             }
         }
         let at = now();
@@ -295,7 +298,7 @@ impl Store {
         let old: BTreeMap<String, String> = current.hashes.clone();
         let changes = diff(&old, &names);
         if changes.is_empty() && reqs.is_empty() {
-            return TxResult { ok: true, root: head, changes, diags: next.check.diags };
+            return TxResult { ok: true, root: head, changes, diags: next.check.diags, src: Some(next.src) };
         }
         let entries: Vec<(String, String)> = names.iter().map(|(n, e)| (n.clone(), e.hash.clone())).collect();
         let hash = root_hash(&entries);
@@ -306,7 +309,7 @@ impl Store {
         if let Err(e) = self.write("HEAD", &hash) {
             return TxResult::fail("E_IO", e.to_string());
         }
-        TxResult { ok: true, root: Some(hash), changes, diags: next.check.diags }
+        TxResult { ok: true, root: Some(hash), changes, diags: next.check.diags, src: Some(next.src) }
     }
 }
 

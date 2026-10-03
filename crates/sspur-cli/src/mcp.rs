@@ -1,4 +1,4 @@
-use crate::{default_interp, interp, REFERENCE};
+use crate::{agent, default_interp, interp, AGENT_SPEC, REFERENCE};
 use serde_json::{json, Value as Json};
 use sspur_eval::fuzz::Options;
 use sspur_store::{query::Ctx, Store, Tx};
@@ -7,13 +7,14 @@ use std::process::ExitCode;
 
 const PROTOCOL: &str = "2025-06-18";
 
-const INSTRUCTIONS: &str = "SSPUR is an AI-native language stored as a content-addressed codebase. Call sspur_spec once to learn the language. Edit only through sspur_apply transactions (they apply completely or not at all, and are rejected if they don't typecheck). Use sspur_query 'pack' to get the minimal context before editing a definition.";
+const INSTRUCTIONS: &str = "SSPUR is an AI-native language stored as a content-addressed codebase. Call sspur_spec once to learn the language and sspur_export to read the code. Change code with sspur_edit (definitions replace same-named ones; atomic and typechecked; test: true also runs the tests).";
 
 fn tools() -> Json {
     json!([
-        {"name": "sspur_spec", "description": "Return the SSPUR v0 language reference (syntax, types, effects, builtins, ops). Read this first.", "inputSchema": {"type": "object", "properties": {}}},
-        {"name": "sspur_query", "description": "Query the codebase. Queries: list, sig, body, callers, callees, effects, find (type shape like 'List[Int] -> Int'), pack (minimal edit context within a token budget), why, impact, holes, diag, log.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "target": {"type": "string"}, "budget": {"type": "integer"}}, "required": ["query"]}},
-        {"name": "sspur_apply", "description": "Apply a transaction of ops (add, replace, rename, remove, refine, fill, attach). The transaction applies completely or not at all; it's rejected with diagnostics (including fix ops) if the result doesn't typecheck.", "inputSchema": {"type": "object", "properties": {"ops": {"type": "array", "items": {"type": "object"}}, "reason": {"type": "string"}, "agent": {"type": "string"}, "base": {"type": "string"}, "gate": {"type": "string", "enum": ["check", "tests"], "description": "'tests' rejects the transaction unless all tests pass"}}, "required": ["ops"]}},
+        {"name": "sspur_spec", "description": "Return the compact SSPUR language reference. Read this first. full: true returns the long reference.", "inputSchema": {"type": "object", "properties": {"full": {"type": "boolean"}}}},
+        {"name": "sspur_edit", "description": "Replace or add definitions by name. src holds SSP-T definitions, optionally preceded by lines 'rename OLD NEW' or 'remove NAME'. Atomic: rejected with diagnostics if the result doesn't typecheck. test: true also runs all tests.", "inputSchema": {"type": "object", "properties": {"src": {"type": "string"}, "test": {"type": "boolean"}}, "required": ["src"]}},
+        {"name": "sspur_query", "description": "Query the codebase. Queries: list, sig, body, callers, callees, effects, find (type shape like 'List[Int] -> Int'), pack (minimal edit context within a token budget), why, impact, holes, diag, log.", "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "target": {"type": "string"}, "budget": {"type": "integer"}, "json": {"type": "boolean"}}, "required": ["query"]}},
+        {"name": "sspur_apply", "description": "Apply a transaction of ops (add, replace, rename, remove, refine, fill, attach). The transaction applies completely or not at all; it's rejected with diagnostics (including fix ops) if the result doesn't typecheck.", "inputSchema": {"type": "object", "properties": {"ops": {"type": "array", "items": {"type": "object"}}, "reason": {"type": "string"}, "agent": {"type": "string"}, "base": {"type": "string"}, "gate": {"type": "string", "enum": ["check", "tests"], "description": "'tests' rejects the transaction unless all tests pass"}, "test": {"type": "boolean", "description": "run all tests after applying"}, "json": {"type": "boolean"}}, "required": ["ops"]}},
         {"name": "sspur_check", "description": "Typecheck the codebase and return all diagnostics.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "sspur_test", "description": "Run all tests in the codebase.", "inputSchema": {"type": "object", "properties": {}}},
         {"name": "sspur_run", "description": "Run main() and return its log output.", "inputSchema": {"type": "object", "properties": {}}},
@@ -23,8 +24,25 @@ fn tools() -> Json {
 }
 
 fn call(store: &Store, name: &str, a: &Json) -> (String, bool) {
+    let flag = |k: &str| a.get(k).and_then(Json::as_bool).unwrap_or(false);
     if name == "sspur_spec" {
-        return (REFERENCE.to_string(), false);
+        return ((if flag("full") { REFERENCE } else { AGENT_SPEC }).to_string(), false);
+    }
+    let make = |l: &sspur_store::Loaded| default_interp(l);
+    let test: Option<&dyn Fn(&sspur_store::Loaded) -> sspur_eval::Interp> = if flag("test") { Some(&make) } else { None };
+    if name == "sspur_edit" {
+        return match agent::edit_ops(store, a.get("src").and_then(Json::as_str).unwrap_or("")) {
+            Ok(ops) => {
+                let (t, ok) = agent::run_edit(store, ops, "mcp", test);
+                (t, !ok)
+            }
+            Err(e) => (e, true),
+        };
+    }
+    if name == "sspur_apply" && !flag("json") && a.get("gate").is_none() && a.get("base").is_none() {
+        let ops = a.get("ops").and_then(Json::as_array).cloned().unwrap_or_default();
+        let (t, ok) = agent::run_edit(store, ops, a.get("agent").and_then(Json::as_str).unwrap_or("mcp"), test);
+        return (t, !ok);
     }
     if name == "sspur_apply" {
         let tx = Tx {
@@ -47,15 +65,18 @@ fn call(store: &Store, name: &str, a: &Json) -> (String, bool) {
             let budget = a.get("budget").and_then(Json::as_u64).unwrap_or(2000) as usize;
             let out = Ctx::new(&loaded, Some(store)).run(q, a.get("target").and_then(Json::as_str), budget);
             let err = out.get("error").is_some();
-            (serde_json::to_string(&out).unwrap(), err)
+            if flag("json") { (serde_json::to_string(&out).unwrap(), err) } else { (agent::query_text(q, &out, &loaded.src), err) }
         }
-        "sspur_check" => (serde_json::to_string(&json!({"ok": !loaded.check.has_errors(), "diags": loaded.check.diags})).unwrap(), false),
+        "sspur_check" => {
+            let lines = agent::diag_lines(&loaded.src, &loaded.check.diags, None);
+            let head = if loaded.check.has_errors() { "errors".to_string() } else { format!("ok {} definitions", loaded.module.defs.len()) };
+            (std::iter::once(head).chain(lines).collect::<Vec<_>>().join("\n"), false)
+        }
         "sspur_export" => (loaded.src.clone(), false),
-        _ if loaded.check.has_errors() => (serde_json::to_string(&loaded.check.diags).unwrap(), true),
+        _ if loaded.check.has_errors() => (agent::diag_lines(&loaded.src, &loaded.check.diags, None).join("\n"), true),
         "sspur_test" => {
-            let results: Vec<Json> = default_interp(&loaded).run_tests().into_iter().map(|(n, r)| json!({"test": n, "ok": r.is_ok(), "error": r.err()})).collect();
-            let failed = results.iter().any(|r| r["ok"] == false);
-            (serde_json::to_string(&results).unwrap(), failed)
+            let (t, ok) = agent::tests_text(&default_interp(&loaded).run_tests(), false);
+            (t, !ok)
         }
         "sspur_run" => {
             let it = default_interp(&loaded);

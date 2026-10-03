@@ -1,6 +1,8 @@
 """Create fresh work directories and print one agent prompt per (language, task).
 
-  python3 setup.py <work_root>      -> <work_root>/{sspur,python}/<task>/ and <work_root>/prompts.json
+  python3 setup.py <work_root> [--v1]   -> <work_root>/{sspur,python}/<task>/ and <work_root>/prompts.json
+
+--v1 uses the SSPUR instructions of the first run (q + apply tx.json); the default uses `edit`.
 """
 import json, os, shutil, subprocess, sys
 
@@ -16,11 +18,18 @@ Required interface (hidden tests call exactly these names): {iface}
 
 Do not look at, list, or search any directory other than {dir}. When every step is done and the tests pass, reply with the single word DONE."""
 
-SSPUR_INTRO = """You are working on a small codebase written in SSPUR, a new programming language you have not seen before. Working directory: {dir}
+SSPUR_INTRO_V1 = """You are working on a small codebase written in SSPUR, a new programming language you have not seen before. Working directory: {dir}
 
 - The code lives in a content-addressed store in .sspur/, and the CLI is ./sspur (run commands as `cd {dir} && ./sspur ...`).
 - Start by reading the language reference with `./sspur spec`. It is the only documentation.
 - Read and change code only through the CLI: `./sspur q <query>` queries, and `./sspur apply tx.json` transactions (write transaction files inside {dir}). `./sspur test` and `./sspur check` run against the store.
+- Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."""
+
+SSPUR_INTRO = """You are working on a small codebase written in SSPUR, a new programming language you have not seen before. Working directory: {dir}
+
+- The code lives in a store in .sspur/, and the CLI is ./sspur (run commands as `cd {dir} && ./sspur ...`).
+- Start with `cd {dir} && ./sspur spec && ./sspur src`: the language reference (the only documentation) and the whole codebase.
+- Change code only with `./sspur edit` as the reference describes. `./sspur q`, `./sspur test` and `./sspur check` are also available.
 - Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."""
 
 PY_INTRO = """You are working on a small Python 3.9 codebase. Working directory: {dir}
@@ -28,7 +37,7 @@ PY_INTRO = """You are working on a small Python 3.9 codebase. Working directory:
 - All code is in app.py, with its tests at the bottom. Run them with `cd {dir} && LC_ALL=en_US.UTF-8 python3 -m pytest -q app.py`."""
 
 
-def main(root):
+def main(root, v1=False):
     tasks = json.load(open(os.path.join(HERE, "tasks.json")))
     prompts = []
     for lang in ("sspur", "python"):
@@ -42,7 +51,7 @@ def main(root):
                 subprocess.run([SSPUR, "init", "start.ssp"], cwd=d, check=True, capture_output=True)
                 os.remove(os.path.join(d, "start.ssp"))
                 os.symlink(SSPUR, os.path.join(d, "sspur"))
-                intro = SSPUR_INTRO.format(dir=d)
+                intro = (SSPUR_INTRO_V1 if v1 else SSPUR_INTRO).format(dir=d)
             else:
                 shutil.copy(src, os.path.join(d, "app.py"))
                 intro = PY_INTRO.format(dir=d)
@@ -54,4 +63,4 @@ def main(root):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], "--v1" in sys.argv[2:])

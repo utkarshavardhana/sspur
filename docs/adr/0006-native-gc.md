@@ -17,7 +17,8 @@ Native code uses a conservative mark-sweep collector built into the generated C 
 | Roots | Registers (via `setjmp`), the native stack from the outermost entry frame, and the `Status` block (which holds in-flight raised errors) |
 | Precision | Conservative and interior-pointer aware. Pointers exactly at an object boundary also count for the preceding object, but only for roots (optimized loops keep end pointers in registers) |
 | No-scan objects | String bytes, plus list buffers whose element type has no pointers (decided at codegen) |
-| Trigger | After max(64 MB, 2x live bytes) allocated, checked only when a page's cursor is exhausted |
+| Trigger | After max(64 MB, 2x live bytes) allocated, checked when a page's cursor is exhausted and before every large allocation |
+| Page reuse | A free-page bitmap. Large objects take the first free run that fits, and freed runs are unmapped so RSS drops |
 | Lifetime | The whole heap is reset when native code returns to the interpreter |
 
 ## Why not reference counting now
@@ -28,6 +29,7 @@ Precise RC with reuse (Perceus) remains the long-term goal: deterministic memory
 
 1. A page left behind by an advancing cursor didn't record its high-water mark, so its live objects looked unallocated and the page was released. Stress mode caught this as a corrupted tree (a "stack overflow" in `insert`).
 2. Applying the boundary rule to heap contents retained the previously allocated neighbor of every object, which kept every garbage tree version alive (65 MB live instead of 3 MB). Root-only scanning fixed it.
+3. Large allocations (list buffers over 32 KB) skipped the threshold check, so a loop rebuilding a big list grew the heap until a small allocation happened to trigger a collection. Freed multi-page runs were also never reused. Fixing both cut peak memory on `typical` from 472 MB to 264 MB and on `strings_big` from 246 MB to 164 MB.
 
 ## Verification
 

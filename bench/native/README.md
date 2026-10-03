@@ -6,12 +6,13 @@
 
 | Workload | File | C++ clang -O2 | SSPUR | Ratio | Peak memory C++ / SSPUR |
 |---|---|---|---|---|---|
-| Compute-heavy: recursion, loops, primes, gcd | `compute_big` | 1.01s | 0.96s | **0.95x** | 1 MB / 5 MB |
-| Records, lists, persistent trees, float simulation | `typical` | 0.77s idiomatic, 0.21s hand-tuned (arena, never frees) | 0.27s | **0.35x** idiomatic, 1.29x tuned | 281 MB tuned / 472 MB |
-| Strings: build 2M words, lowercase, split, count, sort | `strings_big` | 0.09s | 0.09s | **1.00x** | 34 MB / 246 MB |
-| App: generate CSV, parse with errors, aggregate in a map, report | `app` | 0.16s | 0.17s | **1.06x** | 34 MB / 117 MB |
+| Compute-heavy: recursion, loops, primes, gcd | `compute_big` | 1.01s | 0.96s | **0.95x** | 1 MB / 4 MB |
+| Records, lists, persistent trees, float simulation | `typical` | 0.76s idiomatic, 0.21s hand-tuned (arena, never frees) | 0.27s | **0.35x** idiomatic, 1.29x tuned | 90 MB / 264 MB |
+| Strings: build 2M words, lowercase, split, count, sort | `strings_big` | 0.09s | 0.09s | **0.97x** | 34 MB / 164 MB |
+| App: generate CSV, parse with errors, aggregate in a map, report | `app` | 0.15s | 0.17s | **1.17x** | 33 MB / 122 MB |
 | Long-running loop: 2M iterations, about 7 GB of short-lived garbage | `churn` (x10) | | 1.0s | | **73 MB** flat |
 
+- Checks the compiler proves can never fail are omitted (ADR 0007). The rest stay.
 - Every C++ version carries the same safety checks SSPUR always has (overflow, bounds, contracts) via `__builtin_*_overflow` and `abort()`.
 - The output of each pair is identical (checked by `diff`).
 - A cold first build adds about 0.6 to 0.9s of clang time, once. After that it's cached under `~/.cache/sspur/native/`.

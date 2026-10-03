@@ -59,3 +59,16 @@ fn ineligible_functions_are_reported() {
     assert!(c.functions.is_empty());
     assert!(c.skipped["uses"].contains("not native"));
 }
+
+#[test]
+fn proven_check_removal_keeps_real_traps() {
+    let src = "fn lt(a: Int) -> Int\n= if a < 9223372036854775807 then a + 1 else 0\nfn le(a: Int) -> Int\n= if a <= 9223372036854775807 then a + 1 else 0\nfn dv(a: Int, b: Int) -> Int\n= if b == -1 then a / b else if b == 0 then 0 else a % b\nfn ng(a: Int) -> Int\n= if a > -5 then -a else 0\nfn m(a: Int) -> Int\n  pre a >= 0\n= a - 1\nfn c(n: Int) -> Int\n= if n > 0 then m(n - 1) else m(n)\nfn g(a: Int, b: Int) -> Int\n  pre a >= 0 and b >= 0\n= if b == 0 then a else g(b, a % b)";
+    assert_eq!(run(src, "lt", &[i64::MAX]), Ok(0));
+    assert_eq!(run(src, "le", &[i64::MAX]), Err("integer overflow".into()));
+    assert_eq!(run(src, "dv", &[i64::MIN, -1]), Err("integer overflow".into()));
+    assert_eq!(run(src, "dv", &[7, 0]), Ok(0));
+    assert_eq!(run(src, "ng", &[i64::MIN]), Ok(0));
+    assert_eq!(run(src, "c", &[3]), Ok(1));
+    assert_eq!(run(src, "c", &[-3]), Err("contract violated: pre a >= 0 in m".into()));
+    assert_eq!(run(src, "g", &[84, 36]), Ok(12));
+}

@@ -7,6 +7,9 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod prove;
+use prove::{fits, raw_op, Iv, Know, FULL};
+
 type G<T = String> = Result<T, String>;
 type Scope = HashMap<String, (String, Type)>;
 type Fields = Vec<(String, Type)>;
@@ -32,7 +35,7 @@ static const uint32_t gc_sizes[GC_NCLS] = {16, 24, 32, 40, 48, 56, 64, 80, 96, 1
 typedef struct GcPage { uint8_t kind, atomic, cls, swept; uint32_t obj, nobj, bump, live; size_t head, npages; void* free; uint64_t freebits[64], mark[64]; } GcPage;
 typedef struct { char* next; char* end; size_t page; } GcCursor;
 static char* gc_lo; static char* gc_hi; static GcPage** gc_meta; static size_t gc_next;
-static size_t* gc_pool; static size_t gc_pool_n, gc_pool_cap;
+static uint64_t* gc_freemap; static size_t gc_free_n, gc_hint;
 static size_t* gc_active; static size_t gc_active_n, gc_active_cap;
 static size_t* gc_partial[2][GC_NCLS]; static size_t gc_partial_n[2][GC_NCLS], gc_partial_cap[2][GC_NCLS];
 static size_t gc_marked_bytes;
@@ -49,6 +52,7 @@ static void gc_init(void) {
     if (gc_lo == (char*)MAP_FAILED) abort();
     gc_hi = gc_lo + GC_REGION;
     gc_meta = (GcPage**)calloc(GC_REGION >> GC_SHIFT, sizeof(GcPage*));
+    gc_freemap = (uint64_t*)calloc((GC_REGION >> GC_SHIFT) / 64, 8);
     const char* stress = getenv("SSPUR_GC_STRESS");
     if (stress && *stress) { gc_stress = (size_t)atol(stress); gc_threshold = gc_stress; }
     gc_stats = getenv("SSPUR_GC_STATS") != 0;
@@ -58,8 +62,32 @@ static void gc_push(size_t** v, size_t* n, size_t* cap, size_t x) {
     if (*n == *cap) { *cap = *cap ? *cap * 2 : 64; *v = (size_t*)realloc(*v, *cap * sizeof(size_t)); }
     (*v)[(*n)++] = x;
 }
+static int gc_reused;
+static size_t gc_find_run(size_t n) {
+    size_t words = (gc_next + 63) >> 6, run = 0;
+    if (n == 1) {
+        for (size_t k = 0; k < words; k++) {
+            size_t w = (gc_hint + k) % words;
+            if (gc_freemap[w]) { gc_hint = w; return (w << 6) + (size_t)__builtin_ctzll(gc_freemap[w]); }
+        }
+        return (size_t)-1;
+    }
+    for (size_t i = 0; i < gc_next; i++) {
+        if (!(i & 63) && !gc_freemap[i >> 6]) { run = 0; i += 63; continue; }
+        if (gc_freemap[i >> 6] >> (i & 63) & 1) { if (++run == n) return i + 1 - n; } else run = 0;
+    }
+    return (size_t)-1;
+}
 static size_t gc_take_pages(size_t n) {
-    if (n == 1 && gc_pool_n) return gc_pool[--gc_pool_n];
+    gc_reused = 0;
+    if (gc_free_n >= n) {
+        size_t i = gc_find_run(n);
+        if (i != (size_t)-1) {
+            for (size_t k = i; k < i + n; k++) gc_freemap[k >> 6] &= ~((uint64_t)1 << (k & 63));
+            gc_free_n -= n; gc_reused = 1;
+            return i;
+        }
+    }
     size_t i = gc_next; gc_next += n;
     if ((gc_next << GC_SHIFT) > GC_REGION) abort();
     return i;
@@ -67,8 +95,9 @@ static size_t gc_take_pages(size_t n) {
 static void gc_release_page(size_t i) {
     GcPage* m = gc_meta[i];
     size_t n = m->kind == 2 ? m->npages : 1;
-    if (n > 1 || gc_pool_n > 1024) madvise(gc_lo + (i << GC_SHIFT), n << GC_SHIFT, MADV_FREE);
-    for (size_t k = 0; k < n; k++) { free(gc_meta[i + k]); gc_meta[i + k] = 0; gc_push(&gc_pool, &gc_pool_n, &gc_pool_cap, i + k); }
+    if (n > 1 || gc_free_n > 1024) mmap(gc_lo + (i << GC_SHIFT), n << GC_SHIFT, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED | MAP_NORESERVE, -1, 0);
+    for (size_t k = i; k < i + n; k++) { free(gc_meta[k]); gc_meta[k] = 0; gc_freemap[k >> 6] |= (uint64_t)1 << (k & 63); }
+    gc_free_n += n;
 }
 static inline void gc_flush_one(int a, int c) {
     GcCursor* k = &gc_cur[a][c];
@@ -172,6 +201,7 @@ static void gc_new_page(int atomic, int cls) {
 static void* gc_alloc_large(size_t n, int atomic) {
     size_t np = (n + GC_PAGE - 1) >> GC_SHIFT;
     size_t i = gc_take_pages(np);
+    if (gc_reused) memset(gc_lo + (i << GC_SHIFT), 0, np << GC_SHIFT);
     GcPage* m = (GcPage*)calloc(1, sizeof(GcPage));
     m->kind = 2; m->atomic = (uint8_t)atomic; m->npages = np; m->bump = 1;
     gc_meta[i] = m;
@@ -182,7 +212,7 @@ static void* gc_alloc_large(size_t n, int atomic) {
 }
 static void* __attribute__((noinline)) gc_alloc_slow(size_t n, int atomic) {
     if (!gc_ready) gc_init();
-    if (n > 32768) return gc_alloc_large(n, atomic);
+    if (n > 32768) { if (gc_since > gc_threshold && gc_depth > 0) gc_collect(); return gc_alloc_large(n, atomic); }
     int cls = gc_class_of[(n + 7) >> 3];
     for (;;) {
         GcCursor* k = &gc_cur[atomic][cls];
@@ -221,7 +251,7 @@ static inline __attribute__((always_inline)) void* gc_alloc(size_t n, int atomic
     return gc_alloc_slow(n ? n : 1, atomic);
 }
 static void gc_reset(void) {
-    if (gc_stats) fprintf(stderr, "sspur gc: %lld collections, %zu active pages\n", (long long)gc_collections, gc_active_n);
+    if (gc_stats) fprintf(stderr, "sspur gc: %lld collections, %zu active pages, high water %zu MB\n", (long long)gc_collections, gc_active_n, (gc_next << GC_SHIFT) >> 20);
     for (size_t k = 0; k < gc_active_n; k++) gc_release_page(gc_active[k]);
     gc_active_n = 0; gc_since = 0;
     for (int a = 0; a < 2; a++) for (int c = 0; c < GC_NCLS; c++) { gc_partial_n[a][c] = 0; gc_cur[a][c] = (GcCursor){0, 0, 0}; gc_flist[a][c] = 0; }
@@ -720,6 +750,7 @@ struct Cx<'a> {
     atomic_ctypes: HashSet<String>,
     pending_linear: HashSet<String>,
     all_fns: HashMap<String, FnDef>,
+    know: Know,
 }
 
 impl<'a> Cx<'a> {
@@ -758,6 +789,7 @@ impl<'a> Cx<'a> {
             atomic_ctypes: ["int64_t".to_string(), "double".to_string()].into_iter().collect(),
             pending_linear: HashSet::new(),
             all_fns: HashMap::new(),
+            know: Know::default(),
         }
     }
 
@@ -795,6 +827,7 @@ impl<'a> Cx<'a> {
         self.spec_queue = s.spec_queue;
         self.in_progress.clear();
         self.catch_stack.clear();
+        self.know = Know::default();
     }
 
     fn fresh(&mut self, base: &str) -> String {
@@ -1386,8 +1419,14 @@ impl<'a> Cx<'a> {
         if cname != f.name || env.is_some() {
             writeln!(self.protos, "static {rr} {fname_c}({env_pre}{});", sig.join(", ")).unwrap();
         }
+        self.know = Know::default();
+        let split = env.is_none() && self.entry_checks(f);
         let mut s = format!("#define RRT {rr}\n#define FIDX {fidx}\nstatic {rr} {fname_c}({env_pre}{}) {{\n{env_line}", sig.join(", "));
-        writeln!(s, "  depth += 1; if (UNLIKELY(depth > 0)) TRAPV({T_DEPTH}, 0, 0);").unwrap();
+        if split {
+            writeln!(s, "  if (UNLIKELY(depth + 1 > 0)) TRAPV({T_DEPTH}, 0, 0);").unwrap();
+        } else {
+            writeln!(s, "  depth += 1; if (UNLIKELY(depth > 0)) TRAPV({T_DEPTH}, 0, 0);").unwrap();
+        }
         for (i, (p, t)) in f.params.iter().zip(params).enumerate() {
             self.scopes[0].insert(p.name.clone(), (format!("a{i}"), t.clone()));
         }
@@ -1408,6 +1447,12 @@ impl<'a> Cx<'a> {
             let c = self.expr(pre)?;
             writeln!(s, "  if (UNLIKELY(!({c}))) TRAPV({T_PRE}, {i}, 0);").unwrap();
         }
+        if split {
+            let args: String = (0..params.len()).map(|i| format!("a{i}, ")).collect();
+            writeln!(self.protos, "static {rr} {fname_c}__np({});", sig.join(", ")).unwrap();
+            writeln!(s, "  return {fname_c}__np({args}st, depth);\n}}\nstatic {rr} {fname_c}__np({}) {{\n  depth += 1; if (UNLIKELY(depth > 0)) TRAPV({T_DEPTH}, 0, 0);", sig.join(", ")).unwrap();
+        }
+        self.assume_entry(f);
         let body = match &f.body.kind {
             ExprKind::Table(rows) => self.table(f, rows, params, ret)?,
             _ => self.expr(&f.body)?,
@@ -1465,9 +1510,10 @@ impl<'a> Cx<'a> {
         self.all_fns.get(name)
     }
 
-    fn call_user(&mut self, name: &str, args: Vec<(String, Type)>, ret: Option<&Type>) -> G {
+    fn call_user(&mut self, name: &str, args: Vec<(String, Type)>, ret: Option<&Type>, src: Option<&[Expr]>) -> G {
         let tys: Vec<Type> = args.iter().map(|(_, t)| t.clone()).collect();
         let (cname, rt) = self.resolve_callee(name, &tys, ret)?;
+        let cname = if src.is_some_and(|a| self.callee_safe(name, a)) { format!("{cname}__np") } else { cname };
         let rr = self.rr(&rt)?;
         let mut s = String::from("({ ");
         let mut names = Vec::new();
@@ -1555,6 +1601,7 @@ impl<'a> Cx<'a> {
         let sig: String = pcs.iter().enumerate().map(|(i, p)| format!("{p} a{i}, ")).collect();
         let saved_scopes = std::mem::take(&mut self.scopes);
         let saved_catch = std::mem::take(&mut self.catch_stack);
+        let saved_know = std::mem::take(&mut self.know);
         let mut scope = HashMap::new();
         for (i, (n, _, t)) in captures.iter().enumerate() {
             scope.insert(n.clone(), (format!("e_->c{i}"), t.clone()));
@@ -1566,6 +1613,7 @@ impl<'a> Cx<'a> {
         let b = self.expr(body);
         self.scopes = saved_scopes;
         self.catch_stack = saved_catch;
+        self.know = saved_know;
         let b = b?;
         writeln!(self.protos, "static {rr} {id}(void* env, {sig}Status* st, int64_t depth);").unwrap();
         writeln!(self.lambdas, "#define RRT {rr}\n#define FIDX {}\nstatic {rr} {id}(void* env, {sig}Status* st, int64_t depth) {{ struct {env}* e_ = (struct {env}*)env; (void)e_; return ({rr}){{{b}, 0}}; }}\n#undef RRT\n#undef FIDX", self.fidx).unwrap();
@@ -1599,7 +1647,7 @@ impl<'a> Cx<'a> {
                     Some(Type::Fn(_, r, _)) => Some((**r).clone()),
                     _ => None,
                 };
-                self.call_user(n, args, ret.as_ref())
+                self.call_user(n, args, ret.as_ref(), None)
             }
             _ => {
                 let ft = self.ty(f)?;
@@ -1609,7 +1657,14 @@ impl<'a> Cx<'a> {
         }
     }
 
-    fn checked(&mut self, op: BinOp, x: &str, y: &str) -> String {
+    fn checked(&mut self, op: BinOp, x: &str, y: &str, ra: Iv, rb: Iv) -> String {
+        let safe = match op {
+            BinOp::Div | BinOp::Rem => (rb.0 > 0 || rb.1 < 0) && (rb.0 > -1 || rb.1 < -1 || ra.0 > FULL.0),
+            _ => true,
+        };
+        if safe && raw_op(op, ra, rb).is_some_and(fits) {
+            return format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; a_ {} b_; }})", op.symbol());
+        }
         match op {
             BinOp::Add => format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; int64_t r_; if (UNLIKELY(__builtin_add_overflow(a_, b_, &r_))) TRAPV({T_OVERFLOW}, 0, 0); r_; }})"),
             BinOp::Sub => format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; int64_t r_; if (UNLIKELY(__builtin_sub_overflow(a_, b_, &r_))) TRAPV({T_OVERFLOW}, 0, 0); r_; }})"),
@@ -1715,16 +1770,23 @@ impl<'a> Cx<'a> {
                         for a in args {
                             vals.push((self.expr(a)?, self.ty(a)?));
                         }
-                        self.call_user(n, vals, Some(&t))
+                        self.call_user(n, vals, Some(&t), Some(args))
                     }
                 }
             }
             ExprKind::Index(a, i) => {
                 let (av, iv) = (self.expr(a)?, self.expr(i)?);
+                if self.index_safe(a, i) {
+                    return Ok(format!("(({av}).data[{iv}])"));
+                }
                 Ok(format!("({{ __auto_type l_ = {av}; int64_t i_ = {iv}; if (UNLIKELY(i_ < 0 || i_ >= l_.len)) TRAPV({T_INDEX}, l_.len, i_); l_.data[i_]; }})"))
             }
-            ExprKind::Binary(BinOp::And, a, b) => Ok(format!("((int64_t)(({}) && ({})))", self.expr(a)?, self.expr(b)?)),
-            ExprKind::Binary(BinOp::Or, a, b) => Ok(format!("((int64_t)(({}) || ({})))", self.expr(a)?, self.expr(b)?)),
+            ExprKind::Binary(op @ (BinOp::And | BinOp::Or), a, b) => {
+                let x = self.expr(a)?;
+                let and = *op == BinOp::And;
+                let y = self.under(a, and, |cx| cx.expr(b))?;
+                Ok(format!("((int64_t)(({x}) {} ({y})))", if and { "&&" } else { "||" }))
+            }
             ExprKind::Binary(op, a, b) => {
                 let at = self.ty(a)?;
                 let (x, y) = (self.expr(a)?, self.expr(b)?);
@@ -1736,7 +1798,8 @@ impl<'a> Cx<'a> {
                     return Ok(format!("({{ __auto_type a_ = {x}; __auto_type b_ = {y}; (int64_t)({c}(a_, b_) {} 0); }})", op.symbol()));
                 }
                 if is(&at, "Int") {
-                    return Ok(self.checked(*op, &x, &y));
+                    let (ra, rb) = (self.range(a), self.range(b));
+                    return Ok(self.checked(*op, &x, &y, ra, rb));
                 }
                 if is(&at, "F64") {
                     return Ok(match op {
@@ -1757,7 +1820,7 @@ impl<'a> Cx<'a> {
             }
             ExprKind::Unary(UnOp::Neg, x) => {
                 let v = self.expr(x)?;
-                if is(&t, "F64") {
+                if is(&t, "F64") || self.range(x).0 > FULL.0 {
                     Ok(format!("(-({v}))"))
                 } else {
                     Ok(format!("({{ int64_t t_ = {v}; if (UNLIKELY(t_ == INT64_MIN)) TRAPV({T_OVERFLOW}, 0, 0); -t_; }})"))
@@ -1771,9 +1834,9 @@ impl<'a> Cx<'a> {
             }
             ExprKind::If(c, a, b) => {
                 let cv = self.expr(c)?;
-                let av = self.expr(a)?;
+                let av = self.under(c, true, |cx| cx.expr(a))?;
                 let bv = match b {
-                    Some(b) => self.expr(b)?,
+                    Some(b) => self.under(c, false, |cx| cx.expr(b))?,
                     None => "0LL".into(),
                 };
                 Ok(format!("(({cv}) ? ({av}) : ({bv}))"))
@@ -2353,7 +2416,8 @@ impl<'a> Cx<'a> {
             for a in args {
                 vals.push((self.expr(a)?, self.ty(a)?));
             }
-            return self.call_user(name, vals, Some(t));
+            let src: Vec<Expr> = std::iter::once(recv.clone()).chain(args.iter().cloned()).collect();
+            return self.call_user(name, vals, Some(t), Some(&src));
         }
         let rt = self.ty(recv)?;
         let r = self.expr(recv)?;
@@ -2758,6 +2822,7 @@ impl<'a> Cx<'a> {
         let saved_ret = self.ret.clone();
         let saved_name = self.fname.clone();
         let saved_inplace = std::mem::take(&mut self.inplace);
+        let saved_know = std::mem::take(&mut self.know);
         let mut out = Ok(());
         for (f, ps, r, _, _, lname) in &infos {
             match self.function_in(f, ps, r, self.fidx, lname, Some((env.clone(), inner_scope.clone()))) {
@@ -2773,6 +2838,7 @@ impl<'a> Cx<'a> {
         self.ret = saved_ret;
         self.fname = saved_name;
         self.inplace = saved_inplace;
+        self.know = saved_know;
         out?;
         let gv = self.fresh("gv");
         let mut s = format!("struct {env}* {gv} = (struct {env}*)sspur_alloc(sizeof(struct {env})); ");
@@ -2787,6 +2853,7 @@ impl<'a> Cx<'a> {
 
     fn block(&mut self, stmts: &[Stmt]) -> G {
         self.scopes.push(HashMap::new());
+        let mark = self.know.facts.len();
         let mut s = String::from("({ ");
         match self.local_group(stmts) {
             Ok(g) => s.push_str(&g),
@@ -2802,12 +2869,19 @@ impl<'a> Cx<'a> {
                 && is_fresh_map(init) && var_linear(&stmts[i + 1..], v) {
                     self.pending_linear.insert(v.clone());
                 }
+            let inv = match st {
+                Stmt::Var(v, init) if self.ty(init).is_ok_and(|t| is(&t, "Int")) => self.var_invariant(v, init, &stmts[i + 1..]),
+                _ => None,
+            };
             let r = match st {
                 Stmt::Expr(x) => self.expr(x).map(|v| if last { format!("{v}; ") } else { format!("(void)({v}); ") }),
                 other => self.stmt(other).map(|c| if last { format!("{c}0LL; ") } else { c }),
             };
             if let Stmt::Var(v, _) = st {
                 self.pending_linear.remove(v.as_str());
+                if let (Some(iv), Some((c, _))) = (inv, self.lookup(v)) {
+                    self.know.inv.insert(c, iv);
+                }
             }
             match r {
                 Ok(c) => s.push_str(&c),
@@ -2818,6 +2892,7 @@ impl<'a> Cx<'a> {
             }
         }
         self.scopes.pop();
+        self.know.facts.truncate(mark);
         s.push_str("})");
         Ok(s)
     }
@@ -2834,6 +2909,9 @@ impl<'a> Cx<'a> {
                 let mut out = format!("__auto_type {tmp} = {v}; ");
                 for (n, expr, bt) in binds {
                     let c = self.bind(&n, bt);
+                    if matches!(p, Pat::Bind(_)) {
+                        self.bind_fact(&c, e);
+                    }
                     write!(out, "__auto_type {c} = {expr}; ").unwrap();
                 }
                 Ok(out)
@@ -2857,7 +2935,7 @@ impl<'a> Cx<'a> {
             Stmt::While(c, body) => {
                 let cv = self.expr(c)?;
                 self.scopes.push(HashMap::new());
-                let b = self.expr(body);
+                let b = self.under(c, true, |cx| cx.expr(body));
                 self.scopes.pop();
                 Ok(format!("while ({cv}) {{ (void)({}); }} ", b?))
             }
@@ -2867,7 +2945,10 @@ impl<'a> Cx<'a> {
                     let (s_, e_) = (self.fresh("fs"), self.fresh("fe"));
                     self.scopes.push(HashMap::new());
                     let iv = self.bind(i, Type::int());
+                    let m = self.know.facts.len();
+                    self.for_range_facts(&iv, a, b);
                     let body = self.expr(body);
+                    self.know.facts.truncate(m);
                     self.scopes.pop();
                     return Ok(format!("{{ int64_t {s_} = {av}; int64_t {e_} = {bv}; for (int64_t {iv} = {s_}; {iv} < {e_}; {iv}++) {{ (void)({}); }} }} ", body?));
                 }

@@ -24,7 +24,7 @@ def score_sspur(src, task):
     if errs or c.returncode != 0:
         msg = f"{errs[0]['code']}: {errs[0]['msg']}" if errs else (c.stderr.strip()[:200])
         return 0, n, "compile: " + msg
-    r = subprocess.run([SSPUR, "test", f.name], capture_output=True, text=True, timeout=120)
+    r = subprocess.run([SSPUR, "test", f.name, "--full"], capture_output=True, text=True, timeout=120)
     lines = [l for l in r.stdout.splitlines() if "hidden_" in l]
     ok = sum(1 for l in lines if l.startswith("pass"))
     bad = [l for l in lines if l.startswith("FAIL")]

@@ -1,3 +1,4 @@
+mod agent;
 mod mcp;
 
 use serde_json::{json, Value as Json};
@@ -11,12 +12,15 @@ use std::io::Read;
 use std::process::ExitCode;
 
 pub const REFERENCE: &str = include_str!("../../../docs/07-reference-v0.md");
+pub const AGENT_SPEC: &str = include_str!("../../../docs/agent-spec.md");
 
 const USAGE: &str = "usage:
   sspur init [file.ssp]                 create a codebase in .sspur/ (optionally import a file)
-  sspur apply [tx.json|-]               apply a transaction of ops
+  sspur edit [file|-] [-e SRC] [--test] replace or add definitions by name (also 'rename A B', 'remove A' lines)
+  sspur apply [tx.json|-] [-e JSON] [--test] apply a transaction of ops
   sspur q <query> [target] [--budget N] query the codebase (list sig body callers callees effects find pack why impact holes diag log)
-  sspur log | export | spec | mcp
+  sspur src | log | export | spec [--full] | mcp
+  add --json for machine output (apply, edit, q, check)
   sspur check|run|test|fuzz|hash|fmt|native [file.ssp] [--json] [--cases N] [--seed N] [--edge] [--write] [--full]
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
   --O3 raises the optimization level; fuzz --differential compares native against the interpreter";
@@ -35,6 +39,10 @@ impl Args {
         self.flags.iter().any(|x| x == f)
     }
 
+    fn val(&self, f: &str) -> Option<&String> {
+        self.flags.iter().position(|x| x == f).and_then(|i| self.flags.get(i + 1))
+    }
+
     fn num(&self, f: &str, default: usize) -> usize {
         self.flags.iter().position(|x| x == f).and_then(|i| self.flags.get(i + 1)).and_then(|v| v.parse().ok()).unwrap_or(default)
     }
@@ -45,8 +53,8 @@ fn parse_args() -> Args {
     let mut flags = Vec::new();
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
-        if a.starts_with("--") {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed");
+        if a.starts_with("--") || a == "-e" {
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -71,11 +79,12 @@ fn real_main() -> ExitCode {
     };
     match cmd.as_str() {
         "spec" => {
-            print!("{REFERENCE}");
+            print!("{}", if args.has("--full") { REFERENCE } else { AGENT_SPEC });
             ExitCode::SUCCESS
         }
-        "init" => init(args.pos.get(1)),
-        "apply" => apply(args.pos.get(1)),
+        "init" => init(args.pos.get(1), args.has("--json")),
+        "apply" => apply(&args),
+        "edit" => edit(&args),
         "q" => {
             let Some(store) = cwd_store() else { return no_store() };
             let loaded = match store.load_head() {
@@ -84,32 +93,25 @@ fn real_main() -> ExitCode {
             };
             let q = args.pos.get(1).map_or("list", String::as_str);
             let out = Ctx::new(&loaded, Some(&store)).run(q, args.pos.get(2).map(String::as_str), args.num("--budget", 2000));
-            if let Some(text) = out.get("text").and_then(Json::as_str).filter(|_| !args.has("--json")) {
-                println!("{text}");
-                eprintln!("-- {} tokens, included {}, omitted {}", out["est_tokens"], out["included"], out["omitted"]);
+            if args.has("--json") {
+                println!("{out}");
             } else {
-                println!("{}", serde_json::to_string_pretty(&out).unwrap());
+                println!("{}", agent::query_text(q, &out, &loaded.src));
+                if args.has("--full") && out.get("est_tokens").is_some() {
+                    eprintln!("-- {} tokens, included {}, omitted {}", out["est_tokens"], out["included"], out["omitted"]);
+                }
             }
             if out.get("error").is_some() { ExitCode::FAILURE } else { ExitCode::SUCCESS }
         }
         "log" => {
             let Some(store) = cwd_store() else { return no_store() };
             for r in store.log() {
-                let changes: Vec<String> = r
-                    .changes
-                    .iter()
-                    .map(|c| match (&c.old, &c.new, &c.renamed_from) {
-                        (_, _, Some(f)) => format!("{f}->{}", c.path),
-                        (None, Some(_), _) => format!("+{}", c.path),
-                        (Some(_), None, _) => format!("-{}", c.path),
-                        _ => format!("~{}", c.path),
-                    })
-                    .collect();
+                let changes: Vec<String> = r.changes.iter().map(agent::change_text).collect();
                 println!("#{}  {}  {}  {}  [{}]", &r.hash[..12], r.at, r.agent, r.reason, changes.join(" "));
             }
             ExitCode::SUCCESS
         }
-        "export" => {
+        "export" | "src" => {
             let Some(store) = cwd_store() else { return no_store() };
             print!("{}", store.head_root().map(|r| store.root_src(&r)).unwrap_or_default());
             ExitCode::SUCCESS
@@ -128,7 +130,7 @@ fn no_store() -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn init(file: Option<&String>) -> ExitCode {
+fn init(file: Option<&String>, json: bool) -> ExitCode {
     let dir = std::env::current_dir().unwrap();
     let store = match Store::init(&dir) {
         Ok(s) => s,
@@ -153,32 +155,71 @@ fn init(file: Option<&String>) -> ExitCode {
         Err(e) => return fail_diags(&src, path, &[sspur_check::syntax_diag(&e)], false),
     };
     let ops: Vec<Json> = module.defs.iter().map(|d| json!({"op": "add", "path": d.name(), "src": sspur_syntax::printer::print_def(d)})).collect();
+    let n = ops.len();
     let r = store.apply(Tx { base: None, agent: Some("import".into()), reason: Some(format!("import {path}")), gate: None, ops });
-    println!("{}", serde_json::to_string_pretty(&r).unwrap());
+    if json {
+        println!("{}", serde_json::to_string(&r).unwrap());
+    } else if r.ok {
+        println!("ok {n} definitions");
+    } else {
+        println!("{}", agent::tx_text(&r));
+    }
     if r.ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
-fn apply(file: Option<&String>) -> ExitCode {
-    let Some(store) = cwd_store() else { return no_store() };
-    let mut raw = String::new();
-    let read = match file.map(String::as_str) {
-        None | Some("-") => std::io::stdin().read_to_string(&mut raw).map(|_| ()),
-        Some(p) => std::fs::read_to_string(p).map(|s| raw = s),
-    };
-    if let Err(e) = read {
-        eprintln!("cannot read transaction: {e}");
-        return ExitCode::FAILURE;
+fn read_input(args: &Args) -> Result<String, String> {
+    if let Some(e) = args.val("-e") {
+        return Ok(e.clone());
     }
-    let tx: Tx = match serde_json::from_str(&raw) {
+    let mut raw = String::new();
+    match args.pos.get(1).map(String::as_str) {
+        None | Some("-") => std::io::stdin().read_to_string(&mut raw).map(|_| raw),
+        Some(p) => std::fs::read_to_string(p),
+    }
+    .map_err(|e| format!("cannot read input: {e}"))
+}
+
+fn finish(args: &Args, store: &Store, ops: Vec<Json>, agent_name: &str) -> ExitCode {
+    let make = |l: &Loaded| native_interp(l, args);
+    let test: Option<&dyn Fn(&Loaded) -> Interp> = if args.has("--test") { Some(&make) } else { None };
+    let (text, ok) = agent::run_edit(store, ops, agent_name, test);
+    println!("{text}");
+    if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+fn apply(args: &Args) -> ExitCode {
+    let Some(store) = cwd_store() else { return no_store() };
+    let tx = match read_input(args).and_then(|raw| agent::parse_tx(&raw)) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("invalid transaction JSON: {e}");
+            println!("{e}");
             return ExitCode::FAILURE;
         }
     };
-    let r = store.apply(tx);
-    println!("{}", serde_json::to_string_pretty(&r).unwrap());
-    if r.ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+    if args.has("--json") {
+        let r = store.apply(tx);
+        println!("{}", serde_json::to_string(&r).unwrap());
+        return if r.ok { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
+    if tx.base.is_some() || tx.reason.is_some() || tx.gate.is_some() {
+        let r = store.apply(tx);
+        println!("{}", agent::tx_text(&r));
+        return if r.ok { ExitCode::SUCCESS } else { ExitCode::FAILURE };
+    }
+    let name = tx.agent.unwrap_or_else(|| "cli".into());
+    finish(args, &store, tx.ops, &name)
+}
+
+fn edit(args: &Args) -> ExitCode {
+    let Some(store) = cwd_store() else { return no_store() };
+    let ops = match read_input(args).and_then(|raw| agent::edit_ops(&store, &raw)) {
+        Ok(o) => o,
+        Err(e) => {
+            println!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    finish(args, &store, ops, "edit")
 }
 
 fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
@@ -219,7 +260,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
     match cmd {
         "check" => {
             if !json {
-                println!("ok: {} definitions", loaded.module.defs.len());
+                println!("ok {} definitions", loaded.module.defs.len());
             }
             ExitCode::SUCCESS
         }
@@ -272,16 +313,9 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             }
         },
         "test" => {
-            let results = native_interp(&loaded, args).run_tests();
-            let failed = results.iter().filter(|(_, r)| r.is_err()).count();
-            for (name, r) in &results {
-                match r {
-                    Ok(()) => println!("pass  {name}"),
-                    Err(e) => println!("FAIL  {name}: {e}"),
-                }
-            }
-            println!("{} passed, {failed} failed", results.len() - failed);
-            if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+            let (text, ok) = agent::tests_text(&native_interp(&loaded, args).run_tests(), args.has("--full"));
+            println!("{text}");
+            if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
         }
         "fuzz" if args.has("--differential") => {
             let opts = Options { cases: args.num("--cases", 300), seed: args.num("--seed", 7) as u64, edge: args.has("--edge") };
@@ -377,10 +411,16 @@ fn report(src: &str, path: &str, diags: &[Diag], json: bool) {
         }
         return;
     }
+    if path == "HEAD" {
+        for l in agent::diag_lines(src, diags, None) {
+            eprintln!("{l}");
+        }
+        return;
+    }
     for d in diags {
         let (line, col) = line_col(src, d.span[0]);
-        let def = d.def.as_deref().map(|n| format!(" in {n}")).unwrap_or_default();
-        eprintln!("{path}:{line}:{col}: {} {}{def}: {}", d.severity, d.code, d.msg);
+        let sev = if d.is_error() { String::new() } else { format!("{} ", d.severity) };
+        eprintln!("{path}:{line}:{col} {sev}{} {}", d.code, d.msg);
         if let Some(h) = &d.hint {
             eprintln!("  hint: {h}");
         }

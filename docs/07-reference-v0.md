@@ -25,7 +25,7 @@ test total_empty = total([]) == 0
 | Kind | Syntax |
 |---|---|
 | Primitives | `Int` (i64), `F64`, `Bool`, `Str`, `Unit` |
-| Built-in generics | `List[T]`, `Opt[T]`, `Res[T, E]`, `Map[K, V]`, tuples `(A, B)` |
+| Built-in generics | `List[T]`, `Opt[T]`, `Res[T, E]`, `Map[K, V]`, `Set[T]`, `Heap[T]`, tuples `(A, B)`; `StrBuf` (string builder). A user type with the same name shadows `Set`, `Heap` or `StrBuf` |
 | Function types | `A -> B`, `(A, B) -> C`, `A -> B ! e` (effect row `e`) |
 | Record | `type P = {x: Int, y: Int}` |
 | Sum | `type S = A | B{f: Int}`. Variant names are capitalized and globally unique. `type E = Bad` declares a single-variant sum |
@@ -102,6 +102,10 @@ Every function declares what it does after `!`. Undeclared effects are compile e
 | A declared effect, e.g. `ask` | Calling one of its operations, e.g. `ask()` |
 | `yield[T]` | `yield(x)` where `x: T` (built in, for generators) |
 | `ffi` | Calling an `extern fn` |
+| `fs` | `read_file write_file append_file remove_file list_dir` |
+| `io` | `read_line read_lines` (stdin) |
+| `time` | `now_ms mono_ns sleep_ms` |
+| `env` | `env_var args` |
 
 Effects flow through lambdas: `xs.map(x => noisy(x))` performs `noisy`'s effects.
 
@@ -375,20 +379,40 @@ The reason must be a non-empty string literal. Every declassification is reporte
 
 ## Builtins
 
-Global: `log(Str)`, `some(x)`, `ok(x)`, `err(e)`, `empty_map()`, `min(a, b)`, `max(a, b)`.
+Global: `log(Str)`, `some(x)`, `ok(x)`, `err(e)`, `empty_map()`, `empty_set()`, `empty_heap()`, `str_buf()`, `min(a, b)`, `max(a, b)`, `clamp(x, lo, hi)`, `range(start, end, step)` (excludes `end`; a negative step counts down; step 0 traps), `from_bytes(List[Int])` and `from_codes(List[Int])` (both `Opt[Str]`, `none` unless valid UTF-8 or code points), `rand(seed)`, `rand_int(seed, lo, hi)`, `rand_f64(seed)`.
 
 | Receiver | Methods |
 |---|---|
-| `List[A]` | `len is_empty map flat_map filter fold(init, (acc, x) => ..) any all find sort_by(key) sum push(x) concat(ys) take(n) drop(n) reverse sort unique contains(x) first last get(i) min max counts zip(ys) enumerate join(sep)` |
-| `Str` | `len is_empty lower upper trim split(sep) words chars take(n) drop(n) reverse get(i) first last contains starts_with ends_with replace(a, b) repeat(n) to_int is_alpha byte_len byte(i)` (single characters are `Str`; `byte(i)` is the UTF-8 byte at `i`, and traps out of range) |
+| `List[A]` | `len is_empty map flat_map filter fold(init, (acc, x) => ..) any all find sort_by(key) sum push(x) concat(ys) take(n) drop(n) reverse sort unique contains(x) first last get(i) min max counts zip(ys) enumerate join(sep)`, and `sort_with((a, b) => Int) binary_search(x) lower_bound(x) index_of(x) find_index(f) slice(from, to) chunks(n) windows(n) group_by(key) partition(f) scan(init, f) flatten push_front(x) pop_front pop_back to_set to_heap` |
+| `Str` | `len is_empty lower upper trim split(sep) words chars take(n) drop(n) reverse get(i) first last contains starts_with ends_with replace(a, b) repeat(n) to_int is_alpha byte_len byte(i)`, and `split_once(sep) index_of(sub) pad_left(n, fill) pad_right(n, fill) to_f64 bytes codes` (single characters are `Str`; `byte(i)` is the UTF-8 byte at `i`, and traps out of range) |
 | `Opt[A]` | `or(default) is_some is_none get map(f) ok_or(err)` (`ok_or` raises `err` when the option is `none`; `get` traps on `none`) |
-| `Res[A, E]` | `is_ok get` (`get` raises the error) |
+| `Res[A, E]` | `is_ok is_err get or(default) map(f)` (`get` raises the error) |
 | `Map[K, V]` | `get(k) put(k, v) remove(k) has(k) keys values items len` (immutable: `put` returns a new map) |
-| `Int` | `abs to_f64 band(m) bor(m) bxor(m) shl(n) shr(n)` (bitwise on the 64-bit pattern; `shr` is logical; a shift outside `0..63` gives 0) |
-| `F64` | `abs round floor sqrt` |
+| `Set[A]` | `add(x) remove(x) has(x) len is_empty items union(s) inter(s) diff(s) min max` (ordered; `items` is sorted) |
+| `Heap[A]` | `push(x) pop peek len is_empty items` (min-heap; `pop` gives `Opt[(min, rest)]`; `items` is sorted) |
+| `StrBuf` | `add(s) byte_len`, and `.str` for the text (appends are amortized O(1)) |
+| `Int` | `abs to_f64 band(m) bor(m) bxor(m) shl(n) shr(n) bnot popcount clz ctz gcd(b) lcm(b) wrapping_add(b) wrapping_sub(b) wrapping_mul(b) checked_add(b) checked_sub(b) checked_mul(b) checked_div(b)` (bitwise on the 64-bit pattern; `shr` is logical; a shift outside `0..63` gives 0; `checked_*` give `Opt`; `gcd` and `lcm` trap on overflow) |
+| `F64` | `abs round floor ceil trunc sqrt pow(y) exp ln log2 log10 sin cos tan asin acos atan atan2(x) hypot(y) is_nan is_finite fmt(digits)` (`round floor ceil trunc` give `Int`; `fmt` is fixed point with `0..=20` digits) |
 | any value | `str` (display string) |
 
-Notes: `first`, `last`, `get`, `min`, `max`, and `find` return `Opt`. `counts` returns `List[(A, Int)]` in first-seen order. `words` splits on non-alphanumeric characters. `sort_by` takes a key function (a tuple key sorts by several fields; negate a number to sort descending). Collections are immutable values.
+Notes: `first`, `last`, `get`, `min`, `max`, `find`, `index_of`, `find_index`, `binary_search` and `split_once` return `Opt`. `counts` returns `List[(A, Int)]` and `group_by` returns `List[(K, List[A])]`, both in first-seen order. `words` splits on non-alphanumeric characters. `sort_by` takes a key function (a tuple key sorts by several fields; negate a number to sort descending); `sort_with` takes a comparator returning a negative, zero or positive `Int`, and is stable. `binary_search` and `lower_bound` expect a sorted list. `Str` indexes (`index_of`, `pad_left` widths) count characters, and padding repeats `fill` to exactly `n` characters. `to_f64` accepts `[+-]digits[.digits][e[+-]digits]` after trimming. `scan` returns the accumulator after each element. `pop_front` and `pop_back` give `Opt[(x, rest)]`, and `List` doubles as a deque: `push`, `push_front`, `pop_front` and `pop_back` are amortized O(1) in native code. Random numbers are pure: each call returns `(value, next_seed)`; `rand` is non-negative, `rand_int` is in `lo..hi` (traps unless `lo < hi`), `rand_f64` is in `[0, 1)`. Collections are immutable values. `Set` prints as `{1, 2}` and `Heap` as `heap[1, 2]`.
+
+### System effects
+
+| Call | Result |
+|---|---|
+| `read_file(path)` | `Res[Str, Str] ! fs` |
+| `write_file(path, s)`, `append_file(path, s)`, `remove_file(path)` | `Res[Unit, Str] ! fs` |
+| `list_dir(path)` | `Res[List[Str], Str] ! fs` (sorted names) |
+| `read_line()`, `read_lines()` | `Opt[Str]`, `List[Str]` `! io` (stdin, without the line ending) |
+| `now_ms()`, `mono_ns()`, `sleep_ms(n)` | Unix milliseconds, a monotonic nanosecond clock, a pause `! time` |
+| `env_var(name)`, `args()` | `Opt[Str]`, `List[Str]` `! env` (`sspur run file.ssp a b` gives `["a", "b"]`) |
+
+Errors are `"{path}: not found"`, `permission denied`, `is a directory`, `not a directory`, `already exists`, `invalid UTF-8`, `invalid path` or `os error N`. Service endpoints may perform `time` and `env` but not `fs` or `io`.
+
+### JSON
+
+`json.encode(v)` gives a `Str`, and `json.decode[T](s)` gives `Res[T, Str]`. Records are objects in field order, variants without fields are `"Name"` and with fields `{"tag": "Name", ...}`, `Opt` is the value or `null` (a missing field decodes as `none`), `Map[Str, V]` is an object and other maps are `[[k, v], ...]`, lists, sets, heaps and tuples are arrays, newtypes are their inner value, and non-finite floats encode as `null`. Decode errors name the path: `lines[0].qty: expected Int, found a string`; malformed text gives `invalid JSON`. Types with functions, secrets, type parameters or `where` refinements are rejected with `E_JSON`. A target that is itself a tuple needs an alias: `type P = (Int, Str)`, then `json.decode[P](s)`.
 
 ## CLI and agent tools
 

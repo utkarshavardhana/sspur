@@ -182,7 +182,7 @@ impl Checker {
                     self.err("E_EP_TYPE", sp, format!("{} raises {t}: {why}", ep.handler));
                 }
             }
-            let bad: Vec<String> = s.atoms.iter().filter(|a| !(matches!(a.as_str(), "log" | "div") || a.starts_with("db.read[") || a.starts_with("db.write["))).cloned().chain(s.ueffs.iter().map(|(n, _)| n.clone())).collect();
+            let bad: Vec<String> = s.atoms.iter().filter(|a| !(matches!(a.as_str(), "log" | "div" | "time" | "env") || a.starts_with("db.read[") || a.starts_with("db.write["))).cloned().chain(s.ueffs.iter().map(|(n, _)| n.clone())).collect();
             if !bad.is_empty() {
                 self.err("E_EP_EFFECT", sp, format!("{} performs {}, which no deploy target provides", ep.handler, bad.join(", ")));
             }

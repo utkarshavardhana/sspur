@@ -227,3 +227,28 @@ fn par_tasks_restrict_effects_and_control() {
     let fails = "type E = Bad\nfn g(x: Int) -> Int ! fail[E]\n= if x > 1 then raise Bad else x\nfn f() -> (Int, Int) ! fail[E]\n= par(g(1), g(2))";
     assert!(codes(fails).is_empty(), "{:?}", diags(fails));
 }
+
+#[test]
+fn std_system_calls_need_their_effects() {
+    for (call, eff) in [("read_file(\"a\").is_ok", "fs"), ("read_line().is_some", "io"), ("now_ms() > 0", "time"), ("args().is_empty", "env")] {
+        let d = diags(&format!("fn f() -> Bool\n= {call}"));
+        assert_eq!(d.len(), 1, "{call}: {d:?}");
+        assert_eq!(d[0].code, "E_EFFECT_MISSING");
+        assert_eq!(d[0].fix[0]["contract"]["effects"][0], format!("+{eff}"));
+        assert!(codes(&format!("fn f() -> Bool ! {eff}\n= {call}")).is_empty());
+    }
+}
+
+#[test]
+fn json_rejects_types_without_a_wire_form() {
+    assert!(codes("type P = {x: Int, tags: Set[Str]}\nfn f(p: P) -> Res[P, Str]\n= json.decode[P](json.encode(p))").is_empty());
+    assert_eq!(codes("fn f(g: Int -> Int) -> Str\n= json.encode(g)"), vec!["E_JSON"]);
+    assert_eq!(codes("type Q = {n: Int where _ > 0}\nfn f(s: Str) -> Bool\n= json.decode[Q](s).is_ok"), vec!["E_JSON"]);
+    assert_eq!(codes("fn f[T](x: T) -> Str\n= json.encode(x)"), vec!["E_JSON"]);
+    assert_eq!(codes("fn f() -> Str\n= json.nope(1)"), vec!["E_UNKNOWN_METHOD"]);
+}
+
+#[test]
+fn user_definitions_shadow_std_names() {
+    assert!(codes("type Set = {n: Int}\nfn chunks(s: Set, k: Int) -> Int\n= s.n * k\nfn f() -> Int\n= Set{n: 2}.chunks(3)").is_empty());
+}

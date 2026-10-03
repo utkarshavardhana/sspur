@@ -205,7 +205,7 @@ Early phases wrap mature C libraries through FFI. Native rewrites come later and
 | Variadic templates | `..Ts` variadics | 4 |
 | Template specialization | Ordered impl specialization | 4 |
 | RTTI, dynamic_cast | `dyn Any` with checked downcast | 4 |
-| STL | std (section 14) | 2 to 6 |
+| STL | std (section 14; coverage in ADR 0018) | 2 to 6 |
 | CUDA, SYCL | `kernel fn` | 6 |
 | Undefined behavior | Enumerated, `unsafe`-only | 4 |
 

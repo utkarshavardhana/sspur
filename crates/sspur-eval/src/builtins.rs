@@ -93,6 +93,8 @@ impl Interp {
             Value::Map(m) => map_method(name, &m, a),
             Value::Set(st) => self.set_method(name, &st, a),
             Value::Heap(h) => self.heap_method(name, &h, a),
+            Value::Time(t) => crate::stdtime::time_method(name, t, &a),
+            Value::Dur(d) => crate::stdtime::dur_method(name, d, &a),
             Value::Atomic(c) => Ok(match name {
                 "load" => Value::Int(c.v.get()),
                 "store" => {

@@ -266,6 +266,11 @@ impl Interp {
                     Value::Heap(Rc::new(xs))
                 }
             }
+            "Time" | "Duration" if !self.types.contains_key(name) => match self.generate(&Ty::Named { name: "Int".into(), args: vec![], span: Span::default() }, rng, opts, depth)? {
+                Value::Int(n) if name == "Time" => Value::Time(n),
+                Value::Int(n) => Value::Dur(n),
+                _ => return None,
+            },
             "StrBuf" if !self.types.contains_key(name) => return self.generate(&Ty::Named { name: "Str".into(), args: vec![], span: Span::default() }, rng, opts, depth),
             _ => return self.gen_user(name, args, rng, opts, depth),
         })

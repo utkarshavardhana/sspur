@@ -115,7 +115,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("*", "str[A](x: A) -> Str"),
 ];
 
-pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0)];
+pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0)];
 
 pub const STD_GLOBALS: &[&str] = &[
     "empty_set[A]() -> Set[A]",
@@ -156,6 +156,16 @@ pub const STD_GLOBALS: &[&str] = &[
     "rand_uniform(seed: Int, lo: F64, hi: F64) -> (F64, Int)",
     "rand_exp(seed: Int, rate: F64) -> (F64, Int)",
     "rand_bool(seed: Int, p: F64) -> (Bool, Int)",
+    "time_ms(ms: Int) -> Time",
+    "date(y: Int, m: Int, d: Int) -> Opt[Time]",
+    "datetime(y: Int, mo: Int, d: Int, h: Int, mi: Int, s: Int) -> Opt[Time]",
+    "parse_time(s: Str) -> Opt[Time]",
+    "now() -> Time ! time",
+    "millis(n: Int) -> Duration",
+    "secs(n: Int) -> Duration",
+    "mins(n: Int) -> Duration",
+    "hours(n: Int) -> Duration",
+    "days(n: Int) -> Duration",
     "pi() -> F64",
     "euler() -> F64",
     "inf() -> F64",
@@ -245,6 +255,35 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("Int", "format(n: Int, spec: Str) -> Str"),
     ("F64", "format(x: F64, spec: Str) -> Str"),
     ("Str", "format(s: Str, spec: Str) -> Str"),
+    ("#Time", "unix_ms(t: Time) -> Int"),
+    ("#Time", "year(t: Time) -> Int"),
+    ("#Time", "month(t: Time) -> Int"),
+    ("#Time", "day(t: Time) -> Int"),
+    ("#Time", "hour(t: Time) -> Int"),
+    ("#Time", "minute(t: Time) -> Int"),
+    ("#Time", "second(t: Time) -> Int"),
+    ("#Time", "milli(t: Time) -> Int"),
+    ("#Time", "weekday(t: Time) -> Int"),
+    ("#Time", "yday(t: Time) -> Int"),
+    ("#Time", "date(t: Time) -> Time"),
+    ("#Time", "iso(t: Time) -> Str"),
+    ("#Time", "format(t: Time, pat: Str) -> Str"),
+    ("#Time", "add(t: Time, d: Duration) -> Time"),
+    ("#Time", "sub(t: Time, d: Duration) -> Time"),
+    ("#Time", "since(t: Time, u: Time) -> Duration"),
+    ("#Time", "add_months(t: Time, n: Int) -> Time"),
+    ("#Time", "add_years(t: Time, n: Int) -> Time"),
+    ("#Duration", "ms(d: Duration) -> Int"),
+    ("#Duration", "secs(d: Duration) -> Int"),
+    ("#Duration", "mins(d: Duration) -> Int"),
+    ("#Duration", "hours(d: Duration) -> Int"),
+    ("#Duration", "days(d: Duration) -> Int"),
+    ("#Duration", "add(d: Duration, e: Duration) -> Duration"),
+    ("#Duration", "sub(d: Duration, e: Duration) -> Duration"),
+    ("#Duration", "mul(d: Duration, k: Int) -> Duration"),
+    ("#Duration", "div(d: Duration, k: Int) -> Duration"),
+    ("#Duration", "neg(d: Duration) -> Duration"),
+    ("#Duration", "abs(d: Duration) -> Duration"),
     ("Int", "rotl(a: Int, n: Int) -> Int"),
     ("Int", "rotr(a: Int, n: Int) -> Int"),
     ("Int", "byteswap(a: Int) -> Int"),
@@ -275,7 +314,7 @@ pub const STD_METHODS: &[(&str, &str)] = &[
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

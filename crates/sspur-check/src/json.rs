@@ -72,7 +72,7 @@ impl Checker {
                     return Some(x);
                 }
                 match n.as_str() {
-                    "Int" | "F64" | "Bool" | "Str" | "Unit" | "List" | "Opt" | "Map" | "Pii" | "#Set" | "#Heap" | "#StrBuf" => None,
+                    "Int" | "F64" | "Bool" | "Str" | "Unit" | "List" | "Opt" | "Map" | "Pii" | "#Set" | "#Heap" | "#StrBuf" | "#Time" | "#Duration" => None,
                     "Secret" => Some("secrets cannot be encoded".into()),
                     _ if seen.contains(n) => None,
                     _ if decode && self.refined_names.contains(n) => Some(format!("{n} has 'where' refinements that decoding cannot check")),

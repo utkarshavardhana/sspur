@@ -21,6 +21,8 @@ pub enum NVal {
     Set(Vec<NVal>),
     Heap(Vec<NVal>),
     Res(Result<Box<NVal>, Box<NVal>>),
+    Time(i64),
+    Dur(i64),
 }
 
 #[derive(Clone, Default)]
@@ -61,7 +63,7 @@ impl Layouts {
     pub fn encode(&self, v: &NVal, t: &Type, out: &mut Vec<i64>) -> Option<()> {
         match (v, t) {
             (NVal::Unit, _) => out.push(0),
-            (NVal::Int(n), _) => out.push(*n),
+            (NVal::Int(n) | NVal::Time(n) | NVal::Dur(n), _) => out.push(*n),
             (NVal::Bool(b), _) => out.push(i64::from(*b)),
             (NVal::Float(x), _) => out.push(x.to_bits() as i64),
             (NVal::Str(s), _) => {
@@ -150,6 +152,8 @@ impl Layouts {
         Some(match t {
             Type::Con(n, a) => match n.as_str() {
                 "Int" => NVal::Int(next()?),
+                "#Time" => NVal::Time(next()?),
+                "#Duration" => NVal::Dur(next()?),
                 "Bool" => NVal::Bool(next()? != 0),
                 "F64" => NVal::Float(f64::from_bits(next()? as u64)),
                 "#Set" | "#Heap" => {
@@ -324,6 +328,8 @@ impl fmt::Display for NVal {
             NVal::Wrap(k, _) if k == "Pii" => write!(f, "<redacted>"),
             NVal::Wrap(_, v) => write!(f, "untrusted({v})"),
             NVal::Guess(v, c) => write!(f, "guess({v}, {c})"),
+            NVal::Time(t) => write!(f, "{}", crate::chrono::iso(*t)),
+            NVal::Dur(d) => write!(f, "{}", crate::chrono::dur_str(*d)),
             NVal::Opt(None) => write!(f, "none"),
             NVal::Opt(Some(x)) => write!(f, "some({x})"),
             NVal::Tuple(xs) => {

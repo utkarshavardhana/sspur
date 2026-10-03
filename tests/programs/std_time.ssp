@@ -1,0 +1,68 @@
+type Booking = {guest: Str, start: Time, nights: Int}
+
+fn checkout(b: Booking) -> Time
+= b.start.add(days(b.nights)).date.add(hours(11))
+
+fn invoice_due(issued: Time) -> Time
+= issued.add_months(1)
+
+fn weekend(t: Time) -> Bool
+= t.weekday >= 6
+
+fn business_days(from: Time, n: Int) -> Time ! div
+= do
+  var t = from
+  var left = n
+  while left > 0
+    t := t.add(days(1))
+    if not weekend(t) then left := left - 1
+  t
+
+fn stamp(ms: Int) -> Str
+= time_ms(ms).str
+
+fn span(a: Int, b: Int) -> Str
+= time_ms(a).since(time_ms(b)).str
+
+fn reparse(ms: Int) -> Opt[Time]
+= parse_time(time_ms(ms).iso)
+
+fn shift(ms: Int, months: Int) -> Time
+= time_ms(ms).add_months(months)
+
+fn civil_of(ms: Int) -> List[Int]
+= do
+  t = time_ms(ms)
+  [t.year, t.month, t.day, t.hour, t.minute, t.second, t.milli, t.weekday, t.yday]
+
+fn pattern(ms: Int, pat: Str) -> Str
+= time_ms(ms).format(pat)
+
+fn dur_math(a: Int, b: Int) -> List[Duration]
+= [millis(a).add(millis(b)), millis(a).sub(millis(b)), millis(a).mul(b), millis(a).div(b), millis(a).neg, millis(a).abs]
+
+test epoch = time_ms(0).str == "1970-01-01T00:00:00Z" and time_ms(0).weekday == 4 and time_ms(-1).str == "1969-12-31T23:59:59.999Z"
+test build = date(2024, 2, 29).map(_.iso) == some("2024-02-29T00:00:00Z") and date(2023, 2, 29) == none and date(2024, 13, 1) == none and datetime(2024, 3, 5, 10, 20, 30).map(_.str) == some("2024-03-05T10:20:30Z") and datetime(2024, 3, 5, 24, 0, 0) == none
+test parsing = parse_time("2024-03-05T10:20:30.123Z").map(_.unix_ms) == some(1709634030123) and parse_time("2024-03-05") == date(2024, 3, 5) and parse_time("2024-03-05T12:00:00+05:30").map(_.str) == some("2024-03-05T06:30:00Z") and parse_time("2024-03-05 12:00-0100").map(_.hour) == some(13)
+test parse_rejects = ["", "2024", "2024-3-05", "2024-03-05T", "2024-02-30", "2024-03-05T10:20:30.Z", "2024-03-05T25:00", "2024-03-05Z", "2024-03-05T10:20+24:00"].all(s => parse_time(s) == none)
+test fractions = parse_time("2024-01-01T00:00:00.5Z").map(_.milli) == some(500) and parse_time("2024-01-01T00:00:00.123456789Z").map(_.milli) == some(123)
+test stays = checkout(Booking{guest: "ana", start: datetime(2024, 12, 30, 15, 0, 0).get, nights: 3}).str == "2025-01-02T11:00:00Z"
+test month_ends = invoice_due(date(2024, 1, 31).get).str == "2024-02-29T00:00:00Z" and invoice_due(date(2023, 1, 31).get).day == 28 and date(2024, 2, 29).get.add_years(1).str == "2025-02-28T00:00:00Z" and date(2024, 3, 31).get.add_months(-1).day == 29
+test workdays = business_days(date(2024, 3, 8).get, 3).str == "2024-03-13T00:00:00Z"
+test calendar = civil_of(951782400000) == [2000, 2, 29, 0, 0, 0, 0, 2, 60] and date(2024, 12, 31).get.yday == 366
+test durations = [days(1).str, hours(25).str, mins(90).str, secs(5).str, millis(1500).str, millis(250).str, millis(-61000).str, millis(0).str, millis(3600001).str] == ["24h0m0s", "25h0m0s", "1h30m0s", "5s", "1.5s", "250ms", "-1m1s", "0s", "1h0m0.001s"]
+test dur_parts = hours(3).mins == 180 and days(2).hours == 48 and millis(-1999).secs == -1 and secs(7).ms == 7000 and days(3).days == 3
+test elapsed = date(2024, 3, 1).get.since(date(2024, 2, 1).get).days == 29 and date(2024, 1, 1).get.sub(millis(1)).year == 2023
+test formats = date(2024, 3, 5).get.format("%A %d %B %Y, day %j (%a %b) %u %%") == "Tuesday 05 March 2024, day 065 (Tue Mar) 2 %" and datetime(2024, 3, 5, 7, 8, 9).get.format("%F %T.%L") == "2024-03-05 07:08:09.000"
+test far = date(-44, 3, 15).get.str == "-0044-03-15T00:00:00Z" and date(12345, 1, 1).get.str == "+12345-01-01T00:00:00Z" and date(0, 1, 1).get.str == "0000-01-01T00:00:00Z"
+test ordering = date(2024, 1, 1).get < date(2024, 1, 2).get and days(1) > hours(23) and [date(2024, 5, 1).get, date(2023, 5, 1).get].sort.first.map(_.year) == some(2023)
+test round_trips = [0, 1709634030123, -86400001, 253402300799999].all(ms => reparse(ms) == some(time_ms(ms)))
+test listed = civil_of(0).len == 9 and dur_math(10, 3).len == 6 and stamp(5).len > 0 and span(5, 1) == "4ms" and pattern(0, "%Y") == "1970" and shift(0, 1).month == 2
+
+fn typed(t: Time, d: Duration) -> List[Str]
+= [t.str, d.str, t.add_months(d.ms % 100).str, t.format("%F %T %j %u"), t.date.str, t.since(time_ms(0)).str]
+
+fn json_round(t: Time, d: Duration) -> Bool
+= json.decode[List[Time]](json.encode([t])) == ok([t]) and json.decode[Duration](json.encode(d)) == ok(d)
+
+test typed_ok = typed(time_ms(0), secs(1)).len == 6 and json_round(time_ms(1709634030123), mins(5)) and json.encode([time_ms(0)]) == "[\"1970-01-01T00:00:00Z\"]"

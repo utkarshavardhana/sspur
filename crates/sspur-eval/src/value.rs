@@ -34,6 +34,8 @@ pub enum Value {
     Ref(Rc<RefCell<Value>>),
     Atomic(Rc<AtomCell>),
     Chan(Rc<ChanCell>),
+    Time(i64),
+    Dur(i64),
 }
 
 pub struct AtomCell {
@@ -106,6 +108,8 @@ impl Value {
             Value::Chan(_) => 17,
             Value::Set(_) => 19,
             Value::Heap(_) => 20,
+            Value::Time(_) => 21,
+            Value::Dur(_) => 22,
         }
     }
 
@@ -162,6 +166,7 @@ impl Ord for Value {
             (Ptr(a, x), Ptr(b, y)) => a.cmp(b).then_with(|| x.cmp(y)),
             (Atomic(a), Atomic(b)) => a.id.cmp(&b.id),
             (Chan(a), Chan(b)) => a.id.cmp(&b.id),
+            (Time(a), Time(b)) | (Dur(a), Dur(b)) => a.cmp(b),
             _ => self.rank().cmp(&other.rank()),
         }
     }
@@ -273,6 +278,8 @@ impl fmt::Display for Value {
             Value::Ref(c) => write!(f, "{}", c.borrow()),
             Value::Atomic(_) => write!(f, "<atomic>"),
             Value::Chan(_) => write!(f, "<chan>"),
+            Value::Time(t) => write!(f, "{}", sspur_native::chrono::iso(*t)),
+            Value::Dur(d) => write!(f, "{}", sspur_native::chrono::dur_str(*d)),
         }
     }
 }

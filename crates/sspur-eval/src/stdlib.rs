@@ -460,6 +460,7 @@ impl Interp {
             "euler" => Value::Float(std::f64::consts::E),
             "inf" => Value::Float(f64::INFINITY),
             "nan" => Value::Float(f64::NAN),
+            "time_ms" | "date" | "datetime" | "parse_time" | "now" | "millis" | "secs" | "mins" | "hours" | "days" => crate::stdtime::global(n, &a)?,
             _ => return trap(format!("unknown builtin '{n}'")),
         })
     }

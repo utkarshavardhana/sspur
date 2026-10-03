@@ -1746,7 +1746,7 @@ impl Checker {
                 Type::bool()
             }
             Lt | Le | Gt | Ge => {
-                if known && !t.is_numeric() && t != Type::str() {
+                if known && !t.is_numeric() && t != Type::str() && !matches!(&t, Type::Con(n, _) if matches!(n.as_str(), "#Time" | "#Duration" | "#BigInt" | "#Dec")) {
                     self.err("E_OPERATOR", span, format!("operator '{}' is not defined for {t}", op.symbol()));
                 }
                 Type::bool()

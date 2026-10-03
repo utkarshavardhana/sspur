@@ -2,7 +2,7 @@ use super::*;
 
 const STD_RT: &str = include_str!("std_rt.c");
 
-pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res"];
+pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration"];
 
 fn section(key: &str) -> (Vec<&'static str>, &'static str) {
     for part in STD_RT.split("//@ ").skip(1) {
@@ -54,6 +54,8 @@ impl Cx<'_> {
             "#Set" => format!("ST_{}", self.mangle(&a[0])?),
             "#Heap" => format!("HP_{}", self.mangle(&a[0])?),
             "#StrBuf" => "BU".into(),
+            "#Time" => "TM".into(),
+            "#Duration" => "DU".into(),
             _ => format!("RS_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
         })
     }
@@ -61,6 +63,7 @@ impl Cx<'_> {
     pub(super) fn std_cty(&mut self, t: &Type, m: &str) -> G {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         match n.as_str() {
+            "#Time" | "#Duration" => Ok("int64_t".into()),
             "#Set" => self.cty(&set_map(&a[0])),
             "#StrBuf" => {
                 if self.helpers_done.insert("sbuf_type".into()) {
@@ -139,6 +142,7 @@ impl Cx<'_> {
                 format!("RawL xa = hsorted_{hm}(a.root), xb = hsorted_{hm}(b.root); int64_t n = xa.len < xb.len ? xa.len : xb.len; for (int64_t i = 0; i < n; i++) {{ int c = {c}((({ec}*)xa.data)[i], (({ec}*)xb.data)[i]); if (c) return c; }} return cmp_I(xa.len, xb.len);")
             }
             "#StrBuf" => "return cmp_S((Str){a.len, a.data}, (Str){b.len, b.data});".into(),
+            "#Time" | "#Duration" => "return cmp_I(a, b);".into(),
             _ => {
                 let (ca, ce) = (self.helper_cmp(&a[0])?, self.helper_cmp(&a[1])?);
                 format!("if (a.ok != b.ok) return a.ok ? -1 : 1; return a.ok ? {ca}(a.v, b.v) : {ce}(a.e, b.e);")
@@ -161,6 +165,7 @@ impl Cx<'_> {
                 format!("RawL x = hsorted_{hm}(v.root); buf_push(b, x.len); for (int64_t i = 0; i < x.len; i++) {e}(b, (({ec}*)x.data)[i]);")
             }
             "#StrBuf" => "buf_push(b, v.len); for (int64_t i = 0; i < v.len; i += 8) { int64_t w = 0; memcpy(&w, v.data + i, (size_t)(v.len - i < 8 ? v.len - i : 8)); buf_push(b, w); }".into(),
+            "#Time" | "#Duration" => "buf_push(b, v);".into(),
             _ => {
                 let (ea, ee) = (self.helper_enc(&a[0])?, self.helper_enc(&a[1])?);
                 format!("buf_push(b, v.ok); if (v.ok) {ea}(b, v.v); else {ee}(b, v.e);")
@@ -181,6 +186,7 @@ impl Cx<'_> {
                 let d = self.helper_dec(&a[0])?;
                 format!("int64_t n = *(*p)++; {c} h = {{0}}; for (int64_t i = 0; i < n; i++) {{ __auto_type x = {d}(p); h.root = hpush_{hm}(h.root, x); }} return h;")
             }
+            "#Time" | "#Duration" => "return *(*p)++;".into(),
             "#StrBuf" => "int64_t n = *(*p)++; char* s = (char*)sspur_alloc_atomic((size_t)n + 1); for (int64_t i = 0; i < n; i += 8) { int64_t w = *(*p)++; memcpy(s + i, &w, (size_t)(n - i < 8 ? n - i : 8)); } return (SBuf){n, s, 0};".into(),
             _ => {
                 let (da, de) = (self.helper_dec(&a[0])?, self.helper_dec(&a[1])?);
@@ -204,6 +210,14 @@ impl Cx<'_> {
                 format!("RawL x = hsorted_{hm}(v.root); sb_put(b, \"heap[\", 5); for (int64_t i = 0; i < x.len; i++) {{ if (i) sb_put(b, \", \", 2); {se}(b, (({ec}*)x.data)[i], 1); }} sb_put(b, \"]\", 1);")
             }
             "#StrBuf" => "if (q) sb_strq(b, (Str){v.len, v.data}); else sb_put(b, v.data, v.len);".into(),
+            "#Time" => {
+                self.std("chrono");
+                "(void)q; ss_iso_put(b, v);".into()
+            }
+            "#Duration" => {
+                self.std("chrono");
+                "(void)q; ss_dur_put(b, v);".into()
+            }
             _ => {
                 let (sa, se) = (self.helper_show(&a[0])?, self.helper_show(&a[1])?);
                 format!("if (v.ok) {{ sb_put(b, \"ok(\", 3); {sa}(b, v.v, 1); }} else {{ sb_put(b, \"err(\", 4); {se}(b, v.e, 1); }} sb_put(b, \")\", 1);")
@@ -226,6 +240,7 @@ impl Cx<'_> {
                 format!("RawL x = hsorted_{hm}(v.root); for (int64_t i = 0; i < x.len; i++) h = hmix(h * 31 + {he}((({ec}*)x.data)[i])); h = hmix(h ^ (uint64_t)x.len);")
             }
             "#StrBuf" => "h = hash_S((Str){v.len, v.data});".into(),
+            "#Time" | "#Duration" => "h = hash_I(v);".into(),
             _ => {
                 let (ha, he) = (self.helper_hash(&a[0])?, self.helper_hash(&a[1])?);
                 format!("h = v.ok ? hmix(5 + {ha}(v.v)) : hmix(9 + {he}(v.e));")
@@ -377,6 +392,25 @@ impl Cx<'_> {
                 self.std("env");
                 format!("({{ RawL r_ = raw_alloc(ss_argc, sizeof(Str)); for (int64_t i_ = 0; i_ < ss_argc; i_++) ((Str*)r_.data)[i_] = ss_argv[i_]; r_.len = ss_argc; r_.hdr[1] = ss_argc; ({c}){{r_.len, (Str*)r_.data, r_.hdr}}; }})")
             }
+            "time_ms" => format!("((int64_t)({}))", v(0)),
+            "date" | "datetime" => {
+                self.std("chrono");
+                let hms = if n == "date" { "0, 0, 0".to_string() } else { "h_, mi_, se_".to_string() };
+                let pre = if n == "date" { String::new() } else { format!("int64_t h_ = {}; int64_t mi_ = {}; int64_t se_ = {}; ", v(3), v(4), v(5)) };
+                format!("({{ int64_t y_ = {}; int64_t mo_ = {}; int64_t d_ = {}; {pre}int64_t t_; {c} o_ = {{0}}; if (ss_civil_ms(y_, mo_, d_, {hms}, &t_)) {{ o_.some = 1; o_.v = t_; }} o_; }})", v(0), v(1), v(2))
+            }
+            "parse_time" => {
+                self.std("chrono");
+                format!("({{ Str s_ = {}; int64_t t_; {c} o_ = {{0}}; if (ss_parse_time(s_, &t_)) {{ o_.some = 1; o_.v = t_; }} o_; }})", v(0))
+            }
+            "now" => {
+                self.std("time");
+                "ss_now_ms()".into()
+            }
+            "millis" | "secs" | "mins" | "hours" | "days" => {
+                let k = match n { "millis" => 1, "secs" => 1000, "mins" => 60_000, "hours" => 3_600_000, _ => 86_400_000 };
+                format!("({{ int64_t a_ = {}; int64_t o_; if (UNLIKELY(__builtin_mul_overflow(a_, (int64_t){k}, &o_))) TRAPV({T_OVERFLOW}, 0, 0); o_; }})", v(0))
+            }
             "pi" => "3.141592653589793".into(),
             "euler" => "2.718281828459045".into(),
             "inf" => "__builtin_inf()".into(),
@@ -443,6 +477,41 @@ impl Cx<'_> {
                     _ => return Err(format!("uses Heap.{name}")),
                 })
             }
+            "#Time" => {
+                self.std("chrono");
+                let part = |f: &str| format!("(ss_parts({r}).{f})");
+                Ok(match name {
+                    "unix_ms" => format!("(({r}))"),
+                    "year" => part("y"),
+                    "month" => part("mo"),
+                    "day" => part("d"),
+                    "hour" => part("h"),
+                    "minute" => part("mi"),
+                    "second" => part("s"),
+                    "milli" => part("ms"),
+                    "weekday" => part("wd"),
+                    "yday" => part("yd"),
+                    "date" => format!("({{ int64_t t_ = {r}; t_ - ss_tod(t_); }})"),
+                    "iso" => format!("ss_iso({r})"),
+                    "format" => format!("({{ int64_t t_ = {r}; Str f_ = {}; ss_tfmt(t_, f_, st); }})", vals[0]),
+                    "add" | "sub" | "since" => format!("({{ int64_t a_ = {r}; int64_t b_ = {}; int64_t o_; if (UNLIKELY(__builtin_{}_overflow(a_, b_, &o_))) TRAPV({T_OVERFLOW}, 0, 0); o_; }})", vals[0], if name == "add" { "add" } else { "sub" }),
+                    "add_months" => format!("({{ int64_t t_ = {r}; int64_t n_ = {}; ss_add_months(t_, n_, st); }})", vals[0]),
+                    "add_years" => format!("({{ int64_t t_ = {r}; int64_t n_ = {}; int64_t m_; if (UNLIKELY(__builtin_mul_overflow(n_, (int64_t)12, &m_))) TRAPV({T_OVERFLOW}, 0, 0); ss_add_months(t_, m_, st); }})", vals[0]),
+                    _ => return Err(format!("uses Time.{name}")),
+                })
+            }
+            "#Duration" => Ok(match name {
+                "ms" => format!("(({r}))"),
+                "secs" => format!("(({r}) / 1000)"),
+                "mins" => format!("(({r}) / 60000)"),
+                "hours" => format!("(({r}) / 3600000)"),
+                "days" => format!("(({r}) / 86400000)"),
+                "add" | "sub" | "mul" => format!("({{ int64_t a_ = {r}; int64_t b_ = {}; int64_t o_; if (UNLIKELY(__builtin_{name}_overflow(a_, b_, &o_))) TRAPV({T_OVERFLOW}, 0, 0); o_; }})", vals[0]),
+                "div" => format!("({{ int64_t a_ = {r}; int64_t b_ = {}; if (UNLIKELY(b_ == 0)) TRAPV({T_DIV_ZERO}, 0, 0); if (UNLIKELY(a_ == INT64_MIN && b_ == -1)) TRAPV({T_OVERFLOW}, 0, 0); a_ / b_; }})", vals[0]),
+                "neg" => format!("({{ int64_t a_ = {r}; if (UNLIKELY(a_ == INT64_MIN)) TRAPV({T_OVERFLOW}, 0, 0); -a_; }})"),
+                "abs" => format!("({{ int64_t a_ = {r}; if (UNLIKELY(a_ == INT64_MIN)) TRAPV({T_OVERFLOW}, 0, 0); a_ < 0 ? -a_ : a_; }})"),
+                _ => return Err(format!("uses Duration.{name}")),
+            }),
             "#StrBuf" => Ok(match name {
                 "add" => {
                     self.std("sbuf");
@@ -728,6 +797,11 @@ impl Cx<'_> {
             _ if is(&t, "F64") => "sj_f64_put(b, v);".to_string(),
             _ if is(&t, "Str") => "sj_quote(b, v);".to_string(),
             Type::Con(n, _) if n == "#StrBuf" => "sj_quote(b, (Str){v.len, v.data});".to_string(),
+            Type::Con(n, _) if n == "#Duration" => "sb_int(b, v);".to_string(),
+            Type::Con(n, _) if n == "#Time" => {
+                self.std("chrono");
+                "sj_quote(b, ss_iso(v));".to_string()
+            }
             Type::Con(n, a) if n == "List" => seq(self, &a[0], "v.len", "v.data[i]")?,
             Type::Con(n, a) if n == "#Set" => {
                 let (mm, node, _) = self.set_parts(&t)?;
@@ -826,6 +900,11 @@ impl Cx<'_> {
             _ if is(&t, "Unit") => "(void)v; (void)e; *out = 0; return 1;".to_string(),
             _ if is(&t, "Str") => format!("if (!v || v->t != SJ_STR) {bad} *out = v->s; return 1;"),
             Type::Con(n, _) if n == "#StrBuf" => format!("if (!v || v->t != SJ_STR) {bad} *out = (SBuf){{v->s.len, (char*)v->s.p, 0}}; return 1;"),
+            Type::Con(n, _) if n == "#Duration" => format!("if (!sj_int(v, out)) {bad} return 1;"),
+            Type::Con(n, _) if n == "#Time" => {
+                self.std("chrono");
+                format!("if (!v || v->t != SJ_STR || !ss_parse_time(v->s, out)) {bad} return 1;")
+            }
             Type::Con(n, a) if n == "List" => {
                 let ec = self.decl(&a[0])?;
                 let each = "r = raw_push(r, &x, sizeof(EC));".replace("EC", &ec);

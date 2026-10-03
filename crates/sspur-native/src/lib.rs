@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 pub mod bare;
 pub mod cgen;
+pub mod chrono;
 pub mod json;
 pub mod nval;
 

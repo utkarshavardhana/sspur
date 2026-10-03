@@ -567,3 +567,102 @@ static int ss_run_cmd(Str prog, const Str* args, int64_t na, Str input, int64_t*
     if (!ss_utf8_ok((const unsigned char*)out->p, out->len) || !ss_utf8_ok((const unsigned char*)errs->p, errs->len)) { *why = ss_why(prog, -2); return 0; }
     return 1;
 }
+//@ chrono failstr
+#define SS_DAY 86400000LL
+static int64_t ss_dfc(int64_t y, int64_t m, int64_t d) { y -= m <= 2; int64_t era = (y >= 0 ? y : y - 399) / 400; int64_t yoe = y - era * 400; int64_t mp = m > 2 ? m - 3 : m + 9; int64_t doy = (153 * mp + 2) / 5 + d - 1; int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; return era * 146097 + doe - 719468; }
+static void ss_civil(int64_t z, int64_t* y, int64_t* m, int64_t* d) { z += 719468; int64_t era = (z >= 0 ? z : z - 146096) / 146097; int64_t doe = z - era * 146097; int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100); int64_t mp = (5 * doy + 2) / 153; *d = doy - (153 * mp + 2) / 5 + 1; *m = mp < 10 ? mp + 3 : mp - 9; *y = yoe + era * 400 + (*m <= 2); }
+static int ss_leap(int64_t y) { return y % 4 == 0 && (y % 100 != 0 || y % 400 == 0); }
+static int64_t ss_mdays(int64_t y, int64_t m) { return m == 2 ? (ss_leap(y) ? 29 : 28) : (m == 4 || m == 6 || m == 9 || m == 11) ? 30 : 31; }
+typedef struct { int64_t y, mo, d, h, mi, s, ms, wd, yd; } SsTp;
+static SsTp ss_parts(int64_t t) { SsTp p; int64_t z = t / SS_DAY, r = t % SS_DAY; if (r < 0) { r += SS_DAY; z--; } ss_civil(z, &p.y, &p.mo, &p.d); p.h = r / 3600000; p.mi = r / 60000 % 60; p.s = r / 1000 % 60; p.ms = r % 1000; int64_t w = (z + 3) % 7; if (w < 0) w += 7; p.wd = w + 1; p.yd = z - ss_dfc(p.y, 1, 1) + 1; return p; }
+static int64_t ss_tod(int64_t t) { int64_t r = t % SS_DAY; return r < 0 ? r + SS_DAY : r; }
+static void ss_pad0(SB* b, int64_t v, int w) { char t[32]; int n = snprintf(t, sizeof t, "%0*lld", w, (long long)v); sb_put(b, t, n); }
+static void ss_year(SB* b, int64_t y) { if (y >= 0 && y <= 9999) ss_pad0(b, y, 4); else if (y < 0) { sb_put(b, "-", 1); ss_pad0(b, -y, 4); } else { sb_put(b, "+", 1); sb_int(b, y); } }
+static void ss_iso_put(SB* b, int64_t t) { SsTp p = ss_parts(t); ss_year(b, p.y); sb_put(b, "-", 1); ss_pad0(b, p.mo, 2); sb_put(b, "-", 1); ss_pad0(b, p.d, 2); sb_put(b, "T", 1); ss_pad0(b, p.h, 2); sb_put(b, ":", 1); ss_pad0(b, p.mi, 2); sb_put(b, ":", 1); ss_pad0(b, p.s, 2); if (p.ms) { sb_put(b, ".", 1); ss_pad0(b, p.ms, 3); } sb_put(b, "Z", 1); }
+static Str ss_iso(int64_t t) { SB_INIT(b); ss_iso_put(&b, t); return sb_done(&b); }
+static void ss_dur_put(SB* b, int64_t d) {
+    if (!d) { sb_put(b, "0s", 2); return; }
+    uint64_t u = d < 0 ? (uint64_t)0 - (uint64_t)d : (uint64_t)d; char t[48]; int n;
+    if (d < 0) sb_put(b, "-", 1);
+    if (u < 1000) { n = snprintf(t, sizeof t, "%llums", (unsigned long long)u); sb_put(b, t, n); return; }
+    uint64_t h = u / 3600000, m = u / 60000 % 60, s = u / 1000 % 60, ms = u % 1000;
+    if (h) { n = snprintf(t, sizeof t, "%lluh", (unsigned long long)h); sb_put(b, t, n); }
+    if (h || m) { n = snprintf(t, sizeof t, "%llum", (unsigned long long)m); sb_put(b, t, n); }
+    n = snprintf(t, sizeof t, "%llu", (unsigned long long)s); sb_put(b, t, n);
+    if (ms) { n = snprintf(t, sizeof t, ".%03llu", (unsigned long long)ms); while (t[n - 1] == '0') n--; sb_put(b, t, n); }
+    sb_put(b, "s", 1);
+}
+static int ss_civil_ms(int64_t y, int64_t mo, int64_t d, int64_t h, int64_t mi, int64_t s, int64_t* out) {
+    if (y < -1000000 || y > 1000000 || mo < 1 || mo > 12 || d < 1 || d > ss_mdays(y, mo) || h < 0 || h > 23 || mi < 0 || mi > 59 || s < 0 || s > 59) return 0;
+    *out = ss_dfc(y, mo, d) * SS_DAY + h * 3600000 + mi * 60000 + s * 1000; return 1;
+}
+static int ss_tnum(Str s, int64_t* j, int n, int64_t* v) { if (*j + n > s.len) return 0; int64_t x = 0; for (int i = 0; i < n; i++) { char c = s.p[*j + i]; if (c < '0' || c > '9') return 0; x = x * 10 + (c - '0'); } *j += n; *v = x; return 1; }
+static int ss_tlit(Str s, int64_t* j, char c) { if (*j < s.len && s.p[*j] == c) { (*j)++; return 1; } return 0; }
+static int ss_parse_time(Str s, int64_t* out) {
+    int64_t j = 0, y, mo, d, h = 0, mi = 0, sec = 0, ms = 0, off = 0;
+    if (!ss_tnum(s, &j, 4, &y) || !ss_tlit(s, &j, '-') || !ss_tnum(s, &j, 2, &mo) || !ss_tlit(s, &j, '-') || !ss_tnum(s, &j, 2, &d)) return 0;
+    if (j < s.len) {
+        if (!(ss_tlit(s, &j, 'T') || ss_tlit(s, &j, 't') || ss_tlit(s, &j, ' '))) return 0;
+        if (!ss_tnum(s, &j, 2, &h) || !ss_tlit(s, &j, ':') || !ss_tnum(s, &j, 2, &mi)) return 0;
+        if (ss_tlit(s, &j, ':')) {
+            if (!ss_tnum(s, &j, 2, &sec)) return 0;
+            if (ss_tlit(s, &j, '.') || ss_tlit(s, &j, ',')) {
+                int64_t st = j;
+                while (j < s.len && s.p[j] >= '0' && s.p[j] <= '9') { if (j - st < 3) ms = ms * 10 + (s.p[j] - '0'); j++; }
+                int64_t n = j - st; if (n == 0 || n > 9) return 0;
+                for (int64_t k = n; k < 3; k++) ms *= 10;
+            }
+        }
+        if (!(ss_tlit(s, &j, 'Z') || ss_tlit(s, &j, 'z')) && j < s.len && (s.p[j] == '+' || s.p[j] == '-')) {
+            int64_t sg = s.p[j] == '-' ? -1 : 1, oh, om = 0; j++;
+            if (!ss_tnum(s, &j, 2, &oh)) return 0;
+            int colon = ss_tlit(s, &j, ':');
+            if ((colon || j < s.len) && !ss_tnum(s, &j, 2, &om)) return 0;
+            if (oh > 23 || om > 59) return 0;
+            off = sg * (oh * 3600000 + om * 60000);
+        }
+    }
+    if (j != s.len) return 0;
+    int64_t base; if (!ss_civil_ms(y, mo, d, h, mi, sec, &base)) return 0;
+    *out = base + ms - off; return 1;
+}
+static const char* ss_wdn[7] = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
+static const char* ss_mon[12] = {"January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"};
+static Str ss_tfmt(int64_t t, Str pat, Status* st) {
+    SsTp p = ss_parts(t); SB_INIT(b);
+    for (int64_t i = 0; i < pat.len; i++) {
+        if (pat.p[i] != '%') { sb_put(&b, pat.p + i, 1); continue; }
+        if (++i >= pat.len) goto bad;
+        switch (pat.p[i]) {
+        case 'Y': ss_year(&b, p.y); break;
+        case 'm': ss_pad0(&b, p.mo, 2); break;
+        case 'd': ss_pad0(&b, p.d, 2); break;
+        case 'H': ss_pad0(&b, p.h, 2); break;
+        case 'M': ss_pad0(&b, p.mi, 2); break;
+        case 'S': ss_pad0(&b, p.s, 2); break;
+        case 'L': ss_pad0(&b, p.ms, 3); break;
+        case 'j': ss_pad0(&b, p.yd, 3); break;
+        case 'u': sb_int(&b, p.wd); break;
+        case 'a': sb_put(&b, ss_wdn[p.wd - 1], 3); break;
+        case 'A': sb_put(&b, ss_wdn[p.wd - 1], (int64_t)strlen(ss_wdn[p.wd - 1])); break;
+        case 'b': sb_put(&b, ss_mon[p.mo - 1], 3); break;
+        case 'B': sb_put(&b, ss_mon[p.mo - 1], (int64_t)strlen(ss_mon[p.mo - 1])); break;
+        case 'F': ss_year(&b, p.y); sb_put(&b, "-", 1); ss_pad0(&b, p.mo, 2); sb_put(&b, "-", 1); ss_pad0(&b, p.d, 2); break;
+        case 'T': ss_pad0(&b, p.h, 2); sb_put(&b, ":", 1); ss_pad0(&b, p.mi, 2); sb_put(&b, ":", 1); ss_pad0(&b, p.s, 2); break;
+        case '%': sb_put(&b, "%", 1); break;
+        default: goto bad;
+        }
+    }
+    return sb_done(&b);
+bad:;
+    SB_INIT(e); sb_put(&e, "bad time format '", 17); sb_put(&e, pat.p, pat.len); sb_put(&e, "'", 1); ss_failstr(st, sb_done(&e));
+}
+static int64_t ss_add_months(int64_t t, int64_t n, Status* st) {
+    SsTp p = ss_parts(t); int64_t tot, v;
+    if (__builtin_add_overflow(p.y * 12 + p.mo - 1, n, &tot)) sspur_trap(st, 1, 0, 0, 0);
+    int64_t ny = tot / 12, nm = tot % 12; if (nm < 0) { nm += 12; ny--; } nm += 1;
+    if (ny < -300000000 || ny > 300000000) sspur_trap(st, 1, 0, 0, 0);
+    int64_t md = ss_mdays(ny, nm), nd = p.d < md ? p.d : md;
+    if (__builtin_mul_overflow(ss_dfc(ny, nm, nd), SS_DAY, &v) || __builtin_add_overflow(v, ss_tod(t), &v)) sspur_trap(st, 1, 0, 0, 0);
+    return v;
+}

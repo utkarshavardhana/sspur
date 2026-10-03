@@ -4,6 +4,7 @@ mod ffi;
 pub mod fuzz;
 mod sched;
 mod stdlib;
+mod stdtime;
 mod stdx;
 pub mod value;
 
@@ -1223,6 +1224,8 @@ pub fn to_nval(v: &Value) -> Option<sspur_native::nval::NVal> {
             Some(x) => Some(Box::new(to_nval(x)?)),
             None => None,
         }),
+        Value::Time(t) => NVal::Time(*t),
+        Value::Dur(d) => NVal::Dur(*d),
         _ => return None,
     })
 }
@@ -1255,6 +1258,8 @@ pub fn from_nval(v: sspur_native::nval::NVal) -> Value {
             Ok(x) => Ok(Rc::new(from_nval(*x))),
             Err(e) => Err(Rc::new(from_nval(*e))),
         }),
+        NVal::Time(t) => Value::Time(t),
+        NVal::Dur(d) => Value::Dur(d),
     }
 }
 

@@ -47,7 +47,8 @@ pub fn encode(l: &Layouts, v: &NVal, t: &Type, out: &mut String) -> Option<()> {
     let v = unwrap(v);
     match (v, &t) {
         (NVal::Unit, _) => out.push_str("null"),
-        (NVal::Int(n), _) => write!(out, "{n}").unwrap(),
+        (NVal::Int(n) | NVal::Dur(n), _) => write!(out, "{n}").unwrap(),
+        (NVal::Time(t), _) => quote(&crate::chrono::iso(*t), out),
         (NVal::Bool(b), _) => out.push_str(if *b { "true" } else { "false" }),
         (NVal::Float(x), _) => {
             if x.is_finite() {
@@ -391,6 +392,14 @@ impl D<'_> {
             Type::Con(n, a) => match n.as_str() {
                 "Int" => match v {
                     Some(Jv::Num(s)) if s.len() <= 24 && s.bytes().enumerate().all(|(i, c)| c.is_ascii_digit() || (i == 0 && c == b'-')) => NVal::Int(s.parse().map_err(|_| self.err(&want, v))?),
+                    _ => return Err(self.err(&want, v)),
+                },
+                "#Duration" => match self.dec(v, &Type::int()).map_err(|_| self.err(&want, v))? {
+                    NVal::Int(n) => NVal::Dur(n),
+                    _ => return Err(self.err(&want, v)),
+                },
+                "#Time" => match v {
+                    Some(Jv::Str(s)) => NVal::Time(crate::chrono::parse(s).ok_or_else(|| self.err(&want, v))?),
                     _ => return Err(self.err(&want, v)),
                 },
                 "F64" => match v {

@@ -373,6 +373,10 @@ impl<'a> Hasher<'a> {
                     enc.tag(b'U');
                     enc.str(r);
                 }
+                if let Some(v) = &f.interrupt {
+                    enc.tag(b'Q');
+                    enc.str(v);
+                }
                 self.expr(&mut enc, &f.body, group);
                 if let Some(x) = &f.ext {
                     enc.tag(b'C');

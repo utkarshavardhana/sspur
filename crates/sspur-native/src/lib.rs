@@ -7,6 +7,7 @@ use sspur_syntax::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
+pub mod bare;
 pub mod cgen;
 pub mod nval;
 
@@ -33,6 +34,7 @@ pub(crate) const T_RAISE: i64 = 100;
 pub(crate) const T_GUESS: i64 = 14;
 pub(crate) const T_OOM: i64 = 15;
 pub(crate) const T_ALLOC: i64 = 18;
+pub(crate) const T_BYTE: i64 = 19;
 const T_DEADLOCK: i64 = 16;
 const T_CLOSED: i64 = 17;
 
@@ -319,6 +321,7 @@ impl Compiled {
             (T_REPEAT, _) => "repeat count must be >= 0".into(),
             (T_OOM, _) => "out of memory".into(),
             (T_ALLOC, _) => format!("invalid allocation size {}", st.clause),
+            (T_BYTE, _) => format!("byte index {} out of bounds for a string of {} bytes", st.value, st.clause),
             (T_DEADLOCK, _) => "deadlock: every task is blocked on recv".into(),
             (T_CLOSED, _) => "send on a closed channel".into(),
             (T_GUESS, _) => format!("guess confidence {} is outside [0, 1]", f64::from_bits(st.value as u64)),

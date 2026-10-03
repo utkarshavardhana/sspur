@@ -148,6 +148,9 @@ fn print_fn_at(f: &FnDef, ind: usize) -> String {
     if let Some(r) = &f.trusted {
         s.push_str(&format!("\n{c}unsafe {}", expr(&Expr::new(ExprKind::Str(vec![StrPart::Lit(r.clone())]), Span::default()), 0)));
     }
+    if let Some(v) = &f.interrupt {
+        s.push_str(&format!("\n{c}interrupt {v}"));
+    }
     for p in &f.pres {
         s.push_str(&format!("\n{c}pre {}", expr(p, ind + 2)));
     }
@@ -280,6 +283,10 @@ pub fn expr(e: &Expr, ind: usize) -> String {
         ExprKind::Placeholder => "_".into(),
         ExprKind::Field(x, f) => format!("{}.{}", operand(x, 10, ind), f),
         ExprKind::Call(f, args) => format!("{}({})", operand(f, 10, ind), list(args, ind)),
+        ExprKind::Method { recv, name, targs, args } if name == "mmio" && targs.len() == 1 => {
+            let rest: String = args.iter().map(|a| format!(", {}", expr(a, ind))).collect();
+            format!("mmio[{}]({}{rest})", ty(&targs[0]), expr(recv, ind))
+        }
         ExprKind::Method { recv, name, targs, args } => {
             let mut s = format!("{}.{}", operand(recv, 10, ind), name);
             if !targs.is_empty() {
@@ -306,6 +313,9 @@ pub fn expr(e: &Expr, ind: usize) -> String {
         ExprKind::Unary(UnOp::Ref, x) => format!("&{}", operand(x, 10, ind)),
         ExprKind::Unary(UnOp::RefMut, x) => format!("&mut {}", operand(x, 10, ind)),
         ExprKind::Range(a, b) => format!("{}..{}", operand(a, 6, ind), operand(b, 6, ind)),
+        ExprKind::If(c, t, Some(f)) if matches!(&t.kind, ExprKind::Block(st) if !matches!(st.as_slice(), [Stmt::Assign(..)])) => {
+            format!("if {} then {}\n{}else {}", expr(c, ind), branch(t, ind + 2), pad(ind + 2), branch(f, ind + 2))
+        }
         ExprKind::If(c, t, f) => {
             let mut s = format!("if {} then {}", expr(c, ind), branch(t, ind));
             if let Some(f) = f {

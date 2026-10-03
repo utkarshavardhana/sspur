@@ -1,5 +1,5 @@
 use crate::nval::Layouts;
-use crate::{assemble_rich, Compiled, RichFn, T_DEPTH, T_DIV_ZERO, T_INDEX, T_NOMATCH, T_OVERFLOW, T_POST, T_GUESS, T_MSG, T_PRE, T_RAISE, T_REFINE, T_REPEAT, T_UNWRAP, T_ALLOC, T_OOM};
+use crate::{assemble_rich, Compiled, RichFn, T_DEPTH, T_DIV_ZERO, T_INDEX, T_NOMATCH, T_OVERFLOW, T_POST, T_GUESS, T_MSG, T_PRE, T_RAISE, T_REFINE, T_REPEAT, T_UNWRAP, T_ALLOC, T_OOM, T_BYTE};
 use sspur_check::{expr_key, CheckOutput, Type};
 use sspur_syntax::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -785,7 +785,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (src, mut plan) = generate(m, check, None)?;
+    let (src, mut plan) = generate(m, check, None, None)?;
     plan.skipped.retain(|n, _| lower::original_name(n) == n);
     if let Some((_, _, why)) = &lowered {
         for (n, reason) in plan.skipped.iter_mut() {
@@ -837,7 +837,7 @@ pub fn c_program(m: &Module, check: &CheckOutput) -> Result<CProgram, String> {
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (src, plan) = generate(m, check, None)?;
+    let (src, plan) = generate(m, check, None, None)?;
     let fns = plan.fns.into_iter().map(|(n, (p, r, _))| (n, (p, r))).collect();
     Ok(CProgram { src, fns, skipped: plan.skipped, err_types: plan.err_types, refines: plan.refines })
 }
@@ -848,7 +848,7 @@ pub fn c_source(m: &Module, check: &CheckOutput) -> String {
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    match generate(m, check, None) {
+    match generate(m, check, None, None) {
         Ok((src, _)) => src,
         Err(e) => format!("/* {e} */\n"),
     }
@@ -860,7 +860,7 @@ pub fn export_c(m: &Module, check: &CheckOutput, prefix: &str) -> Result<export:
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (source, plan) = generate(m, check, Some(prefix))?;
+    let (source, plan) = generate(m, check, Some(prefix), None)?;
     let w = plan.export.ok_or("no export plan")?;
     Ok(export::Export { source, header: w.header, exported: w.exported, skipped: w.skipped, links: plan.links })
 }
@@ -874,13 +874,22 @@ struct Plan {
     export: Option<export::Wrappers>,
 }
 
-fn generate(m: &Module, check: &CheckOutput, export: Option<&str>) -> Result<(String, Plan), String> {
+pub fn bare_c(m: &Module, check: &CheckOutput, arch: &str) -> Result<String, String> {
+    let lowered = lower::lower(m, check);
+    let (m, check) = match &lowered {
+        Some((lm, lc, _)) => (lm, lc),
+        None => (m, check),
+    };
+    generate(m, check, None, Some(arch)).map(|(src, _)| src)
+}
+
+fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Option<&str>) -> Result<(String, Plan), String> {
     let defs: Vec<&FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f) } else { None }).collect();
     let index: HashMap<String, usize> = defs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
     let mut skipped = BTreeMap::new();
     let mut ok: HashSet<String> = HashSet::new();
     for f in &defs {
-        match precheck(f) {
+        match precheck(f, target.is_some()) {
             Ok(()) => {
                 ok.insert(f.name.clone());
             }
@@ -920,7 +929,9 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>) -> Result<(St
     }
     loop {
         let mut cx = Cx::new(check, &ok, &alias_refines, &field_refines, &smt);
-        cx.sys = m.profile.as_deref() == Some("sys");
+        cx.sys = matches!(m.profile.as_deref(), Some("sys" | "bare"));
+        cx.bare = m.profile.as_deref() == Some("bare");
+        cx.target = target.map(str::to_string);
         cx.generics = generic_defs.iter().filter(|(n, _)| ok.contains(*n)).map(|(n, f)| (n.clone(), f.clone())).collect();
         cx.fn_index = index.clone();
         cx.all_fns = defs.iter().map(|f| (f.name.clone(), (*f).clone())).collect();
@@ -957,6 +968,50 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>) -> Result<(St
                 Err(e) => failed.push((gname.clone(), format!("specialization failed: {e}"))),
             }
             cx.mono = saved;
+        }
+        if failed.is_empty() && let Some(arch) = target {
+            if !skipped.is_empty() {
+                return Err(skipped.iter().map(|(n, w)| format!("{n} {w}")).collect::<Vec<_>>().join("; "));
+            }
+            let mut src = String::from(crate::bare::PRELUDE);
+            src.push_str(&cx.fwd);
+            src.push_str(&cx.defs);
+            src.push_str(&cx.protos);
+            for f in defs.iter().filter(|f| f.tparams.is_empty()) {
+                let (params, ret, _) = &plan_fns[&f.name];
+                let ps: Vec<String> = params.iter().zip(&f.params).map(|(t, p)| cx.cty(t).map(|c| if is_mut_borrow(&p.ty) { format!("{c}*") } else { c })).collect::<G<_>>()?;
+                let rr = cx.rr(ret)?;
+                let mut sig: Vec<String> = ps.iter().enumerate().map(|(i, t)| format!("{t} a{i}")).collect();
+                sig.push("Status* st".into());
+                sig.push("int64_t depth".into());
+                writeln!(src, "static {rr} f_{}({});", f.name, sig.join(", ")).unwrap();
+            }
+            src.push_str(&cx.helpers);
+            src.push_str(&cx.lambdas);
+            src.push_str(&bodies);
+            src.push_str(&cx.helpers_late);
+            let (mp, mr, _) = plan_fns.get("main").cloned().ok_or("a bare kernel needs 'fn main()'")?;
+            if !mp.is_empty() || !(is(&mr, "Unit") || is(&mr, "Int")) {
+                return Err("main must take no parameters and return Unit or Int".into());
+            }
+            let rr = cx.rr(&mr)?;
+            let exit = if is(&mr, "Int") { "r.v" } else { "0" };
+            writeln!(src, "void sspur_kmain(void) {{ Status st = {{0}}; {rr} r = f_main(&st, -SS_DEPTH); (void)r; ss_halt({exit}); }}").unwrap();
+            let mut cases = String::new();
+            for f in &defs {
+                if let Some(v) = &f.interrupt {
+                    let n = if v == "timer" { crate::bare::timer_irq(arch) } else { v.parse::<u32>().map_err(|_| format!("bad interrupt '{v}'"))? };
+                    write!(cases, "case {n}: (void)f_{}(&st, -SS_DEPTH); break; ", f.name).unwrap();
+                }
+            }
+            writeln!(src, "void sspur_irq(int64_t n) {{ Status st = {{0}}; switch (n) {{ {cases}default: (void)st; break; }} }}").unwrap();
+            if plan_fns.get("on_trap").is_some_and(|(p, _, _)| p.len() == 1) {
+                writeln!(src, "void sspur_on_trap(int64_t c) {{ Status st = {{0}}; (void)f_on_trap(c, &st, -SS_DEPTH); }}").unwrap();
+            } else {
+                writeln!(src, "void sspur_on_trap(int64_t c) {{ (void)c; }}").unwrap();
+            }
+            let plan = Plan { fns: BTreeMap::new(), skipped, refines: vec![], err_types: vec![], links: vec![], export: None };
+            return Ok((src, plan));
         }
         if failed.is_empty() {
             let mut entries = String::new();
@@ -1020,8 +1075,8 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
     safe && raw_op(op, ra, rb).is_some_and(fits)
 }
 
-fn precheck(f: &FnDef) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe") && !f.tparams.iter().any(|p| p.name == e.name)) {
+fn precheck(f: &FnDef, bare: bool) -> G<()> {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe") && !(bare && e.name == "mmio") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())
@@ -1155,6 +1210,8 @@ struct Cx<'a> {
     par_memo: HashMap<String, bool>,
     par_heavy: HashSet<String>,
     sys: bool,
+    bare: bool,
+    target: Option<String>,
     flags: HashMap<String, String>,
     borrow_res: HashSet<String>,
     vec: Option<simd::Vecx>,
@@ -1216,6 +1273,8 @@ impl<'a> Cx<'a> {
             par_memo: HashMap::new(),
             par_heavy: HashSet::new(),
             sys: false,
+            bare: false,
+            target: None,
             flags: HashMap::new(),
             borrow_res: HashSet::new(),
             vec: None,
@@ -1277,6 +1336,7 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if matches!(n.as_str(), "Secret" | "Pii" | "Untrusted") => format!("W{}_{}", &n[..1], self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Guess" => format!("G_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Ptr" => format!("P_{}", self.mangle(&a[0])?),
+            Type::Con(n, a) if n == "Mmio" => format!("M{}", a[0]),
             Type::Con(n, a) if n == "Atomic" => format!("AT_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Chan" => format!("CH_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n) => format!("N_{n}"),
@@ -1381,7 +1441,7 @@ impl<'a> Cx<'a> {
             Type::Con(n, _) if matches!(n.as_str(), "Int" | "Bool" | "Unit") => Ok("int64_t".into()),
             Type::Con(n, _) if n == "F64" => Ok("double".into()),
             Type::Con(n, _) if n == "Str" => Ok("Str".into()),
-            Type::Con(n, _) if n == "Ptr" => Ok("int64_t".into()),
+            Type::Con(n, _) if n == "Ptr" || n == "Mmio" => Ok("int64_t".into()),
             Type::Con(n, _) if n == "Atomic" => Ok("SsAtom*".into()),
             Type::Con(n, _) if n == "Chan" => Ok("SsChan*".into()),
             Type::Con(n, a) if n == "List" => {
@@ -1511,7 +1571,7 @@ impl<'a> Cx<'a> {
     fn zero_cost_inner(&self, t: &Type) -> Option<Type> {
         match t {
             Type::Con(n, a) if matches!(n.as_str(), "Secret" | "Pii" | "Untrusted") => Some(a[0].clone()),
-            Type::Con(n, _) if n == "Ptr" => Some(Type::int()),
+            Type::Con(n, _) if n == "Ptr" || n == "Mmio" => Some(Type::int()),
             Type::Con(n, a) if a.is_empty() => self.layouts.newtypes.get(n).cloned(),
             _ => None,
         }
@@ -2317,6 +2377,12 @@ impl<'a> Cx<'a> {
                     }
                 self.method(e, x, f, &[], &t)
             }
+            ExprKind::Method { recv, name, targs, .. } if name == "mmio" && !targs.is_empty() => {
+                if self.target.is_none() {
+                    return Err("performs 'mmio'".into());
+                }
+                Ok(format!("((int64_t)({}))", self.expr(recv)?))
+            }
             ExprKind::Method { recv, name, args, .. } => self.method(e, recv, name, args, &t),
             ExprKind::Call(f, args) => {
                 let is_local = matches!(&f.kind, ExprKind::Name(n) if self.lookup(n).is_some());
@@ -2356,6 +2422,7 @@ impl<'a> Cx<'a> {
                         Ok(format!("({{ __auto_type x_ = {a}; __auto_type y_ = {b}; {c}(y_, x_) {op} 0 ? y_ : x_; }})"))
                     }
                     "drop" | "leak" | "alloc" | "free" | "null" if self.sys && self.lookup(n).is_none() && !self.check.fn_types.contains_key(n) => self.sys_builtin(n, args, &t),
+                    _ if self.bare && sspur_check::BARE_NAMES.contains(&n.as_str()) && self.lookup(n).is_none() && !self.check.fn_types.contains_key(n) => self.bare_builtin(n, args),
                     _ => {
                         let mut vals = Vec::new();
                         for (i, a) in args.iter().enumerate() {
@@ -2551,6 +2618,21 @@ impl<'a> Cx<'a> {
             }
             _ => Err(format!("uses {n}")),
         }
+    }
+
+    fn bare_builtin(&mut self, n: &str, args: &[Expr]) -> G {
+        if n == "arch" {
+            let a = self.target.clone().unwrap_or_else(|| "host".into());
+            return Ok(format!("str_lit({}, {})", c_lit(&a), a.len()));
+        }
+        if self.target.is_none() {
+            return Err(format!("uses '{n}', which needs a bare target"));
+        }
+        let vals: Vec<String> = args.iter().map(|a| self.expr(a)).collect::<G<_>>()?;
+        Ok(match n {
+            "ticks" | "tick_hz" => format!("ss_{n}()"),
+            _ => format!("({{ ss_{n}({}); 0LL; }})", vals.join(", ")),
+        })
     }
 
     fn err_index(&mut self, t: &Type) -> usize {
@@ -2801,6 +2883,8 @@ impl<'a> Cx<'a> {
         Ok(match name {
             "len" => format!("utf8_len({r})"),
             "is_empty" => format!("((int64_t)(({r}).len == 0))"),
+            "byte_len" => format!("(({r}).len)"),
+            "byte" => format!("({{ Str s_ = {r}; int64_t i_ = {}; if (UNLIKELY(i_ < 0 || i_ >= s_.len)) TRAPV({T_BYTE}, s_.len, i_); (int64_t)(unsigned char)s_.p[i_]; }})", arg(self, 0)?),
             "lower" => format!("str_case({r}, 1)"),
             "upper" => format!("str_case({r}, 2)"),
             "trim" => format!("str_trim({r})"),
@@ -3217,6 +3301,19 @@ impl<'a> Cx<'a> {
                 _ => return Err(format!("uses Ptr.{name}")),
             });
         }
+        if let Some(w) = elem(&rt, "Mmio") {
+            let ct = match w.to_string().as_str() {
+                "U8" => "uint8_t",
+                "U16" => "uint16_t",
+                "U64" => "uint64_t",
+                _ => "uint32_t",
+            };
+            return Ok(match name {
+                "read" => format!("((int64_t)*(volatile {ct}*)(uintptr_t)({r}))"),
+                "write" => format!("({{ volatile {ct}* mp_ = (volatile {ct}*)(uintptr_t)({r}); *mp_ = ({ct})({}); 0LL; }})", self.expr(&args[0])?),
+                _ => return Err(format!("uses Mmio.{name}")),
+            });
+        }
         if let Some(et) = elem(&rt, "Opt") {
             return Ok(match name {
                 "or" => format!("({{ __auto_type o_ = {r}; __auto_type d_ = {}; o_.some ? o_.v : d_; }})", self.expr(&args[0])?),
@@ -3245,6 +3342,13 @@ impl<'a> Cx<'a> {
             return Ok(match name {
                 "abs" => format!("({{ int64_t t_ = {r}; if (UNLIKELY(t_ == INT64_MIN)) TRAPV({T_OVERFLOW}, 0, 0); t_ < 0 ? -t_ : t_; }})"),
                 "to_f64" => format!("((double)({r}))"),
+                "band" => format!("(({r}) & ({}))", self.expr(&args[0])?),
+                "bor" => format!("(({r}) | ({}))", self.expr(&args[0])?),
+                "bxor" => format!("(({r}) ^ ({}))", self.expr(&args[0])?),
+                "shl" | "shr" => {
+                    let op = if name == "shl" { "<<" } else { ">>" };
+                    format!("({{ uint64_t x_ = (uint64_t)({r}); int64_t k_ = {}; (k_ < 0 || k_ > 63) ? 0LL : (int64_t)(x_ {op} k_); }})", self.expr(&args[0])?)
+                }
                 _ => return Err(format!("uses Int.{name}")),
             });
         }

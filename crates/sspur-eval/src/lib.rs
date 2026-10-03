@@ -94,6 +94,7 @@ pub struct Interp {
     handlers: RefCell<Vec<HFrame>>,
     next_handler: Cell<u64>,
     sys: bool,
+    bare: bool,
     drops: HashMap<String, String>,
     moves: HashSet<(u32, u32)>,
     inplace: HashSet<(u32, u32)>,
@@ -102,6 +103,7 @@ pub struct Interp {
 }
 
 const MAX_DEPTH: u32 = 20_000;
+const BARE_NAMES: &[&str] = &["halt", "wait_irq", "irq_enable", "timer_start", "ticks", "tick_hz", "arch"];
 pub const OUT_OF_FUEL: &str = "evaluation step budget exhausted";
 
 fn ty_name(t: &Ty) -> Option<&str> {
@@ -136,7 +138,8 @@ impl Interp {
             gen_loops,
             handlers: RefCell::new(vec![]),
             next_handler: Cell::new(0),
-            sys: m.profile.as_deref() == Some("sys"),
+            sys: matches!(m.profile.as_deref(), Some("sys" | "bare")),
+            bare: m.profile.as_deref() == Some("bare"),
             drops: HashMap::new(),
             moves: HashSet::new(),
             inplace: HashSet::new(),
@@ -777,6 +780,7 @@ impl Interp {
                 }
                 self.method(e.span, f, v, vec![])
             }
+            ExprKind::Method { name, targs, .. } if name == "mmio" && !targs.is_empty() => trap("mmio needs a bare target: build with 'sspur build --target riscv64-qemu|aarch64-qemu'"),
             ExprKind::Method { recv, name, args, .. } => {
                 let r = self.eval(recv, env)?;
                 let a = self.eval_args(args, env)?;
@@ -792,6 +796,9 @@ impl Interp {
                         if let Some(fd) = self.fns.get(n).cloned() {
                             let a = if self.sys { self.arg_values(&fd, &args.iter().collect::<Vec<_>>(), env)? } else { self.eval_args(args, env)? };
                             return self.call_fn(&fd, a);
+                        }
+                        if self.bare && BARE_NAMES.contains(&n.as_str()) {
+                            return if n == "arch" { Ok(Value::str("host")) } else { trap(format!("'{n}' needs a bare target: build with 'sspur build --target riscv64-qemu|aarch64-qemu'")) };
                         }
                         if self.sys && matches!(n.as_str(), "drop" | "leak" | "alloc" | "free" | "null") {
                             let a = self.eval_args(args, env)?;

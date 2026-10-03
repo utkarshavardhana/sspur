@@ -30,6 +30,7 @@ const USAGE: &str = "usage:
   verify proves pre/post/where clauses with z3 and reports proved, counterexample, or unknown per clause
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
   --O3 raises the optimization level; fuzz --differential compares native against the interpreter
+  sspur build --target riscv64-qemu|aarch64-qemu file.ssp [-o kernel.elf]  build a 'profile bare' kernel (freestanding C, clang, ld.lld)
   sspur deploy plan <file.ssp> [--out DIR] | sspur deploy local <file.ssp> [--port N]   (see ADR 0016; never calls AWS)";
 
 fn main() -> ExitCode {
@@ -61,7 +62,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -150,7 +151,7 @@ fn real_main() -> ExitCode {
             }
         }
         "deploy" => deploy::run(args.pos.get(1).map(String::as_str), args.pos.get(2), args.val("--out"), args.val("--port")),
-        "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" => program_cmd(&cmd, &args),
+        "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" | "build" => program_cmd(&cmd, &args),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -299,6 +300,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         }
         "verify" => verify::verify(&loaded, &label, json),
         "export-c" => export_c(&loaded, &label, args),
+        "build" => build_bare(&loaded, &label, args),
         "hash" => {
             let res = Resolution { user_methods: Some(&loaded.check.user_methods), record_types: Some(&loaded.check.record_types) };
             for (name, h) in hash_module_with(&loaded.module, &res) {
@@ -384,6 +386,34 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
         }
         _ => unreachable!(),
+    }
+}
+
+fn build_bare(l: &Loaded, label: &str, args: &Args) -> ExitCode {
+    let Some(target) = args.val("--target") else {
+        eprintln!("build needs --target {}", sspur_native::bare::TARGETS.join("|"));
+        return ExitCode::from(2);
+    };
+    let Some(arch) = sspur_native::bare::arch_of(target) else {
+        eprintln!("unknown target '{target}' (use {})", sspur_native::bare::TARGETS.join(" or "));
+        return ExitCode::from(2);
+    };
+    if l.module.profile.as_deref() != Some("bare") {
+        eprintln!("{label}: only 'profile bare' modules can be built for {target}");
+        return ExitCode::FAILURE;
+    }
+    let out = std::path::PathBuf::from(args.val("-o").cloned().unwrap_or_else(|| "kernel.elf".into()));
+    let built = sspur_native::cgen::bare_c(&l.module, &l.check, arch).map_err(|e| format!("cannot compile for {target}: {e}")).and_then(|c| sspur_native::bare::build(&c, target, &out));
+    match built {
+        Ok(a) => {
+            println!("built {} ({target}; sources in {})", a.elf.display(), a.dir.display());
+            println!("boot: {}", sspur_native::bare::qemu_args(target, &a.elf.display().to_string()).join(" "));
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

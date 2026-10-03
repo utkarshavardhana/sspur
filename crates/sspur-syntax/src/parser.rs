@@ -621,15 +621,24 @@ impl Parser {
         let mut posts = Vec::new();
         let mut examples = Vec::new();
         let mut trusted = None;
+        let mut interrupt = None;
         loop {
             let unsafe_ahead = |p: &Self, i: usize| matches!(p.peek_at(i), Tok::Ident(u) if u == "unsafe") && matches!(p.peek_at(i + 1), Tok::Str(_));
-            if self.newline_then(|t| matches!(t, Tok::Kw("pre" | "post" | "ex"))).is_some() || (matches!(self.peek(), Tok::Newline(_)) && unsafe_ahead(self, 1)) {
+            let irq_ahead = |p: &Self, i: usize| matches!(p.peek_at(i), Tok::Ident(u) if u == "interrupt") && matches!(p.peek_at(i + 1), Tok::Int(_) | Tok::Ident(_));
+            if self.newline_then(|t| matches!(t, Tok::Kw("pre" | "post" | "ex"))).is_some() || (matches!(self.peek(), Tok::Newline(_)) && (unsafe_ahead(self, 1) || irq_ahead(self, 1))) {
                 self.bump();
             }
             if unsafe_ahead(self, 0) {
                 self.bump();
                 let Tok::Str(r) = self.bump().tok else { unreachable!() };
                 trusted = Some(r);
+            } else if irq_ahead(self, 0) {
+                self.bump();
+                interrupt = Some(match self.bump().tok {
+                    Tok::Int(n) => n.to_string(),
+                    Tok::Ident(v) => v,
+                    _ => unreachable!(),
+                });
             } else if self.eat_kw("pre") {
                 pres.push(self.refine_expr()?);
             } else if self.eat_kw("post") {
@@ -641,7 +650,7 @@ impl Parser {
             }
         }
         let body = Expr::new(ExprKind::Unit, self.prev_span());
-        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, trusted, body, span: start.to(self.prev_span()), sig_span, ext: None })
+        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, trusted, interrupt, body, span: start.to(self.prev_span()), sig_span, ext: None })
     }
 
     fn expr_seq(&mut self) -> PResult<Expr> {
@@ -1233,6 +1242,17 @@ impl Parser {
                     let span = e.span.to(self.prev_span());
                     e = Expr::new(ExprKind::Field(Box::new(e), name), span);
                 }
+            } else if matches!(&e.kind, ExprKind::Name(n) if n == "mmio") && self.is_sym("[") && matches!(self.peek_at(1), Tok::Ident(s) if is_upper(s)) {
+                self.bump();
+                let targs = vec![self.ty()?];
+                self.expect_sym("]")?;
+                let mut args = self.args()?;
+                if args.is_empty() {
+                    return self.err("E_PARSE_EXPECTED", "mmio[W](addr) needs an address");
+                }
+                let recv = args.remove(0);
+                let span = e.span.to(self.prev_span());
+                e = Expr::new(ExprKind::Method { recv: Box::new(recv), name: "mmio".into(), targs, args }, span);
             } else if self.is_sym("(") {
                 let args = self.args()?;
                 let span = e.span.to(self.prev_span());

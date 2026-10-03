@@ -1,0 +1,377 @@
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+pub const TARGETS: &[&str] = &["riscv64-qemu", "aarch64-qemu"];
+
+pub fn arch_of(target: &str) -> Option<&'static str> {
+    match target {
+        "riscv64-qemu" => Some("riscv64"),
+        "aarch64-qemu" => Some("aarch64"),
+        _ => None,
+    }
+}
+
+pub fn timer_irq(arch: &str) -> u32 {
+    if arch == "riscv64" { 7 } else { 27 }
+}
+
+pub fn qemu_args(target: &str, elf: &str) -> Vec<String> {
+    let base: &[&str] = match target {
+        "riscv64-qemu" => &["qemu-system-riscv64", "-machine", "virt", "-bios", "none", "-m", "64M"],
+        _ => &["qemu-system-aarch64", "-machine", "virt", "-cpu", "cortex-a53", "-m", "64M", "-semihosting"],
+    };
+    base.iter().map(|s| s.to_string()).chain(["-nographic", "-monitor", "none", "-no-reboot", "-kernel", elf].map(String::from)).collect()
+}
+
+pub const PRELUDE: &str = r#"#include <stdint.h>
+#include <stddef.h>
+typedef struct { int64_t code, func, clause, value, limit; int64_t* rbuf; int64_t rlen; void* err; int64_t err_type; } Status;
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#define LIKELY_(x) __builtin_expect(!!(x), 1)
+#define SS_DEPTH 4000
+#ifndef INT64_MIN
+#define INT64_MIN (-9223372036854775807LL - 1)
+#endif
+void* memcpy(void* d, const void* s, size_t n);
+void* memmove(void* d, const void* s, size_t n);
+void* memset(void* d, int c, size_t n);
+int memcmp(const void* a, const void* b, size_t n);
+void __attribute__((noreturn)) ss_halt(int64_t code);
+void __attribute__((noreturn)) ss_trap(int64_t code, int64_t func, int64_t clause, int64_t value);
+void ss_wait_irq(void);
+void ss_irq_enable(int64_t n);
+void ss_timer_start(int64_t t);
+int64_t ss_ticks(void);
+int64_t ss_tick_hz(void);
+void sspur_kmain(void);
+void sspur_irq(int64_t n);
+void sspur_on_trap(int64_t code);
+#define TRAPV(c, cl, val) ss_trap((c), FIDX, (cl), (int64_t)(val))
+typedef struct { int64_t len; const char* p; } Str;
+static inline Str str_lit(const char* p, int64_t n) { return (Str){n, p}; }
+static inline int str_eq(Str a, Str b) { return a.len == b.len && (a.p == b.p || memcmp(a.p, b.p, (size_t)a.len) == 0); }
+static inline int cmp_I(int64_t a, int64_t b) { return (a > b) - (a < b); }
+static inline int cmp_S(Str a, Str b) { int64_t n = a.len < b.len ? a.len : b.len; int c = n ? memcmp(a.p, b.p, (size_t)n) : 0; if (c) return c < 0 ? -1 : 1; return cmp_I(a.len, b.len); }
+static inline int64_t utf8_len(Str s) { int64_t n = 0; for (int64_t i = 0; i < s.len; i++) if (((unsigned char)s.p[i] & 0xC0) != 0x80) n++; return n; }
+typedef struct { int64_t v; int64_t code; } PowR;
+static inline PowR sspur_pow(int64_t b, int64_t e) {
+    if (e < 0) return (PowR){0, 6};
+    int64_t r = 1;
+    while (e > 0) {
+        if (e & 1) { if (__builtin_mul_overflow(r, b, &r)) return (PowR){0, 1}; }
+        e >>= 1;
+        if (e > 0 && __builtin_mul_overflow(b, b, &b)) return (PowR){0, 1};
+    }
+    return (PowR){r, 0};
+}
+void* memcpy(void* d, const void* s, size_t n) { unsigned char* a = d; const unsigned char* b = s; while (n--) *a++ = *b++; return d; }
+void* memmove(void* d, const void* s, size_t n) { unsigned char* a = d; const unsigned char* b = s; if (a < b) { while (n--) *a++ = *b++; } else { while (n--) a[n] = b[n]; } return d; }
+void* memset(void* d, int c, size_t n) { unsigned char* a = d; while (n--) *a++ = (unsigned char)c; return d; }
+int memcmp(const void* x, const void* y, size_t n) { const unsigned char* a = x; const unsigned char* b = y; for (size_t i = 0; i < n; i++) if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1; return 0; }
+static int ss_trapping;
+void __attribute__((noreturn)) ss_trap(int64_t code, int64_t func, int64_t clause, int64_t value) {
+    (void)func; (void)clause; (void)value;
+    if (!ss_trapping) { ss_trapping = 1; sspur_on_trap(code); }
+    ss_halt(64 + code);
+}
+void ss_start(void) { sspur_kmain(); ss_halt(0); }
+"#;
+
+const RT_RISCV: &str = r#"#define SS_CLINT 0x2000000UL
+#define SS_MTIMECMP (*(volatile uint64_t*)(SS_CLINT + 0x4000))
+#define SS_MTIME (*(volatile uint64_t*)(SS_CLINT + 0xBFF8))
+void __attribute__((noreturn)) ss_halt(int64_t code) {
+    *(volatile uint32_t*)0x100000UL = code == 0 ? 0x5555u : (uint32_t)(((uint64_t)code & 0xffff) << 16) | 0x3333u;
+    for (;;) __asm__ volatile("wfi");
+}
+void ss_wait_irq(void) { __asm__ volatile("wfi"); }
+void ss_irq_enable(int64_t n) {
+    if (n >= 0 && n < 64) { uint64_t m = 1ULL << n; __asm__ volatile("csrs mie, %0" :: "r"(m)); }
+    __asm__ volatile("csrsi mstatus, 8");
+}
+int64_t ss_ticks(void) { return (int64_t)SS_MTIME; }
+int64_t ss_tick_hz(void) { return 10000000; }
+void ss_timer_start(int64_t t) { SS_MTIMECMP = SS_MTIME + (uint64_t)(t < 1 ? 1 : t); ss_irq_enable(7); }
+void ss_trap_dispatch(uint64_t cause) {
+    if ((int64_t)cause < 0) {
+        uint64_t n = cause & 0xffff;
+        if (n == 7) SS_MTIMECMP = UINT64_MAX;
+        sspur_irq((int64_t)n);
+        return;
+    }
+    ss_trapping = 1;
+    ss_halt(63);
+}
+"#;
+
+const RT_AARCH64: &str = r#"#define SS_GICD 0x08000000UL
+#define SS_GICC 0x08010000UL
+static inline void ss_w32(uintptr_t a, uint32_t v) { *(volatile uint32_t*)a = v; }
+static inline uint32_t ss_r32(uintptr_t a) { return *(volatile uint32_t*)a; }
+static int ss_halting;
+void __attribute__((noreturn)) ss_halt(int64_t code) {
+    if (!ss_halting) {
+        ss_halting = 1;
+        static uint64_t blk[2];
+        blk[0] = 0x20026; blk[1] = (uint64_t)code;
+        register uint64_t x0 __asm__("x0") = 0x18;
+        register uint64_t* x1 __asm__("x1") = blk;
+        __asm__ volatile("hlt #0xf000" : "+r"(x0) : "r"(x1) : "memory");
+    }
+    register uint64_t p0 __asm__("x0") = 0x84000008;
+    __asm__ volatile("hvc #0" : "+r"(p0) :: "memory");
+    for (;;) __asm__ volatile("wfi");
+}
+void ss_wait_irq(void) { __asm__ volatile("wfi"); }
+void ss_irq_enable(int64_t n) {
+    if (n < 0 || n >= 1020) return;
+    ss_w32(SS_GICD, 1);
+    ss_w32(SS_GICC + 0x4, 0xff);
+    ss_w32(SS_GICC, 1);
+    *(volatile uint8_t*)(SS_GICD + 0x400 + (uintptr_t)n) = 0x80;
+    if (n >= 32) *(volatile uint8_t*)(SS_GICD + 0x800 + (uintptr_t)n) = 1;
+    ss_w32(SS_GICD + 0x100 + ((uintptr_t)n / 32) * 4, 1u << (n % 32));
+    __asm__ volatile("msr daifclr, #2" ::: "memory");
+}
+int64_t ss_ticks(void) { uint64_t v; __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(v)); return (int64_t)v; }
+int64_t ss_tick_hz(void) { uint64_t v; __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(v)); return (int64_t)v; }
+void ss_timer_start(int64_t t) {
+    uint64_t v = (uint64_t)(t < 1 ? 1 : t);
+    __asm__ volatile("msr cntv_tval_el0, %0; msr cntv_ctl_el0, %1; isb" :: "r"(v), "r"(1ULL));
+    ss_irq_enable(27);
+}
+void ss_irq_c(void) {
+    uint32_t iar = ss_r32(SS_GICC + 0xC);
+    uint32_t id = iar & 0x3ff;
+    if (id >= 1020) return;
+    if (id == 27) __asm__ volatile("msr cntv_ctl_el0, %0; isb" :: "r"(0ULL));
+    sspur_irq((int64_t)id);
+    ss_w32(SS_GICC + 0x10, iar);
+}
+void ss_sync_c(void) { ss_trapping = 1; ss_halt(63); }
+"#;
+
+const START_RISCV: &str = r#".section .text.start, "ax"
+.globl _start
+_start:
+  csrw mie, zero
+  la sp, __stack_top
+  la t0, __bss_start
+  la t1, __bss_end
+1:
+  bgeu t0, t1, 2f
+  sd zero, 0(t0)
+  addi t0, t0, 8
+  j 1b
+2:
+  la t0, ss_trap_entry
+  csrw mtvec, t0
+  call ss_start
+3:
+  wfi
+  j 3b
+
+.text
+.balign 4
+ss_trap_entry:
+  addi sp, sp, -128
+  sd ra, 0(sp)
+  sd t0, 8(sp)
+  sd t1, 16(sp)
+  sd t2, 24(sp)
+  sd a0, 32(sp)
+  sd a1, 40(sp)
+  sd a2, 48(sp)
+  sd a3, 56(sp)
+  sd a4, 64(sp)
+  sd a5, 72(sp)
+  sd a6, 80(sp)
+  sd a7, 88(sp)
+  sd t3, 96(sp)
+  sd t4, 104(sp)
+  sd t5, 112(sp)
+  sd t6, 120(sp)
+  csrr a0, mcause
+  call ss_trap_dispatch
+  ld ra, 0(sp)
+  ld t0, 8(sp)
+  ld t1, 16(sp)
+  ld t2, 24(sp)
+  ld a0, 32(sp)
+  ld a1, 40(sp)
+  ld a2, 48(sp)
+  ld a3, 56(sp)
+  ld a4, 64(sp)
+  ld a5, 72(sp)
+  ld a6, 80(sp)
+  ld a7, 88(sp)
+  ld t3, 96(sp)
+  ld t4, 104(sp)
+  ld t5, 112(sp)
+  ld t6, 120(sp)
+  addi sp, sp, 128
+  mret
+"#;
+
+const START_AARCH64: &str = r#".section .text.start, "ax"
+.globl _start
+_start:
+  mrs x0, mpidr_el1
+  and x0, x0, #3
+  cbz x0, 2f
+1:
+  wfe
+  b 1b
+2:
+  ldr x0, =__stack_top
+  mov sp, x0
+  ldr x0, =__bss_start
+  ldr x1, =__bss_end
+3:
+  cmp x0, x1
+  b.hs 4f
+  str xzr, [x0], #8
+  b 3b
+4:
+  ldr x0, =ss_vectors
+  msr vbar_el1, x0
+  isb
+  bl ss_start
+5:
+  wfi
+  b 5b
+
+.macro SS_ENTRY fn
+  sub sp, sp, #176
+  stp x0, x1, [sp, #0]
+  stp x2, x3, [sp, #16]
+  stp x4, x5, [sp, #32]
+  stp x6, x7, [sp, #48]
+  stp x8, x9, [sp, #64]
+  stp x10, x11, [sp, #80]
+  stp x12, x13, [sp, #96]
+  stp x14, x15, [sp, #112]
+  stp x16, x17, [sp, #128]
+  stp x18, x29, [sp, #144]
+  str x30, [sp, #160]
+  bl \fn
+  ldp x0, x1, [sp, #0]
+  ldp x2, x3, [sp, #16]
+  ldp x4, x5, [sp, #32]
+  ldp x6, x7, [sp, #48]
+  ldp x8, x9, [sp, #64]
+  ldp x10, x11, [sp, #80]
+  ldp x12, x13, [sp, #96]
+  ldp x14, x15, [sp, #112]
+  ldp x16, x17, [sp, #128]
+  ldp x18, x29, [sp, #144]
+  ldr x30, [sp, #160]
+  add sp, sp, #176
+  eret
+.endm
+
+.text
+ss_irq_entry:
+  SS_ENTRY ss_irq_c
+ss_sync_entry:
+  SS_ENTRY ss_sync_c
+
+.balign 2048
+ss_vectors:
+.irp kind, s, i, s, s, s, i, s, s, s, i, s, s, s, i, s, s
+.balign 128
+.ifc \kind, i
+  b ss_irq_entry
+.else
+  b ss_sync_entry
+.endif
+.endr
+"#;
+
+fn linker_script(base: &str) -> String {
+    format!(
+        "ENTRY(_start)
+SECTIONS {{
+  . = {base};
+  .text : {{ KEEP(*(.text.start)) *(.text .text.*) }}
+  .rodata : {{ *(.rodata .rodata.* .srodata .srodata.*) }}
+  .data : {{ *(.data .data.* .sdata .sdata.*) }}
+  .bss (NOLOAD) : {{ . = ALIGN(8); __bss_start = .; *(.bss .bss.* .sbss .sbss.* COMMON) . = ALIGN(8); __bss_end = .; }}
+  .stack (NOLOAD) : {{ . = ALIGN(16); . += 0x100000; __stack_top = .; }}
+  /DISCARD/ : {{ *(.comment) *(.eh_frame) *(.note*) }}
+}}
+"
+    )
+}
+
+pub struct Toolchain {
+    pub cc: PathBuf,
+    pub ld: PathBuf,
+}
+
+fn runs(p: &Path, args: &[&str]) -> Option<String> {
+    let o = Command::new(p).args(args).output().ok()?;
+    o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+}
+
+fn candidates(env: &str, names: &[&str]) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::env::var_os(env).map(PathBuf::from).into_iter().collect();
+    for n in names {
+        v.push(PathBuf::from(n));
+    }
+    v
+}
+
+pub fn toolchain(arch: &str) -> Result<Toolchain, String> {
+    let cc = candidates("SSPUR_BARE_CC", &["clang", "/opt/homebrew/opt/llvm/bin/clang", "/usr/local/opt/llvm/bin/clang", "/usr/bin/clang"])
+        .into_iter()
+        .find(|c| runs(c, &["-print-targets"]).is_some_and(|t| t.lines().any(|l| l.trim_start().starts_with(arch))))
+        .ok_or_else(|| format!("toolchain not found: no clang with the {arch} backend (install LLVM, e.g. 'brew install llvm', or set SSPUR_BARE_CC)"))?;
+    let ld = candidates("SSPUR_LLD", &["ld.lld", "/opt/homebrew/opt/lld/bin/ld.lld", "/opt/homebrew/opt/llvm/bin/ld.lld", "/usr/local/opt/lld/bin/ld.lld", "/usr/local/opt/llvm/bin/ld.lld"])
+        .into_iter()
+        .find(|c| runs(c, &["--version"]).is_some())
+        .ok_or("toolchain not found: no ld.lld (install it, e.g. 'brew install lld', or set SSPUR_LLD)")?;
+    Ok(Toolchain { cc, ld })
+}
+
+pub struct Artifacts {
+    pub elf: PathBuf,
+    pub dir: PathBuf,
+}
+
+pub fn build(c_body: &str, target: &str, out: &Path) -> Result<Artifacts, String> {
+    let arch = arch_of(target).ok_or_else(|| format!("unknown target '{target}' (use {})", TARGETS.join(" or ")))?;
+    let tc = toolchain(arch)?;
+    let dir = PathBuf::from(format!("{}.build", out.display()));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let (rt, start, base, flags): (&str, &str, &str, &[&str]) = match arch {
+        "riscv64" => (RT_RISCV, START_RISCV, "0x80000000", &["--target=riscv64-unknown-elf", "-march=rv64imac_zicsr", "-mabi=lp64", "-mcmodel=medany", "-mno-relax"]),
+        _ => (RT_AARCH64, START_AARCH64, "0x40100000", &["--target=aarch64-none-elf", "-mgeneral-regs-only", "-mstrict-align"]),
+    };
+    let c_src = match c_body.strip_prefix(PRELUDE) {
+        Some(rest) => format!("{PRELUDE}{rt}{rest}"),
+        None => format!("{PRELUDE}{rt}{c_body}"),
+    };
+    let c = dir.join("kernel.c");
+    let s = dir.join("start.S");
+    let ld = dir.join("link.ld");
+    let write = |p: &Path, t: &str| std::fs::write(p, t).map_err(|e| format!("cannot write {}: {e}", p.display()));
+    write(&c, &c_src)?;
+    write(&s, start)?;
+    write(&ld, &linker_script(base))?;
+    let common = ["-ffreestanding", "-nostdlib", "-fno-stack-protector", "-fno-pic", "-fno-exceptions", "-fno-asynchronous-unwind-tables", "-O2", "-w", "-c"];
+    let run = |cmd: &mut Command, what: &str| -> Result<(), String> {
+        let o = cmd.output().map_err(|e| format!("cannot run {what}: {e}"))?;
+        if o.status.success() {
+            Ok(())
+        } else {
+            Err(format!("{what} failed: {}", String::from_utf8_lossy(&o.stderr).lines().take(8).collect::<Vec<_>>().join(" | ")))
+        }
+    };
+    let co = dir.join("kernel.o");
+    let so = dir.join("start.o");
+    run(Command::new(&tc.cc).args(flags).args(common).arg("-o").arg(&co).arg(&c), "clang")?;
+    run(Command::new(&tc.cc).args(flags).args(common).arg("-o").arg(&so).arg(&s), "clang (start.S)")?;
+    run(Command::new(&tc.ld).arg("-T").arg(&ld).arg("--gc-sections").arg("-o").arg(out).arg(&so).arg(&co), "ld.lld")?;
+    Ok(Artifacts { elf: out.to_path_buf(), dir })
+}

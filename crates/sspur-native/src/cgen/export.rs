@@ -183,6 +183,7 @@ impl Cx<'_> {
     case {T_NOMATCH}: x_put(&b, "no match arm"); break;
     case {T_REPEAT}: x_put(&b, "repeat count must be >= 0"); break;
     case 15: x_put(&b, "out of memory"); break;
+    case 19: x_put(&b, "byte index "); sb_int(&b, st->value); x_put(&b, " out of bounds for a string of "); sb_int(&b, st->clause); x_put(&b, " bytes"); break;
     case {T_GUESS}: x_put(&b, "guess confidence "); sb_f64d(&b, bitsd(st->value)); x_put(&b, " is outside [0, 1]"); break;
     case {T_MSG}: if (st->rbuf) sb_put(&b, (const char*)st->rbuf, st->rlen); break;
     case {T_RAISE}: x_put(&b, "unhandled error: "); switch (st->err_type) {{ {raised}default: break; }} break;

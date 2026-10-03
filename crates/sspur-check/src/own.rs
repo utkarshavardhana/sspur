@@ -99,7 +99,7 @@ fn root_name(e: &Expr) -> Option<&str> {
 }
 
 pub fn analyze(m: &Module, record_types: &HashMap<(u32, u32), String>, user_methods: &HashSet<(u32, u32)>, expr_types: &HashMap<ExprKey, Type>) -> Output {
-    let sys = m.profile.as_deref() == Some("sys");
+    let sys = matches!(m.profile.as_deref(), Some("sys" | "bare"));
     let mut a = A {
         res: HashMap::new(),
         fns: HashMap::new(),

@@ -134,6 +134,11 @@ impl Interp {
             Value::Int(n) => match name {
                 "abs" => n.checked_abs().map(Value::Int).map_or_else(|| trap("integer overflow"), Ok),
                 "to_f64" => Ok(Value::Float(n as f64)),
+                "band" => Ok(Value::Int(n & int(&a[0])?)),
+                "bor" => Ok(Value::Int(n | int(&a[0])?)),
+                "bxor" => Ok(Value::Int(n ^ int(&a[0])?)),
+                "shl" => Ok(Value::Int(u32::try_from(int(&a[0])?).ok().filter(|k| *k < 64).map_or(0, |k| ((n as u64) << k) as i64))),
+                "shr" => Ok(Value::Int(u32::try_from(int(&a[0])?).ok().filter(|k| *k < 64).map_or(0, |k| ((n as u64) >> k) as i64))),
                 _ => trap(format!("no method '{name}' on Int")),
             },
             Value::Float(x) => match name {
@@ -296,6 +301,14 @@ fn str_method(name: &str, x: &str, a: Vec<Value>) -> R {
     Ok(match name {
         "len" => Value::Int(x.chars().count() as i64),
         "is_empty" => Value::Bool(x.is_empty()),
+        "byte_len" => Value::Int(x.len() as i64),
+        "byte" => {
+            let i = int(&a[0])?;
+            match usize::try_from(i).ok().and_then(|k| x.as_bytes().get(k)) {
+                Some(b) => Value::Int(i64::from(*b)),
+                None => return trap(format!("byte index {i} out of bounds for a string of {} bytes", x.len())),
+            }
+        }
         "take" => Value::str(&x.chars().take(int(&a[0])?.max(0) as usize).collect::<String>()),
         "drop" => Value::str(&x.chars().skip(int(&a[0])?.max(0) as usize).collect::<String>()),
         "reverse" => Value::str(&x.chars().rev().collect::<String>()),

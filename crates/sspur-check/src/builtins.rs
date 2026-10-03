@@ -64,6 +64,8 @@ pub const METHODS: &[(&str, &str)] = &[
     ("Str", "repeat(s: Str, n: Int) -> Str"),
     ("Str", "to_int(s: Str) -> Opt[Int]"),
     ("Str", "is_alpha(s: Str) -> Bool"),
+    ("Str", "byte_len(s: Str) -> Int"),
+    ("Str", "byte(s: Str, i: Int) -> Int"),
     ("Opt", "or_[A](o: Opt[A], d: A) -> A"),
     ("Opt", "is_some[A](o: Opt[A]) -> Bool"),
     ("Opt", "get[A](o: Opt[A]) -> A"),
@@ -94,6 +96,11 @@ pub const METHODS: &[(&str, &str)] = &[
     ("Guess", "accept[A](g: Guess[A], reason: Str) -> A"),
     ("Int", "abs(n: Int) -> Int"),
     ("Int", "to_f64(n: Int) -> F64"),
+    ("Int", "band(a: Int, b: Int) -> Int"),
+    ("Int", "bor(a: Int, b: Int) -> Int"),
+    ("Int", "bxor(a: Int, b: Int) -> Int"),
+    ("Int", "shl(a: Int, n: Int) -> Int"),
+    ("Int", "shr(a: Int, n: Int) -> Int"),
     ("F64", "abs(n: F64) -> F64"),
     ("F64", "round(n: F64) -> Int"),
     ("F64", "floor(n: F64) -> Int"),
@@ -122,3 +129,20 @@ pub const SYS_METHODS: &[(&str, &str)] = &[
     ("Ptr", "offset[T](p: Ptr[T], n: Int) -> Ptr[T] ! unsafe"),
     ("Ptr", "is_null[T](p: Ptr[T]) -> Bool"),
 ];
+
+pub const BARE_GLOBALS: &[&str] = &[
+    "halt(code: Int) -> Unit ! mmio",
+    "wait_irq() -> Unit ! mmio",
+    "irq_enable(n: Int) -> Unit ! mmio",
+    "timer_start(ticks: Int) -> Unit ! mmio",
+    "ticks() -> Int ! mmio",
+    "tick_hz() -> Int",
+    "arch() -> Str",
+];
+
+pub const BARE_METHODS: &[(&str, &str)] = &[
+    ("Mmio", "read[W](r: Mmio[W]) -> Int ! mmio"),
+    ("Mmio", "write[W](r: Mmio[W], v: Int) -> Unit ! mmio"),
+];
+
+pub const BARE_NAMES: &[&str] = &["halt", "wait_irq", "irq_enable", "timer_start", "ticks", "tick_hz", "arch"];

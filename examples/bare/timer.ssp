@@ -1,0 +1,31 @@
+profile bare
+
+fn putc(c: Int) ! mmio, div
+= if arch() == "riscv64" then do
+    lsr = mmio[U8](0x10000005)
+    while lsr.read.band(0x20) == 0
+      ()
+    mmio[U8](0x10000000).write(c)
+  else do
+    fr = mmio[U32](0x09000018)
+    while fr.read.band(0x20) != 0
+      ()
+    mmio[U32](0x09000000).write(c)
+
+fn puts(s: Str) ! mmio, div
+= do
+  for i in 0..s.byte_len
+    putc(s.byte(i))
+
+fn on_tick() ! mmio, div
+  interrupt timer
+= do
+  puts("timer interrupt\n")
+  halt(0)
+
+fn main() ! mmio, div
+= do
+  puts("arming timer\n")
+  timer_start(tick_hz() / 100)
+  while true
+    wait_irq()

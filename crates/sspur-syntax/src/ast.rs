@@ -125,6 +125,7 @@ pub struct FnDef {
     pub posts: Vec<Expr>,
     pub examples: Vec<Expr>,
     pub trusted: Option<String>,
+    pub interrupt: Option<String>,
     pub body: Expr,
     pub span: Span,
     pub sig_span: Span,

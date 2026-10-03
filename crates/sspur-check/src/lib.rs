@@ -1,3 +1,4 @@
+mod bare;
 mod builtins;
 pub mod own;
 mod deploy;
@@ -9,6 +10,7 @@ use sspur_syntax::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 pub use deploy::{db_op, HTTP_METHODS};
 pub use types::{Row, Type};
+pub use builtins::BARE_NAMES;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Diag {
@@ -165,6 +167,7 @@ struct Checker {
     clause_depth: u32,
     alias_stack: Vec<String>,
     sys: bool,
+    bare: bool,
     task_bases: Vec<usize>,
     task_depth: u32,
     cur_rparams: Vec<String>,
@@ -250,7 +253,8 @@ pub fn check(m: &Module) -> CheckOutput {
         clause_effects: HashMap::new(),
         clause_depth: 0,
         alias_stack: vec![],
-        sys: m.profile.as_deref() == Some("sys"),
+        sys: matches!(m.profile.as_deref(), Some("sys" | "bare")),
+        bare: m.profile.as_deref() == Some("bare"),
         task_bases: vec![],
         task_depth: 0,
         cur_rparams: vec![],
@@ -264,6 +268,16 @@ pub fn check(m: &Module) -> CheckOutput {
             c.globals.insert(name, s);
         }
         for (recv, src) in builtins::SYS_METHODS {
+            let (name, s) = c.builtin_scheme(src);
+            c.methods.insert((recv.to_string(), name), s);
+        }
+    }
+    if c.bare {
+        for src in builtins::BARE_GLOBALS {
+            let (name, s) = c.builtin_scheme(src);
+            c.globals.insert(name, s);
+        }
+        for (recv, src) in builtins::BARE_METHODS {
             let (name, s) = c.builtin_scheme(src);
             c.methods.insert((recv.to_string(), name), s);
         }
@@ -325,16 +339,21 @@ pub fn check(m: &Module) -> CheckOutput {
             }
         }
     }
-    if m.profile.as_deref().is_some_and(|p| p != "app" && p != "sys") {
+    if m.profile.as_deref().is_some_and(|p| !matches!(p, "app" | "sys" | "bare")) {
         c.diags.push(Diag {
             code: "E_UNSUPPORTED".into(),
             severity: "error",
             def: None,
             span: [0, 0],
             msg: format!("profile '{}' is not supported by this compiler version yet", m.profile.as_deref().unwrap()),
-            hint: Some("only the 'app' and 'sys' profiles are implemented".into()),
+            hint: Some("the implemented profiles are 'app', 'sys' and 'bare'".into()),
             fix: vec![],
         });
+    }
+    if c.bare {
+        let tables = bare::Tables { exprs: &c.expr_types, fns: &fn_types, records: &records, sums: &sums, newtypes: &newtypes };
+        let found = bare::check(m, &tables);
+        c.diags.extend(found);
     }
     CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info, stores: c.stores }
 }
@@ -497,6 +516,16 @@ impl Checker {
                         self.push_diag("E_PROFILE", "error", *span, format!("'{}' types need 'profile sys'", if name == "own" { "own" } else { name.as_str() }), Some("add 'profile sys' as the first line".into()), vec![]);
                     }
                     return conv.into_iter().next().unwrap_or_else(Type::unit);
+                }
+                if name == "Mmio" && !self.types.contains_key(name) {
+                    if !self.bare {
+                        self.push_diag("E_PROFILE", "error", *span, "MMIO registers need 'profile bare'".into(), Some("add 'profile bare' as the first line".into()), vec![]);
+                    }
+                    if conv.len() != 1 {
+                        self.err("E_TYPE_ARITY", *span, format!("Mmio takes 1 type argument(s), got {}", conv.len()));
+                        return self.fresh();
+                    }
+                    return Type::Con(name.clone(), conv);
                 }
                 if name == "Ptr" && !self.types.contains_key(name) {
                     if !self.sys {
@@ -703,6 +732,9 @@ impl Checker {
             return;
         }
         self.cur_def = Some(f.name.clone());
+        if f.interrupt.is_some() && !self.bare {
+            self.push_diag("E_PROFILE", "error", f.sig_span, "interrupt handlers need 'profile bare'".into(), Some("add 'profile bare' as the first line".into()), vec![]);
+        }
         let scheme = self.fns[&f.name].clone();
         self.tparams = scheme.tparams.clone();
         self.cur_rparams = scheme.rparams.clone();
@@ -830,8 +862,12 @@ impl Checker {
         self.frames.push(Frame::new());
         let ty = self.infer(&t.body, Some(&Type::bool()));
         self.expect(&Type::bool(), &ty, t.body.span);
-        if let Some((span, _)) = self.frames.pop().unwrap().get("unsafe") {
+        let frame = self.frames.pop().unwrap();
+        if let Some((span, _)) = frame.get("unsafe") {
             self.push_diag("E_UNSAFE", "error", *span, "raw memory operations are unsafe".into(), Some("move them into a function that declares '! unsafe' or has an 'unsafe \"reason\"' clause".into()), vec![]);
+        }
+        if let Some((span, _)) = frame.get("mmio") {
+            self.push_diag("E_PROFILE_BARE", "error", *span, "tests run on the host and can't perform 'mmio'".into(), Some("test the pure logic, and boot the kernel with 'sspur build --target' for hardware access".into()), vec![]);
         }
         self.scopes.pop();
         self.check_chans();
@@ -1156,6 +1192,28 @@ impl Checker {
         }
     }
 
+    fn infer_mmio(&mut self, recv: &Expr, width: &Ty, args: &[Expr], span: Span) -> Type {
+        if !self.bare {
+            self.push_diag("E_PROFILE", "error", span, "mmio needs 'profile bare'".into(), Some("add 'profile bare' as the first line".into()), vec![]);
+        }
+        let at = self.infer(recv, Some(&Type::int()));
+        self.expect(&Type::int(), &at, recv.span);
+        for a in args {
+            self.infer(a, None);
+        }
+        if !args.is_empty() {
+            self.err("E_ARITY", span, "mmio[W](addr) takes one address".into());
+        }
+        let w = match width {
+            Ty::Named { name, args, .. } if args.is_empty() && matches!(name.as_str(), "U8" | "U16" | "U32" | "U64") => name.clone(),
+            _ => {
+                self.push_diag("E_MMIO_WIDTH", "error", span, format!("mmio register width must be U8, U16, U32 or U64, not {}", printer::ty(width)), None, vec![]);
+                "U32".into()
+            }
+        };
+        Type::Con("Mmio".into(), vec![Type::con(&w)])
+    }
+
     fn recv_fits(&mut self, s: &Scheme, rt: &Type) -> bool {
         let snapshot = (self.subst.clone(), self.rsubst.clone());
         let (params, ..) = self.instantiate(s);
@@ -1250,6 +1308,7 @@ impl Checker {
                 self.method(x, xt, f, &[], e.span)
             }
             ExprKind::Method { recv, name, args, .. } if self.is_db_recv(recv) => self.infer_db(name, args, e.span),
+            ExprKind::Method { recv, name, targs, args } if name == "mmio" && targs.len() == 1 => self.infer_mmio(recv, &targs[0], args, e.span),
             ExprKind::Method { recv, name, targs, args } => {
                 if !targs.is_empty() {
                     self.err("E_UNSUPPORTED", e.span, "explicit type arguments on methods are not supported yet".into());

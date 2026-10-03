@@ -428,6 +428,12 @@ impl Interp {
                     Err(m) => Err(Rc::new(Value::str(&format!("{prog}: {m}")))),
                 })
             }
+            "exit" => {
+                use std::io::Write;
+                let code = int(&a[0])?;
+                let _ = std::io::stdout().flush();
+                std::process::exit(code as i32)
+            }
             "eprint" => {
                 use std::io::Write;
                 let _ = writeln!(std::io::stderr(), "{}", s(&a[0])?);

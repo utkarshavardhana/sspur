@@ -416,3 +416,18 @@ test t_ok = spec(\"03\") == \"005\" and not bit(3) and step(2) == 6 and fused(2)
     ];
     assert_trap_parity("std_extras", src, &expected);
 }
+
+#[test]
+fn exit_sets_the_status_in_both_tiers() {
+    if std::process::Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let path = std::env::temp_dir().join(format!("sspur_exit_{}.ssp", std::process::id()));
+    std::fs::write(&path, "fn main() -> Unit ! log, proc\n= do\n  log(\"bye\")\n  exit(3)\n  log(\"never\")\n").unwrap();
+    for mode in ["--interp", "--native"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_sspur")).arg("run").arg(mode).arg(&path).output().unwrap();
+        assert_eq!(out.status.code(), Some(3), "{mode}");
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "bye\n", "{mode}");
+    }
+    std::fs::remove_file(&path).ok();
+}

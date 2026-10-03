@@ -1,10 +1,10 @@
 # ADR 0018: Standard library toward C++ coverage
 
-Status: accepted, 2026-10-03
+Status: accepted, 2026-10-03; second round 2026-10-04
 
 ## Context
 
-Phase 6's exit criterion includes "Std library matches C++ coverage", and doc 05 section 14 lists the scope. Before this change the builtins covered the core of `<vector>`, `<map>`, `<optional>` and `<string>`, with no sets, queues, heaps, file or clock access, float math beyond `sqrt`, or serialization. This ADR adds the largest missing pieces in both tiers (interpreter and native C) with identical results, and records what is still missing.
+Phase 6's exit criterion includes "Std library matches C++ coverage", and doc 05 section 14 lists the scope. Before this change the builtins covered the core of `<vector>`, `<map>`, `<optional>` and `<string>`, with no sets, queues, heaps, file or clock access, float math beyond `sqrt`, or serialization. This ADR adds the missing pieces in both tiers (interpreter and native C) with identical results, in two rounds, and records what is still missing.
 
 ## Decisions
 
@@ -24,6 +24,18 @@ Phase 6's exit criterion includes "Std library matches C++ coverage", and doc 05
 | 12 | `Res` gained native support (constructors, `ok`/`err` patterns, `is_ok is_err get or map`) and `Res`, `Set`, `Heap` values cross the interpreter/native boundary | `Res` is the result of every fallible std call, so without it those functions would stay in the interpreter |
 | 13 | Native runtime helpers live in `cgen/std_rt.c` in named sections with dependencies and are emitted only when a program uses them | The generated C for every `bench/native` program is byte-identical to before this change, so benchmarks cannot get slower. A unit test compiles each section alone |
 | 14 | Service endpoints may perform `time` and `env`; `fs` and `io` stay `E_EP_EFFECT` | Lambda has clocks and environment variables without extra IAM, but neither a durable filesystem nor stdin. `deploy plan` builds the bootstrap with the std runtime |
+| 15 | Second round (2026-10-04), same rules: every new type is a builtin type that a user type of the same name shadows (`HashMap HashSet Bits Time Duration BigInt Dec Regex`), and its C runtime is a named section in `std_rt.c` emitted only on use. Pure algorithms that both tiers need for display or JSON (calendar math, bignum digits) live once in Rust (`sspur-native/src/chrono.rs`, `bigint.rs`) and once in C | A second implementation in C is the cost of native code; keeping the Rust side in one crate keeps the interpreter, JSON and the value boundary agreeing |
+| 16 | `HashMap[K, V]` and `HashSet[T]` are persistent hash array mapped tries natively: 32-way nodes with separate data and child bitmaps, keys hashed with the type's hash helper and compared with SSPUR equality, collision nodes after 64 bits, path copying on `put`/`remove`, singleton children folded back on delete. `items keys values`, display, comparison and JSON are in key order (sorted on demand), so the iteration order never depends on the hash. The interpreter stores them as its ordered `Map`/`Set` values | Lookups on 100k string keys are 5.5x faster than the treap `Map` (1M lookups: 38 ms against 211 ms); inserts are about 2x slower because every insert copies a wide path. Sorted iteration makes both tiers print the same thing |
+| 17 | `Regex` is a Pike VM over code points (no backtracking, linear in the text): literals, `.`, classes with ranges and negation, `\d \w \s` (ASCII) and their negations, anchors `^ $ \b \B`, groups, `(?:...)`, alternation, greedy and lazy `* + ? {n} {n,} {n,m}`. Matching is leftmost-first like Perl; captures follow the automaton, so a repeated group that can match empty keeps its last non-empty capture (RE2 semantics). `regex(p)` returns `Res[Regex, Str]` with one of ten messages. Limits: repetition counts up to 1000, 100 groups, 20,000 instructions. Positions from `span` are in characters | Backtracking engines have exponential worst cases; one automaton design is small enough to write twice (Rust and C) with the same instruction set and thread priorities. 319 of 320 generated cases match Python's `re` in ASCII mode; the exception is the empty-loop capture case above |
+| 18 | Format specs follow Python's mini-language: `[[fill]align][sign][#][0][width][,][.precision][type]` with `d x X o b` for `Int`, `f e E %` for `F64`, `s` for `Str`; negative hex is sign and magnitude; widths count characters; exponents have at least two digits. A bad spec traps with `bad format spec '...'` | Agents already know the syntax. Floats use `snprintf` in C and the exact formatter in Rust, which agree on rounding |
+| 19 | `Time` and `Duration` are milliseconds in an `i64`, UTC only, with proleptic Gregorian calendar math (Hinnant's algorithms), `add_months` clamping the day, ISO 8601 parse (`YYYY-MM-DD[THH:MM[:SS[.fff]]][Z|±HH[:MM]]`) and print, a strftime subset, and Go-style duration text (`1h30m0s`). Constructors that can be invalid return `Opt`; overflow traps | Milliseconds match `now_ms`. Time zones need a tz database, which is out of scope like locale |
+| 20 | `BigInt` is sign and 32-bit limbs with schoolbook multiply and Knuth's algorithm D; division truncates like `Int`. `Dec` is a `BigInt` mantissa with a scale (0 to 10,000): `add sub mul` are exact, `div(d, scale)` and `round(scale)` round half to even. Equal values with different scales compare by value first, then by scale (`1.5 < 1.50`), as in Java's `BigDecimal`. Results above 2^22 limbs trap `out of memory`. The constructor is `decimal(s)` because `dec` is a keyword | Exact money arithmetic without floats; any correct algorithm gives the same digits, and both tiers use the same one anyway |
+| 21 | `Bits` is a fixed-size bitset (`bits(n)`), immutable like every SSPUR value, so `set clear flip` copy `n/64` words. Out-of-range indexes and size mismatches trap. JSON is the C++ `to_string` form (`"01001"`, bit 0 last) | Matches `std::bitset` semantics |
+| 22 | Random distributions are pure functions of the seed like `rand`: `rand_normal` (Box-Muller from two uniform draws), `rand_uniform`, `rand_exp`, `rand_bool`, and `List.shuffle(seed)` (Fisher-Yates) and `choice(seed)`. The C runtime splits `a * b + c` into separate statements so clang cannot fuse it into `fma` | Bit-identical results need identical rounding; contraction would change the last bit |
+| 23 | `range(a, b, step)` is lazy where pipelines are fused: natively `for x in range(...)` is a counting loop and `range(...).map(f).filter(g).sum` (or `.len`, or collected) runs without building the range. Pipelines keep the 2^26-element limit so the interpreter, which materializes them, traps at the same size. Interpreter `for` loops over `a..b` and `range(...)` no longer build a list | Laziness that changes results would break tier parity; the loop forms are lazy in both tiers |
+| 24 | New effects and calls: `proc` for `run_cmd(prog, args, input)` (PATH search, stdin, captured stdout and stderr, status or 128 + signal) and `exit(code)`; `fs` gains `read_bytes write_bytes mkdir mkdir_all remove_dir rename exists is_dir file_size modified_ms`; `io` gains `eprint`. Errors reuse the errno table plus `byte out of range` and `directory not empty`. `proc` is not available to service endpoints | Child processes are an effect like any other I/O, so the checker shows them in signatures and IAM never has to guess |
+| 25 | Math adds the rest of `<cmath>` that programs use: `sinh cosh tanh asinh acosh atanh cbrt exp2 expm1 log1p erf erfc gamma lgamma fmod remainder copysign nextafter fdim fma is_inf`, globals `pi() euler() inf() nan()`, and `Int` `rotl rotr byteswap saturating_add/sub/mul`. The interpreter calls these from libm through `extern "C"`, as native code does | Same function on the same machine gives the same bits |
+| 26 | Algorithms add `upper_bound take_while drop_while rotate merge next_perm`. `<`, `<=`, `>` and `>=` work on `Time`, `Duration`, `BigInt` and `Dec` | Closes the `<algorithm>` gaps (`nth_element` and `partial_sort` are `sort` plus `take`) |
 
 ## Coverage against the C++ standard library
 
@@ -31,38 +43,38 @@ Phase 6's exit criterion includes "Std library matches C++ coverage", and doc 05
 |---|---|---|
 | Sequence containers (`vector array deque list forward_list span`) | `List` with O(1) views, amortized O(1) `push` and `push_front`, `pop_front`, `pop_back`, `slice` | Covered |
 | Ordered associative (`map set multimap multiset`) | `Map`, `Set` (persistent treaps) | Covered except multi-containers (use `Map[K, List[V]]`) |
-| Unordered associative (`unordered_map unordered_set`) | Ordered `Map`/`Set` only | Missing (hash tables) |
+| Unordered associative (`unordered_map unordered_set`) | `HashMap`, `HashSet` (persistent HAMT natively) | Covered |
 | Adaptors (`stack queue priority_queue`) | `List`, `Heap` | Covered |
-| `bitset`, `flat_map`, `mdspan` | `Int` bit ops only | Missing |
-| Algorithms (`<algorithm>`, `<numeric>`) | sort, stable sort, comparator sort, `sort_by`, binary search, lower bound, partition, unique, reverse, min/max/clamp, find, any/all, fold/sum/scan, counts, group_by, chunks/windows, zip/enumerate, set algebra | Mostly covered; missing `upper_bound`, `nth_element`, `partial_sort`, permutations, `rotate`, shuffle, `merge` |
-| Ranges and iterators | Eager list methods, generators (`yield`) for laziness, `range(a, b, step)` | Partial (no lazy view adaptors) |
+| `bitset`, `flat_map`, `mdspan` | `Bits`; `Map` for sorted maps | Partial (no `flat_map` layout, no `mdspan`) |
+| Algorithms (`<algorithm>`, `<numeric>`) | sort, stable sort, comparator sort, `sort_by`, binary search, lower and upper bound, partition, unique, reverse, rotate, merge, next permutation, shuffle, min/max/clamp, find, any/all, take/drop while, fold/sum/scan, counts, group_by, chunks/windows, zip/enumerate, set algebra | Covered (`nth_element`, `partial_sort` as `sort` plus `take`) |
+| Ranges and iterators | Eager list methods fused natively without intermediates, lazy `range` loops and pipelines, generators (`yield`) | Partial (no lazy view values to compose and pass around) |
 | Utilities (`optional variant tuple expected any functional`) | `Opt`, sums, tuples, `Res`, lambdas and function values | Covered except `any` |
 | Strings (`string string_view charconv`) | `Str` methods, views via `take`/`drop`, `to_int`, `to_f64`, `.str`, `StrBuf` | Covered |
-| Formatting (`format print`) | Interpolation, `fmt(digits)`, `pad_left`/`pad_right` | Partial (no format specs for width, hex, exponent) |
+| Formatting (`format print`) | Interpolation, `.format(spec)` on `Int`, `F64`, `Str`, `fmt(digits)`, `pad_left`/`pad_right` | Covered |
 | Text encoding (`codecvt`, `text_encoding`) | UTF-8 `bytes codes from_bytes from_codes`, `byte_len byte(i)` | Covered for UTF-8 |
-| Regex (`regex`) | None | Missing |
-| Math (`cmath numbers`) | 18 new `F64` functions plus `abs round floor sqrt` | Partial (no hyperbolic, `cbrt`, `fma`, `erf`, gamma, constants; `cbrt` via `extern fn`) |
-| Bits and integers (`bit numeric` gcd/lcm, C++26 saturating) | `band bor bxor shl shr bnot popcount clz ctz gcd lcm`, wrapping and checked ops, trapping overflow by default | Covered except `rotl rotr byteswap` and saturating ops |
-| Random (`random`) | Seeded splitmix64: int, range, float | Partial (no distributions or engines) |
-| Big and exact numbers (`complex valarray ratio`, C++26 decimals) | None | Missing |
-| Time (`chrono`) | `now_ms`, `mono_ns`, `sleep_ms` | Partial (no durations, calendars, time zones) |
-| Files and streams (`fstream filesystem iostream`) | `read_file write_file append_file remove_file list_dir`, `read_line(s)`, `log` for stdout | Partial (no binary I/O, seek, metadata, directories, rename, stderr) |
-| Process and environment (`cstdlib` getenv, argv, `system`) | `env_var`, `args` | Partial (no exit codes or child processes) |
+| Regex (`regex`) | `Regex` Pike VM: match, find, span, find_all, captures, replace, split | Covered by a different model (no backreferences or lookaround, which need backtracking) |
+| Math (`cmath numbers`) | 44 `F64` methods, `pi euler inf nan` | Covered except the C++17 special functions (Bessel, elliptic, Legendre) and `frexp`/`ldexp` |
+| Bits and integers (`bit numeric`, C++26 saturating) | Bitwise ops, `popcount clz ctz rotl rotr byteswap gcd lcm`, wrapping, checked and saturating ops | Covered |
+| Random (`random`) | Seeded splitmix64: int, range, float, normal, uniform, exponential, Bernoulli, shuffle, choice | Partial (no Poisson, binomial or gamma distributions, one engine) |
+| Big and exact numbers (`complex valarray ratio`, C++26 decimals) | `BigInt`, `Dec` | Partial (no complex numbers, `valarray` or `ratio`) |
+| Time (`chrono`) | `Time`, `Duration`, UTC calendar parts, ISO 8601, weekday, month arithmetic, `now`, `mono_ns`, `sleep_ms` | Partial (UTC only, no time zones) |
+| Files and streams (`fstream filesystem iostream`) | Text and binary whole-file read and write, append, `list_dir mkdir mkdir_all remove_dir rename exists is_dir file_size modified_ms`, stdin lines, `log`, `eprint` | Partial (no open file handles or seek, no copy, symlinks or permissions) |
+| Process and environment (`cstdlib` getenv, argv, `system`, `exit`) | `env_var`, `args`, `run_cmd`, `exit` | Covered |
 | Concurrency (`thread atomic mutex future`) | `par`, `Atomic[Int]`, channels (ADR 0013) | Covered by a different model; no mutexes by design |
 | Memory (`memory` allocators, smart pointers) | GC values, `res` types, `Ptr` (ADR 0012) | Covered by a different model |
 | Errors (`exception system_error stdexcept`) | `fail[E]`, `Res`, traps | Covered |
-| Locale (`locale`) | None | Missing |
+| Locale (`locale`) | None | Missing, by decision: SSPUR text is UTF-8 and every operation is locale-independent so results never depend on the machine; locale-aware collation and formatting need CLDR data that would differ between tiers and hosts |
 | Serialization (not in C++) | JSON encode and decode for every data type | Beyond C++ |
 
-Summary: of 23 C++ areas, 10 are covered (some by SSPUR's own model), 8 are partial and 5 are missing. Coverage is not yet C++ parity.
+Summary: of 23 C++ areas, 16 are covered (three by SSPUR's own model), 6 are partial and 1 is missing (locale, by decision). Most of what remains is breadth inside covered-in-spirit areas (more distributions, complex numbers, time zones, file handles, lazy view values).
 
 ## Verification
 
-- Suite programs `tests/programs/std_collections.ssp`, `std_text.ssp`, `std_math.ssp`, `std_io.ssp`, `std_json.ssp` (70 tests: Dijkstra on `Heap` and `Set`, BFS on a `List` queue, word top-k, config parsing, a formatted table built with `StrBuf`, compound interest, seeded dice, file round trips, JSON round trips with errors) pass in both tiers with every function native.
-- `std_library_traps_are_identical_in_both_tiers` in `crates/sspur-cli/tests/suite.rs` checks nine trap and raise messages in both tiers.
-- `sspur fuzz --differential` is clean on the five programs and on a 33-function file that feeds random inputs straight into the new builtins (with `--edge` too). Differential fuzzing now skips functions with `fs`, `io` or `time`, whose results depend on the world.
+- Suite programs `tests/programs/std_collections.ssp`, `std_text.ssp`, `std_math.ssp`, `std_io.ssp`, `std_json.ssp` (first round) and `std_cmath.ssp`, `std_format.ssp`, `std_random.ssp`, `std_files.ssp`, `std_proc.ssp`, `std_time.ssp`, `std_bits.ssp`, `std_hash.ssp`, `std_bignum.ssp`, `std_regex.ssp`, `std_ranges.ssp` (second round, 210 tests in all) pass in both tiers with every function native.
+- `std_library_traps_are_identical_in_both_tiers` and `std_extras_traps_are_identical_in_both_tiers` in `crates/sspur-cli/tests/suite.rs` check 20 trap messages in both tiers; `exit_sets_the_status_in_both_tiers` checks `exit`.
+- `sspur fuzz --differential` is clean on all 16 std programs, with and without `--edge`. The second-round programs include generators that build format specs and regex patterns from integers, multi-limb `BigInt` division, and typed inputs (the fuzzer now generates `Time`, `Duration`, `Bits`, `HashMap`, `HashSet`, `BigInt` and `Dec`). A `post` property over 3,000 cases checks `q * d + r == n` for `divmod`, and a C harness under ASan and UBSan checks the HAMT against a reference with 200,000 random inserts and deletes under four weak hash functions, including full 64-bit collisions and persistence of old versions.
 - The eval corpus is unchanged: 199/199 programs identical, 258/258 functions native. `bench/native` generated C is byte-identical.
 
 ## Not yet
 
-Hash maps and sets, regex, format specifiers, durations and calendars, binary file I/O and directory operations, child processes, big integers and decimals, random distributions, lazy ranges, and the `cmath` remainder.
+Time zones, file handles and seek, more random distributions, complex numbers, lazy view values, regex backreferences (by design), and locale (by decision).

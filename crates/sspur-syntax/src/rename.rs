@@ -72,6 +72,9 @@ impl Renamer<'_> {
                 if let (Some(t), false) = (&mut f.ret, shadow) {
                     self.ty(t);
                 }
+                for e in &mut f.effects {
+                    self.hit(&mut e.name);
+                }
                 if !shadow {
                     for e in &mut f.effects {
                         e.args.iter_mut().for_each(|t| self.ty(t));
@@ -96,6 +99,19 @@ impl Renamer<'_> {
             Def::Test(t) => {
                 self.hit(&mut t.name);
                 self.expr(&mut t.body, &mut vec![]);
+            }
+            Def::Effect(e) => {
+                self.hit(&mut e.name);
+                let shadow = e.params.iter().any(|p| p.name == self.from);
+                for op in &mut e.ops {
+                    self.hit(&mut op.name);
+                    if !shadow {
+                        op.params.iter_mut().for_each(|p| self.ty(&mut p.ty));
+                        if let Some(r) = &mut op.ret {
+                            self.ty(r);
+                        }
+                    }
+                }
             }
         }
     }
@@ -197,7 +213,7 @@ impl Renamer<'_> {
                     scope.pop();
                 }
             }
-            ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) => {
+            ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
                 self.expr(s, scope);
                 for a in arms {
                     let mut binds = HashSet::new();

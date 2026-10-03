@@ -221,6 +221,7 @@ fn kind_tag(k: &ExprKind) -> u8 {
         ExprKind::Return(_) => 35,
         ExprKind::With(..) => 36,
         ExprKind::Table(_) => 37,
+        ExprKind::Handle(..) => 38,
     }
 }
 
@@ -247,6 +248,7 @@ fn count_spans(m: &Module) -> HashSet<(u32, u32, u8)> {
                 f.pres.iter().chain(&f.posts).chain(&f.examples).chain([&f.body]).for_each(&mut visit);
             }
             Def::Test(t) => visit(&t.body),
+            Def::Effect(_) => {}
             Def::Type(t) => match &t.body {
                 TypeBody::Alias(_, Some(r)) => visit(r),
                 TypeBody::Record(fs) => fs.iter().filter_map(|f| f.refine.as_ref()).for_each(&mut visit),
@@ -773,7 +775,7 @@ impl<'a> Enc<'a> {
                 self.assume(&any);
                 r
             }
-            ExprKind::Catch(..) | ExprKind::Table(_) => {
+            ExprKind::Catch(..) | ExprKind::Table(_) | ExprKind::Handle(..) => {
                 self.fail();
                 self.fresh_e(e)
             }

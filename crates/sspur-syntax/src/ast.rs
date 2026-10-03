@@ -25,6 +25,7 @@ pub enum Def {
     Type(TypeDef),
     Fn(FnDef),
     Test(TestDef),
+    Effect(EffectDef),
 }
 
 impl Def {
@@ -33,6 +34,7 @@ impl Def {
             Def::Type(t) => &t.name,
             Def::Fn(f) => &f.name,
             Def::Test(t) => &t.name,
+            Def::Effect(e) => &e.name,
         }
     }
 
@@ -41,6 +43,7 @@ impl Def {
             Def::Type(t) => t.span,
             Def::Fn(f) => f.span,
             Def::Test(t) => t.span,
+            Def::Effect(e) => e.span,
         }
     }
 }
@@ -116,6 +119,21 @@ pub struct FnDef {
     pub body: Expr,
     pub span: Span,
     pub sig_span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectDef {
+    pub name: String,
+    pub params: Vec<TParam>,
+    pub ops: Vec<OpSig>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpSig {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub ret: Option<Ty>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -214,6 +232,7 @@ pub enum ExprKind {
     If(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
     Match(Box<Expr>, Vec<Arm>),
     Catch(Box<Expr>, Vec<Arm>),
+    Handle(Box<Expr>, Vec<Arm>),
     Block(Vec<Stmt>),
     Record { ctor: Option<String>, fields: Vec<(String, Expr)> },
     List(Vec<Expr>),

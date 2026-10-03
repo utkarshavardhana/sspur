@@ -185,22 +185,22 @@ fn apply(file: Option<&String>) -> ExitCode {
 
 fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
     let json = args.has("--json");
-    let (label, loaded) = match args.pos.get(1) {
+    let (label, text, loaded) = match args.pos.get(1) {
         Some(path) => match std::fs::read_to_string(path) {
-            Ok(src) => (path.clone(), load_src(src)),
+            Ok(src) => (path.clone(), src.clone(), load_src(src)),
             Err(e) => {
                 eprintln!("cannot read {path}: {e}");
                 return ExitCode::from(2);
             }
         },
         None => match cwd_store() {
-            Some(s) => ("HEAD".to_string(), s.load_head()),
+            Some(s) => ("HEAD".to_string(), String::new(), s.load_head()),
             None => return no_store(),
         },
     };
     let loaded = match loaded {
         Ok(l) => l,
-        Err(d) => return fail_diags("", &label, &d, json),
+        Err(d) => return fail_diags(&text, &label, &d, json),
     };
     if cmd == "fmt" {
         let out = print_module(&loaded.module);
@@ -357,7 +357,7 @@ pub fn default_interp(l: &Loaded) -> Interp {
 }
 
 pub fn interp(l: &Loaded) -> Interp {
-    let mut it = Interp::new(&l.module, l.check.record_types.clone(), l.check.user_methods.clone());
+    let mut it = Interp::new(&l.module, l.check.record_types.clone(), l.check.user_methods.clone(), l.check.gen_loops.clone());
     it.float_sums = l
         .check
         .expr_types

@@ -38,7 +38,7 @@ pub fn children(e: &Expr) -> Vec<&Expr> {
                 out.push(f);
             }
         }
-        ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) => {
+        ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
             out.push(s);
             for a in arms {
                 if let Some(g) = &a.guard {
@@ -135,7 +135,7 @@ pub fn walk_expr_mut(e: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
                 walk_expr_mut(x, f);
             }
         }
-        ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) => {
+        ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
             walk_expr_mut(s, f);
             for a in arms {
                 if let Some(g) = &mut a.guard {
@@ -207,6 +207,18 @@ pub fn strip_spans(m: &mut Module) {
                 }
             }
             Def::Fn(f) => strip_fn(f),
+            Def::Effect(e) => {
+                e.span = z;
+                e.params.iter_mut().for_each(strip_tparam);
+                for op in &mut e.ops {
+                    for p in &mut op.params {
+                        strip_ty(&mut p.ty);
+                    }
+                    if let Some(r) = &mut op.ret {
+                        strip_ty(r);
+                    }
+                }
+            }
             Def::Test(t) => {
                 t.span = z;
                 strip_expr(&mut t.body);

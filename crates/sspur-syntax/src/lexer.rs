@@ -21,7 +21,7 @@ pub struct Token {
 }
 
 pub const KEYWORDS: &[&str] = &[
-    "fn", "type", "test", "var", "for", "in", "if", "then", "else", "match", "catch", "do", "raise",
+    "fn", "type", "test", "var", "for", "in", "if", "then", "else", "match", "catch", "handle", "do", "raise",
     "return", "with", "profile", "derive", "where", "pre", "post", "dec", "cost", "new", "true",
     "false", "and", "or", "not", "par", "ex", "while", "rule", "trait", "impl", "store", "svc", "queue", "effect",
 ];

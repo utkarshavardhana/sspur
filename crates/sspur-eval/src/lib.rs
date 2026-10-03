@@ -14,6 +14,47 @@ pub enum Ctrl {
     Raise(Value),
     Return(Value),
     Trap(String),
+    Abort(u64, Value),
+    Escape(u64, Box<Ctrl>),
+}
+
+enum Clause {
+    Resume(Value, Option<Post>),
+    Done(Value),
+}
+
+struct Post {
+    pat: Pat,
+    rest: Vec<Stmt>,
+    env: Rc<Env>,
+}
+
+#[derive(Clone)]
+enum HKind {
+    Arms(*const [Arm], Rc<Env>),
+    Loop(*const Pat, *const Expr, Rc<Env>),
+}
+
+struct HFrame {
+    id: u64,
+    kind: HKind,
+    posts: Vec<Post>,
+}
+
+impl HFrame {
+    fn handles(&self, op: &str) -> bool {
+        match &self.kind {
+            HKind::Arms(arms, _) => unsafe { &**arms }.iter().any(|a| matches!(&a.pat, Pat::Ctor { name, .. } if name == op && name != "return")),
+            HKind::Loop(..) => op == "yield",
+        }
+    }
+}
+
+fn is_resume(e: &Expr) -> Option<&[Expr]> {
+    match &e.kind {
+        ExprKind::Call(f, args) if matches!(&f.kind, ExprKind::Name(n) if n == "resume") => Some(args),
+        _ => None,
+    }
 }
 
 pub type R<T = Value> = Result<T, Ctrl>;
@@ -46,6 +87,10 @@ pub struct Interp {
     native: Option<sspur_native::Compiled>,
     pub bypass_native: Cell<bool>,
     pub float_sums: HashSet<(u32, u32)>,
+    ops: HashSet<String>,
+    gen_loops: HashSet<(u32, u32)>,
+    handlers: RefCell<Vec<HFrame>>,
+    next_handler: Cell<u64>,
 }
 
 const MAX_DEPTH: u32 = 20_000;
@@ -59,7 +104,7 @@ fn ty_name(t: &Ty) -> Option<&str> {
 }
 
 impl Interp {
-    pub fn new(m: &Module, record_types: HashMap<(u32, u32), String>, user_methods: HashSet<(u32, u32)>) -> Self {
+    pub fn new(m: &Module, record_types: HashMap<(u32, u32), String>, user_methods: HashSet<(u32, u32)>, gen_loops: HashSet<(u32, u32)>) -> Self {
         let mut it = Interp {
             fns: HashMap::new(),
             tests: vec![],
@@ -79,6 +124,10 @@ impl Interp {
             native: None,
             bypass_native: Cell::new(false),
             float_sums: HashSet::new(),
+            ops: ["yield", "log"].iter().map(|s| s.to_string()).collect(),
+            gen_loops,
+            handlers: RefCell::new(vec![]),
+            next_handler: Cell::new(0),
         };
         for d in &m.defs {
             match d {
@@ -90,6 +139,7 @@ impl Interp {
                     it.types.insert(t.name.clone(), t.clone());
                     it.add_type(t)
                 }
+                Def::Effect(e) => it.ops.extend(e.ops.iter().map(|o| o.name.clone())),
             }
         }
         it
@@ -184,7 +234,7 @@ impl Interp {
     }
 
     pub fn call_fn(&self, f: &FnDef, args: Vec<Value>) -> R {
-        if let Some(n) = self.native.as_ref().filter(|_| !self.bypass_native.get()) {
+        if let Some(n) = self.native.as_ref().filter(|_| !self.bypass_native.get() && !self.log_handled()) {
             let raw: Option<Vec<i64>> = args
                 .iter()
                 .map(|a| match a {
@@ -331,6 +381,169 @@ impl Interp {
         }
     }
 
+    fn log_handled(&self) -> bool {
+        self.handlers.borrow().iter().any(|f| f.handles("log"))
+    }
+
+    pub(crate) fn perform(&self, op: &str, args: Vec<Value>) -> R {
+        let found = self.handlers.borrow().iter().rposition(|f| f.handles(op));
+        let Some(i) = found else {
+            if op == "log" {
+                self.emit(args[0].to_string());
+                return Ok(Value::Unit);
+            }
+            return trap(format!("unhandled effect operation '{op}'"));
+        };
+        let tail = self.handlers.borrow_mut().split_off(i);
+        let (id, kind) = (tail[0].id, tail[0].kind.clone());
+        let r = self.run_clause(&kind, op, args);
+        self.handlers.borrow_mut().extend(tail);
+        match r {
+            Ok(Clause::Resume(v, post)) => {
+                if let Some(p) = post {
+                    self.handlers.borrow_mut()[i].posts.push(p);
+                }
+                Ok(v)
+            }
+            Ok(Clause::Done(v)) => Err(Ctrl::Abort(id, v)),
+            Err(c @ (Ctrl::Raise(_) | Ctrl::Return(_))) => Err(Ctrl::Escape(id, Box::new(c))),
+            Err(c) => Err(c),
+        }
+    }
+
+    fn run_clause(&self, kind: &HKind, op: &str, args: Vec<Value>) -> R<Clause> {
+        match kind {
+            HKind::Loop(pat, body, env) => {
+                let (pat, body) = unsafe { (&**pat, &**body) };
+                let inner = Env::child(env);
+                if self.bind_pat(pat, &args[0], &inner) {
+                    self.eval(body, &inner)?;
+                }
+                Ok(Clause::Resume(Value::Unit, None))
+            }
+            HKind::Arms(arms, env) => {
+                let arms = unsafe { &**arms };
+                let Some(arm) = arms.iter().find(|a| matches!(&a.pat, Pat::Ctor { name, .. } if name == op)) else { return trap(format!("no arm for '{op}'")) };
+                let inner = Env::child(env);
+                if let Pat::Ctor { args: CtorArgs::Positional(ps), .. } = &arm.pat {
+                    for (p, v) in ps.iter().zip(&args) {
+                        self.bind_pat(p, v, &inner);
+                    }
+                }
+                self.eval_tail(&arm.body, &inner)
+            }
+        }
+    }
+
+    fn resume_value(&self, args: &[Expr], env: &Rc<Env>) -> R {
+        match args.first() {
+            Some(a) => self.eval(a, env),
+            None => Ok(Value::Unit),
+        }
+    }
+
+    fn eval_tail(&self, e: &Expr, env: &Rc<Env>) -> R<Clause> {
+        if let Some(args) = is_resume(e) {
+            return Ok(Clause::Resume(self.resume_value(args, env)?, None));
+        }
+        match &e.kind {
+            ExprKind::Block(stmts) => {
+                let env = Env::child(env);
+                for s in stmts {
+                    if let Stmt::Fn(f) = s {
+                        env.define(&f.name, Value::LocalFn(Rc::new((**f).clone()), env.clone()));
+                    }
+                }
+                let mut last = Value::Unit;
+                for (i, s) in stmts.iter().enumerate() {
+                    let resumed = match s {
+                        Stmt::Expr(x) if i + 1 == stmts.len() => return self.eval_tail(x, &env),
+                        Stmt::Expr(x) => is_resume(x).map(|a| (Pat::Wild, a)),
+                        Stmt::Let(p, x) => is_resume(x).map(|a| (p.clone(), a)),
+                        _ => None,
+                    };
+                    if let Some((pat, args)) = resumed {
+                        let v = self.resume_value(args, &env)?;
+                        return Ok(Clause::Resume(v, Some(Post { pat, rest: stmts[i + 1..].to_vec(), env })));
+                    }
+                    last = self.exec(s, &env)?;
+                }
+                Ok(Clause::Done(last))
+            }
+            ExprKind::If(c, t, f) => {
+                if self.truthy(c, env)? {
+                    self.eval_tail(t, env)
+                } else if let Some(f) = f {
+                    self.eval_tail(f, env)
+                } else {
+                    Ok(Clause::Done(Value::Unit))
+                }
+            }
+            ExprKind::Match(s, arms) => {
+                let v = self.eval(s, env)?;
+                for a in arms {
+                    let inner = Env::child(env);
+                    if !self.bind_pat(&a.pat, &v, &inner) {
+                        continue;
+                    }
+                    if let Some(g) = &a.guard
+                        && !self.truthy(g, &inner)? {
+                            continue;
+                        }
+                    return self.eval_tail(&a.body, &inner);
+                }
+                trap(format!("no match arm for {v}"))
+            }
+            _ => Ok(Clause::Done(self.eval(e, env)?)),
+        }
+    }
+
+    fn push_handler(&self, kind: HKind) -> (u64, usize) {
+        let id = self.next_handler.get();
+        self.next_handler.set(id + 1);
+        let mut hs = self.handlers.borrow_mut();
+        hs.push(HFrame { id, kind, posts: vec![] });
+        (id, hs.len() - 1)
+    }
+
+    fn pop_handler(&self, base: usize) -> Vec<Post> {
+        let mut hs = self.handlers.borrow_mut();
+        hs.truncate(base + 1);
+        hs.pop().map(|f| f.posts).unwrap_or_default()
+    }
+
+    fn eval_handle(&self, body: &Expr, arms: &[Arm], env: &Rc<Env>) -> R {
+        let (id, base) = self.push_handler(HKind::Arms(arms as *const [Arm], env.clone()));
+        let r = self.eval(body, env);
+        let posts = self.pop_handler(base);
+        let mut x = match r {
+            Ok(v) => match arms.iter().find(|a| matches!(&a.pat, Pat::Ctor { name, .. } if name == "return")) {
+                Some(Arm { pat: Pat::Ctor { args: CtorArgs::Positional(ps), .. }, body, .. }) => {
+                    let inner = Env::child(env);
+                    if let Some(p) = ps.first() {
+                        self.bind_pat(p, &v, &inner);
+                    }
+                    self.eval(body, &inner)?
+                }
+                _ => v,
+            },
+            Err(Ctrl::Abort(i, v)) if i == id => v,
+            Err(Ctrl::Escape(i, c)) if i == id => return Err(*c),
+            Err(c) => return Err(c),
+        };
+        for p in posts.into_iter().rev() {
+            let inner = Env::child(&p.env);
+            if !self.bind_pat(&p.pat, &x, &inner) {
+                return trap(format!("pattern {} did not match {x}", printer::pat(&p.pat)));
+            }
+            x = Value::Unit;
+            for s in &p.rest {
+                x = self.exec(s, &inner)?;
+            }
+        }
+        Ok(x)
+    }
+
     fn eval_args(&self, args: &[Expr], env: &Rc<Env>) -> R<Vec<Value>> {
         args.iter().map(|a| self.eval(a, env)).collect()
     }
@@ -401,6 +614,10 @@ impl Interp {
                             let a = self.eval_args(args, env)?;
                             return self.call_fn(&fd, a);
                         }
+                        if self.ops.contains(n) {
+                            let a = self.eval_args(args, env)?;
+                            return self.perform(n, a);
+                        }
                         if builtins::is_global(n) {
                             let a = self.eval_args(args, env)?;
                             return self.call_global(n, a);
@@ -460,6 +677,7 @@ impl Interp {
                 },
                 other => other,
             },
+            ExprKind::Handle(body, arms) => self.eval_handle(body, arms, env),
             ExprKind::Block(stmts) => {
                 let env = Env::child(env);
                 for s in stmts {
@@ -582,7 +800,7 @@ impl Interp {
         if let Some(f) = self.fns.get(n) {
             return Ok(Value::Func(f.clone()));
         }
-        if builtins::is_global(n) {
+        if builtins::is_global(n) || self.ops.contains(n) {
             return Ok(Value::Builtin(n.into()));
         }
         trap(format!("unbound name '{n}'"))
@@ -617,6 +835,17 @@ impl Interp {
                     self.eval(body, &Env::child(env))?;
                 }
                 Ok(Value::Unit)
+            }
+            Stmt::For(p, it, body) if self.gen_loops.contains(&(it.span.start, it.span.end)) => {
+                let (id, base) = self.push_handler(HKind::Loop(p as *const Pat, body as *const Expr, env.clone()));
+                let r = self.eval(it, env);
+                self.pop_handler(base);
+                match r {
+                    Ok(_) => Ok(Value::Unit),
+                    Err(Ctrl::Abort(i, _)) if i == id => Ok(Value::Unit),
+                    Err(Ctrl::Escape(i, c)) if i == id => Err(*c),
+                    Err(c) => Err(c),
+                }
             }
             Stmt::For(p, it, body) => {
                 let Value::List(xs) = self.eval(it, env)? else { return trap("for expects a List") };
@@ -786,5 +1015,7 @@ pub fn describe(c: Ctrl) -> String {
         Ctrl::Trap(m) => m,
         Ctrl::Raise(v) => format!("unhandled error: {v}"),
         Ctrl::Return(_) => "return outside of a function".into(),
+        Ctrl::Abort(..) => "effect handler result escaped its handle".into(),
+        Ctrl::Escape(_, c) => describe(*c),
     }
 }

@@ -56,6 +56,7 @@ pub fn root_hash(entries: &[(String, String)]) -> String {
 struct Hasher<'a> {
     defs: BTreeMap<String, &'a Def>,
     ctor_owner: HashMap<String, (String, usize)>,
+    op_owner: HashMap<String, (String, usize)>,
     res: &'a Resolution<'a>,
     done: HashMap<String, [u8; 32]>,
 }
@@ -104,7 +105,15 @@ impl<'a> Hasher<'a> {
                 }
             }
         }
-        Hasher { defs: m.defs.iter().map(|d| (d.name().to_string(), d)).collect(), ctor_owner, res, done: HashMap::new() }
+        let mut op_owner = HashMap::new();
+        for d in &m.defs {
+            if let Def::Effect(e) = d {
+                for (i, op) in e.ops.iter().enumerate() {
+                    op_owner.insert(op.name.clone(), (e.name.clone(), i));
+                }
+            }
+        }
+        Hasher { defs: m.defs.iter().map(|d| (d.name().to_string(), d)).collect(), ctor_owner, op_owner, res, done: HashMap::new() }
     }
 
     fn deps(&self, d: &Def) -> Vec<String> {
@@ -112,7 +121,7 @@ impl<'a> Hasher<'a> {
         let mut add = |n: &str| {
             if self.defs.contains_key(n) {
                 out.insert(n.to_string());
-            } else if let Some((t, _)) = self.ctor_owner.get(n) {
+            } else if let Some((t, _)) = self.ctor_owner.get(n).or_else(|| self.op_owner.get(n)) {
                 out.insert(t.clone());
             }
         };
@@ -137,12 +146,19 @@ impl<'a> Hasher<'a> {
                 }
                 tys.extend(f.ret.iter());
                 for e in &f.effects {
+                    add(&e.name);
                     tys.extend(e.args.iter());
                 }
                 exprs.extend(f.pres.iter().chain(f.posts.iter()).chain(f.examples.iter()));
                 exprs.push(&f.body);
             }
             Def::Test(t) => exprs.push(&t.body),
+            Def::Effect(e) => {
+                for op in &e.ops {
+                    tys.extend(op.params.iter().map(|p| &p.ty));
+                    tys.extend(op.ret.iter());
+                }
+            }
         }
         while let Some(t) = tys.pop() {
             match t {
@@ -169,7 +185,7 @@ impl<'a> Hasher<'a> {
                             add(n);
                         }
                     }
-                    ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, &mut add)),
+                    ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) | ExprKind::Handle(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, &mut add)),
                     ExprKind::Table(rows) => rows.iter().flat_map(|r| r.cells.iter()).for_each(|c| {
                         if let Cell::Pat(p) = c {
                             pat_names(p, &mut add)
@@ -243,6 +259,16 @@ impl<'a> Hasher<'a> {
         let Some((owner, idx)) = self.ctor_owner.get(name) else { return false };
         enc.tag(b'C');
         self.global_ref(enc, owner, group);
+        enc.uint(*idx as u64);
+        true
+    }
+
+    fn op_ref(&self, enc: &mut Enc, name: &str, group: &HashMap<String, usize>) -> bool {
+        let Some((owner, idx)) = self.op_owner.get(name) else { return false };
+        enc.tag(b'O');
+        if !self.global_ref(enc, owner, group) {
+            enc.str(owner);
+        }
         enc.uint(*idx as u64);
         true
     }
@@ -337,6 +363,23 @@ impl<'a> Hasher<'a> {
                 enc.tag(b'X');
                 self.expr(&mut enc, &t.body, group);
             }
+            Def::Effect(e) => {
+                enc.tag(b'E');
+                enc.tparams = e.params.iter().map(|p| p.name.clone()).collect();
+                enc.uint(e.params.len() as u64);
+                enc.uint(e.ops.len() as u64);
+                for op in &e.ops {
+                    enc.str(&op.name);
+                    enc.uint(op.params.len() as u64);
+                    for p in &op.params {
+                        self.ty(&mut enc, &p.ty, group);
+                    }
+                    match &op.ret {
+                        Some(t) => self.ty(&mut enc, t, group),
+                        None => enc.tag(b'u'),
+                    }
+                }
+            }
         }
         enc.buf
     }
@@ -407,7 +450,7 @@ impl<'a> Hasher<'a> {
         if let Some(i) = enc.locals.iter().rev().position(|l| l == n) {
             enc.tag(b'l');
             enc.uint(i as u64);
-        } else if self.ctor_ref(enc, n, group) || self.global_ref(enc, n, group) {
+        } else if self.ctor_ref(enc, n, group) || self.op_ref(enc, n, group) || self.global_ref(enc, n, group) {
         } else {
             enc.tag(b'g');
             enc.str(n);
@@ -508,8 +551,12 @@ impl<'a> Hasher<'a> {
                     None => enc.tag(b'u'),
                 }
             }
-            ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) => {
-                enc.tag(if matches!(e.kind, ExprKind::Match(..)) { b'M' } else { b'K' });
+            ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
+                enc.tag(match e.kind {
+                    ExprKind::Match(..) => b'M',
+                    ExprKind::Catch(..) => b'K',
+                    _ => b'H',
+                });
                 self.expr(enc, s, group);
                 enc.uint(arms.len() as u64);
                 for a in arms {
@@ -721,7 +768,7 @@ impl<'a> Hasher<'a> {
             }
             Pat::Ctor { name, args } => {
                 enc.tag(b'c');
-                if !(self.ctor_ref(enc, name, group) || self.global_ref(enc, name, group)) {
+                if !(self.ctor_ref(enc, name, group) || self.op_ref(enc, name, group) || self.global_ref(enc, name, group)) {
                     enc.tag(b'g');
                     enc.str(name);
                 }

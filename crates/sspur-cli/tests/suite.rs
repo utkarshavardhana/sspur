@@ -31,7 +31,7 @@ fn run_suite() {
         let res = Resolution { user_methods: Some(&out.user_methods), record_types: Some(&out.record_types) };
         assert_eq!(hash_module_with(&module, &res), hash_module_with(&module, &res));
 
-        let interp = Interp::new(&module, out.record_types.clone(), out.user_methods.clone());
+        let interp = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone());
         let results = interp.run_tests();
         assert!(!results.is_empty(), "{} has no tests", path.display());
         for (name, r) in &results {
@@ -49,7 +49,7 @@ fn contract_violations_trap_with_context() {
     let src = "type Pos = Int where _ > 0\nfn half(x: Pos) -> Int\n  post r * 2 == x\n= x / 2\ntest odd = half(3) == 1\ntest neg = half(-2) == -1";
     let m = parse(src).unwrap();
     let out = check(&m);
-    let results = Interp::new(&m, out.record_types, out.user_methods).run_tests();
+    let results = Interp::new(&m, out.record_types, out.user_methods, out.gen_loops).run_tests();
     assert!(results[0].1.as_ref().unwrap_err().contains("post r * 2 == x"));
     assert!(results[1].1.as_ref().unwrap_err().contains("type Pos"));
 }
@@ -59,7 +59,7 @@ fn integer_overflow_traps_instead_of_wrapping() {
     let src = "fn big() -> Int\n= 9223372036854775807 + 1\ntest t = big() == 0";
     let m = parse(src).unwrap();
     let out = check(&m);
-    let results = Interp::new(&m, out.record_types, out.user_methods).run_tests();
+    let results = Interp::new(&m, out.record_types, out.user_methods, out.gen_loops).run_tests();
     assert_eq!(results[0].1.as_ref().unwrap_err(), "integer overflow");
 }
 
@@ -78,10 +78,11 @@ fn native_release_matches_interpreter_on_every_suite_program() {
             let src = std::fs::read_to_string(&path).unwrap();
             let module = parse(&src).unwrap();
             let out = check(&module);
-            let interp = Interp::new(&module, out.record_types.clone(), out.user_methods.clone()).run_tests();
-            let mut native = Interp::new(&module, out.record_types.clone(), out.user_methods.clone());
+            let interp = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone()).run_tests();
+            let mut native = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone());
             let compiled = sspur_native::cgen::compile_release(&module, &out, "-O2").unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-            assert!(compiled.skipped.is_empty(), "{}: not native: {:?}", path.display(), compiled.skipped);
+            let effectful = module.defs.iter().any(|d| matches!(d, sspur_syntax::Def::Effect(_))) || src.contains("yield");
+            assert!(compiled.skipped.is_empty() || effectful, "{}: not native: {:?}", path.display(), compiled.skipped);
             native.set_native(compiled);
             assert_eq!(interp, native.run_tests(), "{}", path.display());
         }

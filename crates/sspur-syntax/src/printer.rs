@@ -16,7 +16,30 @@ pub fn print_def(d: &Def) -> String {
         Def::Type(t) => print_type_def(t),
         Def::Fn(f) => print_fn(f),
         Def::Test(t) => format!("test {} = {}", t.name, expr(&t.body, 0)),
+        Def::Effect(e) => print_effect_def(e),
     }
+}
+
+fn op_sig(op: &OpSig) -> String {
+    let params: Vec<String> = op.params.iter().map(|p| format!("{}: {}", p.name, ty(&p.ty))).collect();
+    let mut s = format!("({})", params.join(", "));
+    if let Some(r) = &op.ret {
+        s.push_str(&format!(" -> {}", ty(r)));
+    }
+    s
+}
+
+fn print_effect_def(e: &EffectDef) -> String {
+    let head = format!("effect {}{}", e.name, tparams(&e.params));
+    if let [op] = e.ops.as_slice()
+        && op.name == e.name {
+            return format!("{head}{}", op_sig(op));
+        }
+    let mut s = head;
+    for op in &e.ops {
+        s.push_str(&format!("\n  {}{}", op.name, op_sig(op)));
+    }
+    s
 }
 
 fn tparams(ps: &[TParam]) -> String {
@@ -172,6 +195,7 @@ fn prec_of(e: &Expr) -> u8 {
         | ExprKind::If(..)
         | ExprKind::Match(..)
         | ExprKind::Catch(..)
+        | ExprKind::Handle(..)
         | ExprKind::Block(_)
         | ExprKind::Raise(_)
         | ExprKind::Return(_)
@@ -258,8 +282,9 @@ pub fn expr(e: &Expr, ind: usize) -> String {
             }
             s
         }
-        ExprKind::Match(s, arms) => format!("match {}{}", expr(s, ind), print_arms(arms, ind)),
-        ExprKind::Catch(s, arms) => format!("catch {}{}", expr(s, ind), print_arms(arms, ind)),
+        ExprKind::Match(s, arms) => format!("match {}{}", arms_head(s, ind), print_arms(arms, ind)),
+        ExprKind::Catch(s, arms) => format!("catch {}{}", arms_head(s, ind), print_arms(arms, ind)),
+        ExprKind::Handle(s, arms) => format!("handle {}{}", arms_head(s, ind), print_arms(arms, ind)),
         ExprKind::Block(stmts) => {
             let mut s = String::from("do");
             for st in stmts {
@@ -281,6 +306,20 @@ pub fn expr(e: &Expr, ind: usize) -> String {
             let items: Vec<String> = ups.iter().map(|(p, v)| format!("{} := {}", path(p, ind), expr(v, ind))).collect();
             format!("{} with {}", operand(base, 1, ind), items.join(", "))
         }
+    }
+}
+
+fn iter_expr(e: &Expr, ind: usize) -> String {
+    match e.kind {
+        ExprKind::Block(_) => expr(e, ind + 2),
+        _ => expr(e, ind),
+    }
+}
+
+fn arms_head(e: &Expr, ind: usize) -> String {
+    match e.kind {
+        ExprKind::Match(..) | ExprKind::Catch(..) | ExprKind::Handle(..) => format!("do\n{}{}", pad(ind + 2), expr(e, ind + 2)),
+        _ => expr(e, ind),
     }
 }
 
@@ -327,13 +366,13 @@ fn stmt(s: &Stmt, ind: usize) -> String {
         Stmt::Expr(e) => expr(e, ind),
         Stmt::For(p, it, body) => match &body.kind {
             ExprKind::Block(stmts) => {
-                let mut s = format!("for {} in {}", pat(p), expr(it, ind));
+                let mut s = format!("for {} in {}", pat(p), iter_expr(it, ind));
                 for st in stmts {
                     s.push_str(&format!("\n{}{}", pad(ind + 2), stmt(st, ind + 2)));
                 }
                 s
             }
-            _ => format!("for {} in {}\n{}{}", pat(p), expr(it, ind), pad(ind + 2), branch(body, ind + 2)),
+            _ => format!("for {} in {}\n{}{}", pat(p), iter_expr(it, ind), pad(ind + 2), branch(body, ind + 2)),
         },
         Stmt::While(c, body) => match &body.kind {
             ExprKind::Block(stmts) => {

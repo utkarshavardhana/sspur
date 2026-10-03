@@ -129,3 +129,52 @@ fn untrusted_and_guess_must_be_handled() {
     assert_eq!(codes("fn f(g: Guess[Int]) -> Int\n= g + 1")[0], "E_TYPE_MISMATCH");
     assert!(codes("fn f(g: Guess[Int]) -> Int\n= g.at_least(0.8).or(0)").is_empty());
 }
+
+const ASK: &str = "effect ask() -> Int\neffect state\n  get() -> Int\n  put(v: Int)\nfn twice() -> Int ! ask\n= ask() + ask()\n";
+
+#[test]
+fn performing_an_operation_needs_its_effect() {
+    let d = diags(&format!("{ASK}fn f() -> Int\n= ask()"));
+    assert_eq!(d[0].code, "E_EFFECT_MISSING");
+    assert_eq!(d[0].fix[0]["contract"]["effects"][0], "+ask");
+}
+
+#[test]
+fn handle_removes_the_effect_and_adds_arm_effects() {
+    assert!(codes(&format!("{ASK}fn f() -> Int\n= handle twice()\n  | ask() => resume(1)")).is_empty());
+    assert_eq!(codes(&format!("{ASK}fn f() -> Int\n= handle twice()\n  | ask() => do\n    log(\"asked\")\n    resume(1)")), vec!["E_EFFECT_MISSING"]);
+    assert!(codes(&format!("{ASK}fn f() -> Int ! log\n= handle twice()\n  | ask() => do\n    log(\"asked\")\n    resume(1)")).is_empty());
+    assert!(codes("fn f() -> Int\n= handle do\n    log(\"x\")\n    1\n  | log(m) => resume()").is_empty(), "log is an ordinary effect");
+}
+
+#[test]
+fn handle_must_cover_every_operation() {
+    let d = diags(&format!("{ASK}fn c() -> Int ! state\n= get()\nfn f() -> Int\n= handle c()\n  | get() => resume(1)"));
+    assert_eq!(d[0].code, "E_HANDLE_PARTIAL");
+    assert!(d[0].hint.as_ref().unwrap().contains("put"));
+    assert_eq!(codes(&format!("{ASK}fn f() -> Int\n= handle twice()\n  | akk() => resume(1)"))[0], "E_UNKNOWN_OP");
+    assert_eq!(codes(&format!("{ASK}fn f() -> Int\n= handle 1\n  | ask() => resume(2)")), vec!["W_HANDLE_UNUSED"]);
+}
+
+#[test]
+fn resume_is_typed_and_positioned() {
+    assert_eq!(codes(&format!("{ASK}fn f() -> Int\n= handle twice()\n  | ask() => resume(\"x\")")), vec!["E_TYPE_MISMATCH"]);
+    assert_eq!(codes(&format!("{ASK}fn f() -> Int\n= handle twice()\n  | ask() => resume(1) + 1")), vec!["E_RESUME_POSITION"]);
+    assert_eq!(codes(&format!("{ASK}fn f() -> Int\n= handle twice()\n  | ask() => [1].map(x => resume(x)).sum")), vec!["E_RESUME_POSITION"]);
+    assert_eq!(codes(&format!("{ASK}fn f() -> Int\n= handle twice()\n  | ask() => do\n    r = resume(1)\n    resume(r)")), vec!["E_RESUME_POSITION"]);
+    assert!(codes(&format!("{ASK}fn f() -> Int\n= handle twice()\n  | ask() => do\n    r = resume(1)\n    r * 2")).is_empty());
+    assert!(codes(&format!("{ASK}fn f(b: Bool) -> Int\n= handle twice()\n  | ask() => if b then resume(1) else 0")).is_empty());
+    assert_eq!(codes(&format!("{ASK}fn f() -> Int\n= handle twice()\n  | ask() => return 1")), vec!["E_RETURN_IN_HANDLER"]);
+}
+
+#[test]
+fn generators_are_typed_through_for() {
+    let base = "fn nums() -> Unit ! yield[Int]\n= do\n  yield(1)\n  yield(2)\n";
+    assert!(codes(&format!("{base}fn f() -> Int\n= do\n  var s = 0\n  for x in nums()\n    s := s + x\n  s")).is_empty());
+    assert_eq!(codes(&format!("{base}fn f() -> Int\n= do\n  var s = 0\n  for x in nums()\n    s := s + x.len\n  s")), vec!["E_UNKNOWN_METHOD"]);
+    assert_eq!(codes("fn g() -> Unit ! yield[Int]\n= yield(\"a\")"), vec!["E_EFFECT_MISSING", "W_EFFECT_UNUSED"]);
+    assert_eq!(codes("fn g() -> Unit ! yield\n= ()"), vec!["E_EFFECT_ARGS"]);
+    let take = "fn take[T, e](n: Int, gen: () -> Unit ! yield[T], e) -> List[T] ! e\n= do\n  var out = []\n  handle gen()\n    | yield(x) => do\n      out := out.push(x)\n      if out.len >= n then () else resume()\n  out\n";
+    assert!(codes(&format!("{base}{take}fn f() -> List[Int]\n= take(1, nums)")).is_empty());
+    assert_eq!(codes(&format!("{base}{take}fn f() -> List[Str]\n= take(1, nums)")), vec!["E_TYPE_MISMATCH"]);
+}

@@ -4,7 +4,7 @@ This is everything the current compiler implements, and it's all an agent needs 
 
 ## Program shape
 
-A program is a set of definitions: `type`, `fn`, and `test`. Order doesn't matter. There are no imports and no comments. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
+A program is a set of definitions: `type`, `fn`, `effect`, and `test`. Order doesn't matter. There are no imports and no comments. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
 
 ```
 type Item = {sku: Str, qty: Int where _ > 0, price: Int where _ >= 0}
@@ -48,7 +48,7 @@ fn name[A, e](p: A, f: A -> A ! e) -> A ! e
 - The return type is required unless it's `Unit`. Uppercase type parameters are types; lowercase ones are effect rows.
 - The body is one expression, or `do` followed by an indented block. The value of the last statement is the result.
 - `x.f(a)` calls `f(x, a)`. User functions win when the first parameter type fits `x`; otherwise the builtin method is used. `x.f` with no parentheses is a field access if `x` has field `f`, otherwise a zero-argument method call.
-- Lambdas: `x => e`, `(a, b) => e`. Lambda bodies are a single expression, and blocks are not allowed inside parentheses, so move multi-line logic into a named `fn`.
+- Lambdas: `x => e`, `(a, b) => e`, `() => e`. Lambda bodies are a single expression, and blocks are not allowed inside parentheses, so move multi-line logic into a named `fn`.
 - `_` inside a call argument or a list element makes a one-parameter lambda. Every `_` in that argument or element is the same parameter: `xs.map(_.price * _.qty)` means `xs.map(x => x.price * x.qty)`, and `[_ + 1, _ * 2]` is a list of two functions. Tuples are not boundaries: `sort_by((-_.1, _.0))` is one lambda returning a tuple.
 - A function name can be passed as a value: `xs.map(fizzbuzz)`, `xs.fold(Leaf, insert)`.
 - There's no overloading and there are no default arguments.
@@ -60,7 +60,7 @@ fn name[A, e](p: A, f: A -> A ! e) -> A ! e
 | `x = e`, `(a, b) = e` | Immutable binding (irrefutable patterns only) |
 | `var x = e` | Mutable local |
 | `x := e` | Assign to a `var`. Also allowed directly as an `if` branch or match arm body |
-| `for p in list` + indented body | Loop over a `List` (or a range `a..b`, which excludes `b`) |
+| `for p in list` + indented body | Loop over a `List`, a range `a..b` (which excludes `b`), or a generator (see Generators) |
 | `while cond` + indented body | Loop while `cond` holds. Adds the `div` effect ("may not terminate"), which must be declared |
 | `var (a, b) = e` | Mutable destructuring |
 | `fn helper(...) -> T` + `= body` | Local function. It can see enclosing variables and can be recursive, but cannot be generic |
@@ -98,6 +98,8 @@ Every function declares what it does after `!`. Undeclared effects are compile e
 | `fail[E]` | `raise e` where `e: E`, or calling a function with `fail[E]` |
 | Effect row `e` | Calling a function-typed parameter whose type has `! e` |
 | `div` | A `while` loop (the loop may not terminate) |
+| A declared effect, e.g. `ask` | Calling one of its operations, e.g. `ask()` |
+| `yield[T]` | `yield(x)` where `x: T` (built in, for generators) |
 
 Effects flow through lambdas: `xs.map(x => noisy(x))` performs `noisy`'s effects.
 
@@ -111,6 +113,56 @@ fn safe(x: Int) -> Int
 ```
 
 A `catch` that covers every variant of `E` removes `fail[E]` from the effect row. A partial catch keeps `fail[E]`.
+
+## Effect handlers
+
+Declare an effect with its operations, perform an operation by calling it, and give it meaning with `handle`:
+
+```
+effect ask() -> Int
+effect state
+  get() -> Int
+  put(v: Int)
+effect emit[T](x: T)
+
+fn total() -> Int ! ask
+= ask() + ask()
+
+fn run() -> Int
+= handle total()
+  | ask() => resume(21)
+```
+
+- `effect name(params) -> R` declares a one-operation effect whose operation has the effect's name. With several operations, list them on indented lines. Effects may take type parameters: `effect emit[T](x: T)` makes the effect `emit[Int]`, `emit[Str]`, and so on. Operation names are global, like function names.
+- `handle e` followed by one `| op(x, y) => arm` per operation evaluates `e` and runs the arm whenever `e` performs `op`. An optional `| return(r) => arm` transforms `e`'s normal result.
+- Inside an arm, `resume(v)` continues the computation at the operation, which returns `v` (`resume()` for operations returning `Unit`). Each arm resumes at most once. `resume(v)` may be the arm's result (directly or in an `if`/`match` branch), or a block statement `r = resume(v)`, where `r` is the result of the rest of the handled computation and the statements after it run once that computation finishes. An arm that doesn't resume ends the whole `handle` with its own value.
+- Types: every arm and the `handle` have the same type: the `return` arm's type, or `e`'s type without one. `resume(v)` returns that type.
+- Effects: a `handle` must cover every operation of each effect it names, and it removes those effects from `e`'s row. The arms' own effects belong to the surrounding function: an arm runs outside its own handler, so an operation performed in an arm goes to the next enclosing handler.
+- `log` is an ordinary effect with the operation `log(msg)`, so `handle e | log(m) => do; logs := logs.push(m); resume()` captures output.
+- `raise` in an arm leaves the whole `handle` (a `catch` inside `e` doesn't see it), and errors raised by `e` pass through. `return` is not allowed in an arm.
+
+## Generators
+
+A generator is a function that performs `yield[T]`. A `for` loop over a `Unit` expression that yields runs its body for each yielded value, and removes `yield[T]` from the row. Generators can be recursive or infinite, and `return` in the loop body leaves the enclosing function.
+
+```
+fn walk(t: Tree) -> Unit ! yield[Int]
+= match t
+  | Leaf => ()
+  | Node{left, value, right} => do
+    walk(left)
+    yield(value)
+    walk(right)
+
+fn sum_tree(t: Tree) -> Int
+= do
+  var s = 0
+  for v in walk(t)
+    s := s + v
+  s
+```
+
+Pass a generator as a value with a thunk, `() => walk(t)`, typed `() -> Unit ! yield[T], e`. A `handle` over `yield` that stops resuming takes a prefix, which also works on infinite generators.
 
 ## Accepted input forms
 

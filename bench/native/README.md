@@ -13,6 +13,8 @@
 | Long-running loop: 2M iterations, about 700 MB of short-lived garbage | `churn` | | 0.06s | | 265 MB |
 | Pure pipelines: Collatz, primes, hashed table, Mandelbrot (10 cores) | `parallel` | 2.09s (single-threaded) | 0.33s (2.01s with `SSPUR_THREADS=1`) | **0.16x** | 17 MB / 21 MB |
 
+Against C++ -O3 (same machine, 2026-10-03): compute 0.88x, typical 0.18x (hand-tuned C++ -O3 0.20s, so 0.60x), strings 0.54x, app 0.60x, parallel 0.15x. -O3 is no faster than -O2 on these workloads.
+
 SSPUR times include about 10 ms of fixed startup (parse, typecheck, load the cached library). When speed and memory trade off, SSPUR picks speed (ADR 0008).
 
 - Checks the compiler proves can never fail are omitted (ADR 0007). The rest stay.

@@ -1,5 +1,6 @@
 mod agent;
 mod bind;
+mod deploy;
 mod mcp;
 mod verify;
 
@@ -28,7 +29,8 @@ const USAGE: &str = "usage:
   sspur check|run|test|fuzz|verify|hash|fmt|native [file.ssp] [--json] [--cases N] [--seed N] [--edge] [--write] [--full]
   verify proves pre/post/where clauses with z3 and reports proved, counterexample, or unknown per clause
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
-  --O3 raises the optimization level; fuzz --differential compares native against the interpreter";
+  --O3 raises the optimization level; fuzz --differential compares native against the interpreter
+  sspur deploy plan <file.ssp> [--out DIR] | sspur deploy local <file.ssp> [--port N]   (see ADR 0016; never calls AWS)";
 
 fn main() -> ExitCode {
     std::thread::Builder::new().stack_size(1 << 29).spawn(real_main).unwrap().join().unwrap()
@@ -59,7 +61,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -147,6 +149,7 @@ fn real_main() -> ExitCode {
                 }
             }
         }
+        "deploy" => deploy::run(args.pos.get(1).map(String::as_str), args.pos.get(2), args.val("--out"), args.val("--port")),
         "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" => program_cmd(&cmd, &args),
         _ => {
             eprintln!("{USAGE}");

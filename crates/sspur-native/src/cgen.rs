@@ -461,6 +461,12 @@ static void buf_push(Buf* b, int64_t w) {
     b->data[b->len++] = w;
 }
 void sspur_buf_free(int64_t* p) { free(p); }
+typedef int64_t (*SspurDb)(int64_t op, const char* store, const int64_t* k, int64_t kn, const int64_t* v, int64_t vn, int64_t** out, int64_t* on);
+SspurDb sspur_db;
+static void db_fail(Status* st, int64_t* m, int64_t n) {
+    if (!m) { const char* t = "db effects need a deploy host: run the service with 'sspur deploy local'"; n = (int64_t)strlen(t); m = (int64_t*)malloc((size_t)n); memcpy(m, t, (size_t)n); }
+    st->rbuf = m; st->rlen = n;
+}
 typedef struct { int64_t len; const char* p; } Str;
 typedef struct {
     int64_t (*fmt_f64)(double x, char* out);
@@ -693,6 +699,25 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
     Ok(assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines, free, plan.err_types))
 }
 
+pub struct CProgram {
+    pub src: String,
+    pub fns: BTreeMap<String, (Vec<Type>, Type)>,
+    pub skipped: BTreeMap<String, String>,
+    pub err_types: Vec<Type>,
+    pub refines: Vec<(String, String, Type)>,
+}
+
+pub fn c_program(m: &Module, check: &CheckOutput) -> Result<CProgram, String> {
+    let lowered = lower::lower(m, check);
+    let (m, check) = match &lowered {
+        Some((lm, lc, _)) => (lm, lc),
+        None => (m, check),
+    };
+    let (src, plan) = generate(m, check, None)?;
+    let fns = plan.fns.into_iter().map(|(n, (p, r, _))| (n, (p, r))).collect();
+    Ok(CProgram { src, fns, skipped: plan.skipped, err_types: plan.err_types, refines: plan.refines })
+}
+
 pub fn c_source(m: &Module, check: &CheckOutput) -> String {
     let lowered = lower::lower(m, check);
     let (m, check) = match &lowered {
@@ -868,7 +893,7 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
 }
 
 fn precheck(f: &FnDef) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi") && !f.tparams.iter().any(|p| p.name == e.name)) {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "db.read" | "db.write") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())
@@ -2800,7 +2825,35 @@ impl<'a> Cx<'a> {
         Ok(s)
     }
 
+    fn db_call(&mut self, name: &str, args: &[Expr], t: &Type) -> G {
+        let ExprKind::Name(store) = &args[0].kind else { return Err("has a db operation without a store".into()) };
+        let op = match name {
+            "get" => 1,
+            "put" => 2,
+            "del" => 3,
+            _ => 4,
+        };
+        let mut s = String::from("({ Buf kb_ = {0}; Buf vb_ = {0}; ");
+        for (buf, a) in ["kb_", "vb_"].iter().zip(&args[1..]) {
+            let at = self.ty(a)?;
+            let enc = self.helper_enc(&at)?;
+            let v = self.expr(a)?;
+            write!(s, "{enc}(&{buf}, {v}); ").unwrap();
+        }
+        write!(s, "int64_t* ob_ = 0; int64_t ol_ = 0; int64_t rc_ = sspur_db ? sspur_db({op}, {}, kb_.data, kb_.len, vb_.data, vb_.len, &ob_, &ol_) : -1; free(kb_.data); free(vb_.data); if (UNLIKELY(rc_)) {{ db_fail(st, ob_, ol_); TRAPV({T_MSG}, 0, 0); }} ", c_lit(store)).unwrap();
+        if is(t, "Unit") {
+            s.push_str("free(ob_); 0LL; })");
+        } else {
+            let dec = self.helper_dec(t)?;
+            write!(s, "const int64_t* dp_ = ob_; __auto_type dr_ = {dec}(&dp_); free(ob_); dr_; }})").unwrap();
+        }
+        Ok(s)
+    }
+
     fn method(&mut self, e: &Expr, recv: &Expr, name: &str, args: &[Expr], t: &Type) -> G {
+        if matches!(&recv.kind, ExprKind::Name(n) if n == "db") && self.lookup("db").is_none() && sspur_check::db_op(name).is_some() && !args.is_empty() {
+            return self.db_call(name, args, t);
+        }
         if self.check.user_methods.contains(&(e.span.start, e.span.end)) {
             let mut vals = vec![(self.expr(recv)?, self.ty(recv)?)];
             for a in args {

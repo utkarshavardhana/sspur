@@ -525,6 +525,7 @@ name = "sspur-eval"
 version = "0.1.0"
 dependencies = [
  "libloading",
+ "sspur-check",
  "sspur-native",
  "sspur-syntax",
 ]

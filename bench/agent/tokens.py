@@ -2,47 +2,87 @@
 
   python3 tokens.py <agents.json> <out.json>
 
-agents.json maps "<lang>/<task>" to a transcript path. For every API call (one assistant
-message per requestId) we read usage: input_tokens, cache_creation_input_tokens,
-cache_read_input_tokens, output_tokens.
+agents.json maps "<lang>/<task>" to a transcript path.
 
-  total      = sum over calls of (input + cache_creation + cache_read + output)   (all tokens processed)
-  output     = sum of output tokens
-  final_ctx  = input + cache tokens of the last call, plus its output             (what the harness reports)
-  net        = total - calls * BASE                                              (total minus the fixed
-               system-prompt overhead that every call carries, measured with a no-op agent)
+Input side (exact, from the API usage records): for every API call (one per requestId),
+input_tokens + cache_creation_input_tokens + cache_read_input_tokens.
+
+Output side (estimated): the transcript stores the usage snapshot taken when the response
+stream starts, so its output_tokens is a placeholder (16 to 75). We therefore re-count the
+output from the recorded content (text, thinking, tool name and JSON input) with tiktoken
+cl100k_base, and take max(recorded, estimate) per call. Claude's tokenizer differs from
+cl100k, so treat output counts as +-15%. Output is about 1% of the totals.
+
+  input      exact input tokens summed over calls (includes cache reads)
+  output     estimated output tokens
+  total      input + output
+  net        total - calls * BASE   (BASE = context of a no-op subagent; removes the fixed
+             system prompt and tool schema that every call re-reads)
+  read, wrote  cl100k tokens of all tool results the agent read, and of all tool inputs and
+             text it wrote. Independent of the harness, and the cleanest language comparison.
 """
 import json, sys
+import tiktoken
 
-BASE = 25_750  # context of a no-op subagent (system prompt + tools + one-line prompt), measured 2026-10-03
+BASE = 25_750  # no-op subagent context (system prompt + tools + one-line prompt), measured 2026-10-03
+ENC = tiktoken.get_encoding("cl100k_base")
+
+
+def ntok(s):
+    return len(ENC.encode(s, disallowed_special=()))
+
+
+def block_text(b):
+    t = b.get("type")
+    if t == "text":
+        return b.get("text", "")
+    if t == "thinking":
+        return b.get("thinking", "")
+    if t == "tool_use":
+        return b.get("name", "") + json.dumps(b.get("input", {}))
+    return ""
+
+
+def result_text(b):
+    c = b.get("content")
+    if isinstance(c, list):
+        return "".join(x.get("text", "") for x in c if isinstance(x, dict))
+    return c if isinstance(c, str) else ""
 
 
 def usage(path):
-    calls = {}
-    tools = 0
+    calls, out_est = {}, {}
+    tools = read = wrote = 0
     for line in open(path):
         d = json.loads(line)
-        if d.get("type") != "assistant":
+        m = d.get("message")
+        if not isinstance(m, dict):
             continue
-        m = d["message"]
-        tools += sum(1 for c in m.get("content", []) if c.get("type") == "tool_use")
-        calls[d.get("requestId") or d["uuid"]] = m["usage"]
-    us = list(calls.values())
-    tot = lambda u: u["input_tokens"] + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0)
-    total = sum(tot(u) + u["output_tokens"] for u in us)
-    return {
-        "calls": len(us),
-        "tool_uses": tools,
-        "total": total,
-        "output": sum(u["output_tokens"] for u in us),
-        "final_ctx": tot(us[-1]) + us[-1]["output_tokens"] if us else 0,
-        "net": total - len(us) * BASE,
-    }
+        content = m.get("content") if isinstance(m.get("content"), list) else []
+        if d.get("type") == "assistant":
+            rid = d.get("requestId") or d["uuid"]
+            calls[rid] = m["usage"]
+            n = sum(ntok(block_text(b)) for b in content)
+            out_est[rid] = out_est.get(rid, 0) + n
+            wrote += sum(ntok(block_text(b)) for b in content if b.get("type") != "thinking")
+            tools += sum(1 for b in content if b.get("type") == "tool_use")
+        elif d.get("type") == "user":
+            read += sum(ntok(result_text(b)) for b in content if b.get("type") == "tool_result")
+    inp = sum(u["input_tokens"] + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0) for u in calls.values())
+    out = sum(max(u["output_tokens"], out_est.get(r, 0)) for r, u in calls.items())
+    return {"calls": len(calls), "tool_uses": tools, "input": inp, "output": out, "total": inp + out,
+            "net": inp + out - len(calls) * BASE, "read": read, "wrote": wrote}
 
 
 if __name__ == "__main__":
     agents = json.load(open(sys.argv[1]))
     out = {k: usage(p) for k, p in agents.items()}
     json.dump(out, open(sys.argv[2], "w"), indent=1)
+    keys = ["calls", "tool_uses", "input", "output", "total", "net", "read", "wrote"]
+    print(f"{'run':22}" + "".join(f"{k:>10}" for k in keys))
     for k, v in out.items():
-        print(f"{k:24} {v}")
+        print(f"{k:22}" + "".join(f"{v[x]:>10}" for x in keys))
+    for lang in ("sspur", "python"):
+        rs = [v for k, v in out.items() if k.startswith(lang + "/")]
+        if rs:
+            print(f"{lang + ' TOTAL':22}" + "".join(f"{sum(r[x] for r in rs):>10}" for x in keys))

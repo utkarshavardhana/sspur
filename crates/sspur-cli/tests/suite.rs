@@ -107,3 +107,57 @@ fn verify_reports_proofs_counterexamples_and_unknowns() {
     assert_eq!(status("total_len", "post"), "unknown");
     assert!(!out.status.success());
 }
+
+#[test]
+fn parallel_pipelines_report_the_sequential_trap_at_any_thread_count() {
+    if std::process::Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/parallel.ssp")).unwrap();
+    let extra = "
+fn combo(i: Int, a: Int, b: Int) -> Int
+= if i == a or i == a + 1 then 9000000000000000000 else if i == b then 1 / (i - i) else 1
+
+fn combo_sum(n: Int, a: Int, b: Int) -> Int
+= (0..n).map(i => combo(i, a, b)).sum
+
+fn refine_at(n: Int, at: Int) -> Int ! div
+= (0..n).map(i => collatz_len(at - i)).sum
+
+test excursion = spiky_sum(2000000, 10, 1500000) == 0
+test div_first = first_fault(2000000, 1200000, 1800000) == 0
+test ovf_first = first_fault(2000000, 1800000, 1200000) == 0
+test deep = deep_at(200000, 150000) == 0
+test refine = refine_at(30000, 20000) == 0
+test deferred = combo_sum(2000000, 1500000, 1800000) == 0
+test deferred_ovf = combo_sum(2000000, 1500000, -1) == 0
+test big_ok = prime_count(2000000) == 148933 and first_fault(2000000, -1, -1) == 1999999000000
+";
+    let path = std::env::temp_dir().join(format!("sspur_parallel_traps_{}.ssp", std::process::id()));
+    std::fs::write(&path, format!("{base}\n{extra}")).unwrap();
+    let expected = [
+        "FAIL  excursion: integer overflow",
+        "FAIL  div_first: division by zero",
+        "FAIL  ovf_first: integer overflow",
+        "FAIL  deep: stack overflow in down",
+        "FAIL  refine: contract violated: parameter 'n' of collatz_len where _ > 0 (value = 0)",
+        "FAIL  deferred: division by zero",
+        "FAIL  deferred_ovf: integer overflow",
+        "pass  big_ok",
+    ];
+    let mut outputs = Vec::new();
+    for threads in [None, Some("1"), Some("3")] {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_sspur"));
+        cmd.arg("test").arg(&path);
+        if let Some(t) = threads {
+            cmd.env("SSPUR_THREADS", t);
+        }
+        let out = String::from_utf8(cmd.output().unwrap().stdout).unwrap();
+        for line in expected {
+            assert!(out.lines().any(|l| l == line), "threads {threads:?}: missing {line:?} in\n{out}");
+        }
+        outputs.push(out);
+    }
+    std::fs::remove_file(&path).ok();
+    assert!(outputs.iter().all(|o| *o == outputs[0]));
+}

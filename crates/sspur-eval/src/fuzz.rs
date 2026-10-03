@@ -81,7 +81,7 @@ impl Interp {
                 self.fuel.set(u64::MAX);
                 self.bypass_native.set(false);
                 let interp = match interp {
-                    Err(Ctrl::Trap(m)) if m == crate::OUT_OF_FUEL || m.starts_with("stack overflow") => continue,
+                    Err(Ctrl::Trap(m)) if m == crate::OUT_OF_FUEL || m == "out of memory" || m.starts_with("stack overflow") => continue,
                     other => describe_result(other),
                 };
                 self.depth.set(0);

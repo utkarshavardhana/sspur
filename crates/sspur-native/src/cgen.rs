@@ -27,9 +27,104 @@ typedef struct { int64_t code, func, clause, value, limit; int64_t* rbuf; int64_
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 #define LIKELY_(x) __builtin_expect(!!(x), 1)
 #include <setjmp.h>
-static jmp_buf* sspur_jb;
+static _Thread_local jmp_buf* sspur_jb;
 static void __attribute__((noinline, cold, noreturn)) sspur_trap(Status* st, int64_t c, int64_t f, int64_t cl, int64_t v) { st->code = c; st->func = f; st->clause = cl; st->value = v; longjmp(*sspur_jb, 1); }
 #define TRAPV(c, cl, val) sspur_trap(st, (c), FIDX, (cl), (int64_t)(val))
+#include <pthread.h>
+#include <unistd.h>
+#include <time.h>
+typedef struct { int64_t acc, mn, mx, pad_[5]; } ParRes;
+typedef int (*ParFn)(void*, int64_t, int64_t, ParRes*);
+#define PAR_MAXT 64
+#define PAR_MAXC 512
+static int par_nt, par_quit, par_cancel, par_busy;
+static pthread_t par_th[PAR_MAXT];
+static pthread_mutex_t par_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t par_cv = PTHREAD_COND_INITIALIZER, par_dcv = PTHREAD_COND_INITIALIZER;
+static uint64_t par_gen;
+static ParFn par_fn; static void* par_ctx;
+static int64_t par_base, par_end, par_chunk, par_nch, par_next, par_fmin, par_running;
+static ParRes par_res[PAR_MAXC]; static unsigned char par_stat[PAR_MAXC];
+#define PAR_POLL() if (UNLIKELY(__atomic_load_n(&par_cancel, __ATOMIC_RELAXED))) sspur_trap(st, 1, 0, 0, 0)
+static inline uint64_t par_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec; }
+static inline int64_t par_lo(int64_t c) { int64_t v = par_base + c * par_chunk; return v < par_end ? v : par_end; }
+static void par_work(void) {
+    pthread_mutex_lock(&par_mu);
+    while (par_next < par_nch) {
+        int64_t c = par_next++;
+        if (c > par_fmin) { par_stat[c] = 3; continue; }
+        par_running++;
+        ParFn fn = par_fn; void* cx = par_ctx; int64_t lo = par_lo(c), hi = par_lo(c + 1);
+        pthread_mutex_unlock(&par_mu);
+        int ok = fn(cx, lo, hi, &par_res[c]);
+        pthread_mutex_lock(&par_mu);
+        par_stat[c] = ok ? 1 : 2;
+        if (!ok && c < par_fmin) par_fmin = c;
+        par_running--;
+        pthread_cond_signal(&par_dcv);
+    }
+    pthread_mutex_unlock(&par_mu);
+}
+static void* par_loop(void* a) {
+    (void)a; uint64_t seen = 0;
+    pthread_mutex_lock(&par_mu);
+    for (;;) {
+        while (par_gen == seen && !par_quit) pthread_cond_wait(&par_cv, &par_mu);
+        if (par_quit) break;
+        seen = par_gen;
+        pthread_mutex_unlock(&par_mu);
+        par_work();
+        pthread_mutex_lock(&par_mu);
+    }
+    pthread_mutex_unlock(&par_mu);
+    return 0;
+}
+static void __attribute__((noinline, cold)) par_init(void) {
+    const char* e = getenv("SSPUR_THREADS");
+    long n = e && *e ? strtol(e, 0, 10) : sysconf(_SC_NPROCESSORS_ONLN);
+    if (n < 1) n = 1;
+    if (n > PAR_MAXT) n = PAR_MAXT;
+    pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, (size_t)1 << 29);
+    int k = 1;
+    while (k < n && pthread_create(&par_th[k], &at, par_loop, 0) == 0) k++;
+    pthread_attr_destroy(&at);
+    par_nt = k;
+}
+static __attribute__((destructor)) void par_fini(void) {
+    if (par_nt <= 1 || __atomic_load_n(&par_busy, __ATOMIC_ACQUIRE)) return;
+    pthread_mutex_lock(&par_mu); par_quit = 1; pthread_cond_broadcast(&par_cv); pthread_mutex_unlock(&par_mu);
+    for (int k = 1; k < par_nt; k++) pthread_join(par_th[k], 0);
+    par_nt = 0;
+}
+static int64_t __attribute__((noinline)) par_run(ParFn fn, void* cx, int64_t base, int64_t end) {
+    if (__atomic_exchange_n(&par_busy, 1, __ATOMIC_ACQUIRE)) return 0;
+    int64_t n = end - base, nch = (int64_t)par_nt * 8;
+    if (nch > PAR_MAXC) nch = PAR_MAXC;
+    if (nch > n) nch = n;
+    int64_t chunk = (n + nch - 1) / nch;
+    pthread_mutex_lock(&par_mu);
+    par_fn = fn; par_ctx = cx; par_base = base; par_end = end; par_chunk = chunk; par_nch = (n + chunk - 1) / chunk;
+    memset(par_stat, 0, (size_t)par_nch);
+    par_next = 0; par_fmin = INT64_MAX; par_running = 0;
+    par_gen++;
+    pthread_cond_broadcast(&par_cv);
+    pthread_mutex_unlock(&par_mu);
+    par_work();
+    pthread_mutex_lock(&par_mu);
+    while (par_running > 0) {
+        if (par_fmin != INT64_MAX && !par_cancel) {
+            int64_t c = 0;
+            while (c < par_fmin && par_stat[c] == 1) c++;
+            if (c == par_fmin) __atomic_store_n(&par_cancel, 1, __ATOMIC_RELAXED);
+        }
+        pthread_cond_wait(&par_dcv, &par_mu);
+    }
+    __atomic_store_n(&par_cancel, 0, __ATOMIC_RELAXED);
+    int64_t r = par_nch;
+    pthread_mutex_unlock(&par_mu);
+    return r;
+}
+static inline void par_release(void) { __atomic_store_n(&par_busy, 0, __ATOMIC_RELEASE); }
 #include <sys/mman.h>
 #include <setjmp.h>
 #include <time.h>
@@ -868,6 +963,9 @@ struct Cx<'a> {
     box_names: HashSet<String>,
     boxed: HashMap<String, (String, String)>,
     preboxed: Vec<HashSet<String>>,
+    par_mode: bool,
+    par_memo: HashMap<String, bool>,
+    par_heavy: HashSet<String>,
 }
 
 impl<'a> Cx<'a> {
@@ -922,6 +1020,9 @@ impl<'a> Cx<'a> {
             box_names: HashSet::new(),
             boxed: HashMap::new(),
             preboxed: Vec::new(),
+            par_mode: false,
+            par_memo: HashMap::new(),
+            par_heavy: HashSet::new(),
         }
     }
 
@@ -1552,6 +1653,13 @@ impl<'a> Cx<'a> {
     }
 
     fn function_in(&mut self, f: &FnDef, params: &[Type], ret: &Type, fidx: usize, cname: &str, env: Option<(String, Scope)>) -> G {
+        let saved_mode = std::mem::replace(&mut self.par_mode, cname.ends_with("__par"));
+        let r = self.function_body(f, params, ret, fidx, cname, env);
+        self.par_mode = saved_mode;
+        r
+    }
+
+    fn function_body(&mut self, f: &FnDef, params: &[Type], ret: &Type, fidx: usize, cname: &str, env: Option<(String, Scope)>) -> G {
         self.scopes = vec![env.as_ref().map(|(_, s)| s.clone()).unwrap_or_default()];
         self.fname = f.name.clone();
         self.fidx = fidx;
@@ -1690,6 +1798,7 @@ impl<'a> Cx<'a> {
         let tys: Vec<Type> = args.iter().map(|(_, t)| t.clone()).collect();
         let (cname, rt) = self.resolve_callee(name, &tys, ret)?;
         let suffix = self.call_suffix.take().or_else(|| (self.own_fn.as_deref() == Some(name)).then(|| "__own".to_string()));
+        let suffix = suffix.or_else(|| (self.par_mode && self.fn_def(name).is_some_and(|f| f.effects.iter().any(|e| e.name == "div"))).then(|| "__par".to_string()));
         let cname = match suffix {
             Some(sfx) => {
                 let c = format!("{cname}{sfx}");
@@ -3265,7 +3374,8 @@ impl<'a> Cx<'a> {
                 self.scopes.push(HashMap::new());
                 let b = self.under(c, true, |cx| cx.expr(body));
                 self.scopes.pop();
-                Ok(format!("while ({cv}) {{ (void)({}); }} ", b?))
+                let poll = if self.par_mode { "PAR_POLL(); " } else { "" };
+                Ok(format!("while ({cv}) {{ {poll}(void)({}); }} ", b?))
             }
             Stmt::For(p, it, body) => {
                 if let (Pat::Bind(i), ExprKind::Range(a, b)) = (p, &it.kind) {

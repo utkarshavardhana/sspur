@@ -104,12 +104,21 @@ pub fn print_sig(f: &FnDef) -> String {
             None => format!("{}: {}", p.name, ty(&p.ty)),
         })
         .collect();
-    let mut s = format!("fn {}{}({})", f.name, tparams(&f.tparams), params.join(", "));
+    let kw = if f.ext.is_some() { "extern fn" } else { "fn" };
+    let mut s = format!("{kw} {}{}({})", f.name, tparams(&f.tparams), params.join(", "));
     if let Some(r) = &f.ret {
         s.push_str(&format!(" -> {}", ty(r)));
     }
     if !f.effects.is_empty() {
         s.push_str(&format!(" ! {}", effects(&f.effects)));
+    }
+    if let Some(x) = &f.ext {
+        if let Some(l) = &x.lib {
+            s.push_str(&format!(" from {l:?}"));
+        }
+        if x.symbol != f.name {
+            s.push_str(&format!(" as {:?}", x.symbol));
+        }
     }
     s
 }
@@ -120,6 +129,9 @@ fn print_fn(f: &FnDef) -> String {
 
 fn print_fn_at(f: &FnDef, ind: usize) -> String {
     let mut s = print_sig(f);
+    if f.ext.is_some() {
+        return s;
+    }
     let c = pad(ind + 2);
     for p in &f.pres {
         s.push_str(&format!("\n{c}pre {}", expr(p, ind + 2)));

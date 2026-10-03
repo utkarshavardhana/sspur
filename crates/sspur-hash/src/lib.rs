@@ -358,6 +358,11 @@ impl<'a> Hasher<'a> {
                 }
                 enc.locals = saved;
                 self.expr(&mut enc, &f.body, group);
+                if let Some(x) = &f.ext {
+                    enc.tag(b'C');
+                    enc.str(x.lib.as_deref().unwrap_or(""));
+                    enc.str(&x.symbol);
+                }
             }
             Def::Test(t) => {
                 enc.tag(b'X');

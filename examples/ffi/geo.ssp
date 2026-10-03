@@ -1,0 +1,42 @@
+extern fn hypot(x: F64, y: F64) -> F64 ! ffi from "m"
+extern fn cbrt(x: F64) -> F64 ! ffi from "m"
+extern fn strlen(s: Str) -> U64 ! ffi
+extern fn atoi(s: Str) -> I32 ! ffi
+extern fn abs(x: I32) -> I32 ! ffi
+extern fn getenv(name: Str) -> Opt[Str] ! ffi
+
+type GeoErr = BadInput{what: Str}
+
+fn dist(x1: F64, y1: F64, x2: F64, y2: F64) -> F64 ! ffi
+= hypot(x2 - x1, y2 - y1)
+
+fn cube_side(volume: F64) -> F64 ! ffi, fail[GeoErr]
+= do
+  if volume < 0.0 then raise BadInput{what: "negative volume {volume}"}
+  cbrt(volume)
+
+fn parse_sum(a: Str, b: Str) -> Int ! ffi
+= atoi(a) + atoi(b)
+
+fn label(name: Str, n: Int) -> Str ! ffi
+= "{name}:{strlen(name)}:{abs(n)}"
+
+fn steps(n: Int) -> Int
+  pre n >= 0
+= if n == 0 then 0 else 1 + steps(n - 1)
+
+fn fact(n: Int) -> Int
+= if n <= 1 then 1 else n * fact(n - 1)
+
+fn has_home() -> Bool ! ffi
+= getenv("HOME").is_some
+
+test dist_345 = dist(0.0, 0.0, 3.0, 4.0) == 5.0
+test cube = catch cube_side(27.0) == 3.0
+  | BadInput{what} => false
+test cube_neg = catch cube_side(-1.0) == 0.0
+  | BadInput{what} => what == "negative volume -1.0"
+test sums = parse_sum("40", " 2") == 42
+test labels = label("ab", -7) == "ab:2:7"
+test env = has_home()
+test fact5 = fact(5) == 120

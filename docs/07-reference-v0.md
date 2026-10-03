@@ -4,7 +4,7 @@ This is everything the current compiler implements, and it's all an agent needs 
 
 ## Program shape
 
-A program is a set of definitions: `type`, `fn`, `effect`, and `test`. Order doesn't matter. There are no imports and no comments. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
+A program is a set of definitions: `type`, `fn`, `extern fn`, `effect`, and `test`. Order doesn't matter. There are no imports. `//` line comments are skipped in files but aren't stored in the codebase. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
 
 ```
 type Item = {sku: Str, qty: Int where _ > 0, price: Int where _ >= 0}
@@ -100,6 +100,7 @@ Every function declares what it does after `!`. Undeclared effects are compile e
 | `div` | A `while` loop (the loop may not terminate) |
 | A declared effect, e.g. `ask` | Calling one of its operations, e.g. `ask()` |
 | `yield[T]` | `yield(x)` where `x: T` (built in, for generators) |
+| `ffi` | Calling an `extern fn` |
 
 Effects flow through lambdas: `xs.map(x => noisy(x))` performs `noisy`'s effects.
 
@@ -163,6 +164,19 @@ fn sum_tree(t: Tree) -> Int
 ```
 
 Pass a generator as a value with a thunk, `() => walk(t)`, typed `() -> Unit ! yield[T], e`. A `handle` over `yield` that stops resuming takes a prefix, which also works on infinite generators.
+
+## C interop
+
+```
+extern fn cbrt(x: F64) -> F64 ! ffi from "m"
+extern fn strlen(s: Str) -> U64 ! ffi
+extern fn getenv(name: Str) -> Opt[Str] ! ffi
+extern fn ln(x: F64) -> F64 ! ffi from "m" as "log"
+```
+
+An `extern fn` has no body and declares exactly `! ffi`. `from "m"` links `libm` (a path also works; omit it for libc), and `as "sym"` names the C symbol. Signatures use C widths: `Int` (int64_t), `I8 I16 I32 U8 U16 U32 U64`, `F32`, `F64`, `Bool`, `Str` (`const char*`), `Opt[Str]` (nullable), `List[W]` parameters (`const W*`), and a `Unit` result. Callers see `Int` and `F64`. Out-of-range integers, NUL bytes, `NULL` for a `Str` result, and invalid UTF-8 trap with an `ffi:` message. Both tiers call C directly: the interpreter through `dlsym`, for up to 6 integer and 8 float arguments.
+
+`sspur bind header.h [--lib L]` prints extern declarations for a C header (parsed by clang) and lists what it skipped in `//` comments. `sspur export-c file.ssp -o libfoo [--shared]` builds `libfoo.a` (or a shared library) plus `libfoo.h`. Each function with `Int`/`F64`/`Bool`/`Str` parameters and result becomes `int32_t foo_f(args..., T* out)`, which returns 0, or 100 for an unhandled error, or a trap code. `foo_last_error()` returns the message, and `foo_free` releases returned strings. See `examples/ffi` and ADR 0014.
 
 ## Accepted input forms
 
@@ -228,7 +242,7 @@ Notes: `first`, `last`, `get`, `min`, `max`, and `find` return `Opt`. `counts` r
 
 ## CLI and agent tools
 
-`sspur check|run|test|fuzz|verify|hash|fmt [file]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter.
+`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. `sspur bind header.h` generates extern declarations.
 
 `sspur fuzz` turns contracts into property tests. It generates inputs that satisfy `pre` and `where`, then reports shrunk counterexamples for any `post` violation or trap.
 

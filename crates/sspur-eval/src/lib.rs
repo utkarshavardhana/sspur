@@ -1,5 +1,6 @@
 #![allow(clippy::mutable_key_type)]
 mod builtins;
+mod ffi;
 pub mod fuzz;
 pub mod value;
 
@@ -287,6 +288,9 @@ impl Interp {
     }
 
     fn call_fn_inner(&self, f: &FnDef, args: Vec<Value>, parent: &Rc<Env>) -> R {
+        if f.ext.is_some() {
+            return ffi::call(f, &args);
+        }
         let env = Env::child(parent);
         for (p, v) in f.params.iter().zip(args) {
             self.check_value_type(&p.ty, &v, &format!("parameter '{}' of {}", p.name, f.name))?;

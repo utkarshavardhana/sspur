@@ -7,6 +7,8 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
 
+pub mod export;
+mod ffi;
 mod fuse;
 mod lower;
 mod own;
@@ -653,7 +655,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (src, mut plan) = generate(m, check)?;
+    let (src, mut plan) = generate(m, check, None)?;
     plan.skipped.retain(|n, _| lower::original_name(n) == n);
     if let Some((_, _, why)) = &lowered {
         for (n, reason) in plan.skipped.iter_mut() {
@@ -662,7 +664,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
             }
         }
     }
-    let lib = build(&src, opt)?;
+    let lib = build(&src, opt, &plan.links)?;
     let library = unsafe { libloading::Library::new(&lib) }.map_err(|e| format!("cannot load {}: {e}", lib.display()))?;
     let mut scalar = HashMap::new();
     let mut rich = HashMap::new();
@@ -697,10 +699,21 @@ pub fn c_source(m: &Module, check: &CheckOutput) -> String {
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    match generate(m, check) {
+    match generate(m, check, None) {
         Ok((src, _)) => src,
         Err(e) => format!("/* {e} */\n"),
     }
+}
+
+pub fn export_c(m: &Module, check: &CheckOutput, prefix: &str) -> Result<export::Export, String> {
+    let lowered = lower::lower(m, check);
+    let (m, check) = match &lowered {
+        Some((lm, lc, _)) => (lm, lc),
+        None => (m, check),
+    };
+    let (source, plan) = generate(m, check, Some(prefix))?;
+    let w = plan.export.ok_or("no export plan")?;
+    Ok(export::Export { source, header: w.header, exported: w.exported, skipped: w.skipped, links: plan.links })
 }
 
 struct Plan {
@@ -708,9 +721,11 @@ struct Plan {
     fns: BTreeMap<String, (Vec<Type>, Type, bool)>,
     skipped: BTreeMap<String, String>,
     refines: Vec<(String, String, Type)>,
+    links: Vec<String>,
+    export: Option<export::Wrappers>,
 }
 
-fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
+fn generate(m: &Module, check: &CheckOutput, export: Option<&str>) -> Result<(String, Plan), String> {
     let defs: Vec<&FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f) } else { None }).collect();
     let index: HashMap<String, usize> = defs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
     let mut skipped = BTreeMap::new();
@@ -745,6 +760,15 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
         .collect();
     let generic_defs: HashMap<String, FnDef> = defs.iter().filter(|f| !f.tparams.is_empty()).map(|f| (f.name.clone(), (*f).clone())).collect();
     let smt = sspur_smt::Oracle::new(m, check);
+    let mut links: Option<Vec<String>> = None;
+    for f in defs.iter().filter(|f| f.ext.is_some()) {
+        let l = links.get_or_insert_with(Vec::new);
+        for a in f.ext.as_ref().and_then(|x| x.lib.as_deref()).map(sspur_syntax::ffi::link_args).unwrap_or_default() {
+            if !l.contains(&a) {
+                l.push(a);
+            }
+        }
+    }
     loop {
         let mut cx = Cx::new(check, &ok, &alias_refines, &field_refines, &smt);
         cx.generics = generic_defs.iter().filter(|(n, _)| ok.contains(*n)).map(|(n, f)| (n.clone(), f.clone())).collect();
@@ -759,7 +783,8 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
                 continue;
             };
             let snapshot = cx.snapshot();
-            match cx.function(f, &params, &ret, index[&f.name], &f.name) {
+            let r = if f.ext.is_some() { cx.extern_fn(f, &params, &ret, index[&f.name]) } else { cx.function(f, &params, &ret, index[&f.name], &f.name) };
+            match r {
                 Ok(code) => {
                     bodies.push_str(&code);
                     let scalar = !f.effects.iter().any(|e| e.name == "fail") && params.iter().chain([&ret]).all(|t| matches!(t, Type::Con(n, a) if a.is_empty() && matches!(n.as_str(), "Int" | "Bool" | "Unit")));
@@ -794,7 +819,14 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
                 entries.push_str(&cx.entries(&f.name, &params, &ret, scalar)?);
             }
             entries.push_str(&cx.enc_err_fn()?);
+            let exported = match export {
+                Some(p) => Some(cx.export_wrappers(p, &defs, &index, &plan_fns, &skipped)?),
+                None => None,
+            };
             let mut src = String::from(PRELUDE);
+            if links.is_some() || export.is_some() {
+                src.push_str(ffi::FFI_PRELUDE);
+            }
             src.push_str(&cx.fwd);
             src.push_str(&cx.defs);
             src.push_str(&cx.protos);
@@ -812,9 +844,12 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
             src.push_str(&bodies);
             src.push_str(&entries);
             src.push_str(&cx.helpers_late);
+            if let Some(w) = &exported {
+                src.push_str(&w.c);
+            }
             plan_fns.retain(|_, (p, r, _)| !p.iter().chain([&*r]).any(has_fn));
             let src = cx.atomize(&src);
-            let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone() };
+            let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone(), links: links.unwrap_or_default(), export: exported };
             return Ok((src, plan));
         }
         for (n, e) in failed {
@@ -833,7 +868,7 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
 }
 
 fn precheck(f: &FnDef) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail") && !f.tparams.iter().any(|p| p.name == e.name)) {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())
@@ -844,8 +879,8 @@ fn cache_dir() -> PathBuf {
     base.join("native")
 }
 
-fn build(src: &str, opt: &str) -> Result<PathBuf, String> {
-    let key = blake3::hash(format!("{opt}\n{src}").as_bytes()).to_hex().to_string();
+fn build(src: &str, opt: &str, links: &[String]) -> Result<PathBuf, String> {
+    let key = blake3::hash(format!("{opt}{}\n{src}", links.iter().map(|l| format!(" {l}")).collect::<String>()).as_bytes()).to_hex().to_string();
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let lib = dir.join(format!("{}.{}", &key[..32], std::env::consts::DLL_EXTENSION));
@@ -856,7 +891,7 @@ fn build(src: &str, opt: &str) -> Result<PathBuf, String> {
     std::fs::write(&c, src).map_err(|e| e.to_string())?;
     let tmp = lib.with_extension("tmp");
     let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
-    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w", "-o"]).arg(&tmp).arg(&c).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w", "-o"]).arg(&tmp).arg(&c).args(links).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
         return Err(format!("{cc} failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
     }

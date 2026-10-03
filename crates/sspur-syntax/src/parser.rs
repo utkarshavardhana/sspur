@@ -195,6 +195,7 @@ impl Parser {
             Tok::Kw("type") => self.type_def().map(Def::Type),
             Tok::Kw("fn") => self.fn_def().map(Def::Fn),
             Tok::Kw("rule") => self.rule_def().map(Def::Fn),
+            Tok::Ident(w) if w == "extern" && matches!(self.peek_at(1), Tok::Kw("fn")) => self.extern_def().map(Def::Fn),
             Tok::Kw("test") => {
                 self.bump();
                 let name = self.expect_ident()?;
@@ -500,6 +501,27 @@ impl Parser {
         Ok(Cell::Cond(self.binary(1)?))
     }
 
+    fn extern_def(&mut self) -> PResult<FnDef> {
+        let start = self.span();
+        self.bump();
+        let mut f = self.fn_header(start)?;
+        if !f.pres.is_empty() || !f.posts.is_empty() || !f.examples.is_empty() {
+            return self.err("E_PARSE_EXTERN", "extern functions have no contracts or examples");
+        }
+        let mut ext = Extern { lib: None, symbol: f.name.clone() };
+        for key in ["from", "as"] {
+            if matches!(self.peek(), Tok::Ident(w) if w == key) {
+                self.bump();
+                let Tok::Str(v) = self.peek().clone() else { return self.err("E_PARSE_EXTERN", format!("expected a string after '{key}'")) };
+                self.bump();
+                if key == "from" { ext.lib = Some(v) } else { ext.symbol = v }
+            }
+        }
+        f.ext = Some(ext);
+        f.span = start.to(self.prev_span());
+        Ok(f)
+    }
+
     fn fn_def(&mut self) -> PResult<FnDef> {
         let start = self.span();
         let mut f = self.fn_header(start)?;
@@ -540,7 +562,7 @@ impl Parser {
             }
         }
         let body = Expr::new(ExprKind::Unit, self.prev_span());
-        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, body, span: start.to(self.prev_span()), sig_span })
+        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, body, span: start.to(self.prev_span()), sig_span, ext: None })
     }
 
     fn expr_seq(&mut self) -> PResult<Expr> {

@@ -46,6 +46,9 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `for
 - Map (immutable): `empty_map() get(k) put(k, v) remove(k) has(k) keys values items len`.
 - Int `abs to_f64`; F64 `abs round floor sqrt`; any `.str`; globals `min(a, b) max(a, b) log(s)`.
 
+## C
+`extern fn cbrt(x: F64) -> F64 ! ffi from "m"` (no body; `as "sym"` renames). Widths `I8..I32 U8..U64 F32` exist only in extern signatures (callers pass Int/F64); also `Str`, `Opt[Str]`, `List[U8]`. Callers declare `ffi`. `sspur bind h.h` writes externs; `sspur export-c f.ssp -o libf` builds a C library and header.
+
 ## CLI
 - `./sspur src` prints the codebase. `./sspur q body|sig|callers NAME` print one item.
 - `./sspur edit --test -e '<definitions>'` (one single-quoted, multi-line argument; or a file, or stdin): each definition replaces the one with its name or is added. Lines `rename OLD NEW` (a fn, type, test or constructor, with all uses) and `remove NAME` may come first. Atomic: if anything fails to typecheck nothing changes and errors print as `def:line:col CODE msg`. `--test` then runs every test and prints failures and `N passed, M failed`, so no separate test run is needed. Put all changes of the task in one edit.

@@ -6,3 +6,4 @@ edition.workspace = true
 [dependencies]
 sspur-syntax.workspace = true
 sspur-native.workspace = true
+libloading = "0.9.0"

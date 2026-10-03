@@ -539,7 +539,13 @@ impl Checker {
         for d in &m.defs {
             if let Def::Fn(f) = d {
                 self.cur_def = Some(f.name.clone());
-                let s = self.scheme_of(f);
+                let s = match &f.ext {
+                    Some(_) => {
+                        self.check_extern(f);
+                        self.scheme_of(&sspur_syntax::ffi::sspur_view(f))
+                    }
+                    None => self.scheme_of(f),
+                };
                 self.fns.insert(f.name.clone(), s);
             }
         }
@@ -609,7 +615,25 @@ impl Checker {
         }
     }
 
+    fn check_extern(&mut self, f: &FnDef) {
+        if !f.tparams.is_empty() {
+            self.err("E_EXTERN", f.sig_span, "extern functions can't be generic".into());
+        }
+        if f.effects.len() != 1 || f.effects[0].name != "ffi" || !f.effects[0].args.is_empty() {
+            self.err("E_EXTERN", f.sig_span, "extern functions declare exactly the effect 'ffi': add '! ffi'".into());
+        }
+        if f.params.iter().any(|p| p.refine.is_some()) {
+            self.err("E_EXTERN", f.sig_span, "extern parameters can't have 'where' refinements".into());
+        }
+        if let Err(e) = sspur_syntax::ffi::signature(f) {
+            self.push_diag("E_EXTERN", "error", f.sig_span, e, Some("C-compatible types: Int I8 I16 I32 U8 U16 U32 U64 F32 F64 Bool Str Opt[Str] (and List[scalar] parameters)".into()), vec![]);
+        }
+    }
+
     fn check_fn(&mut self, f: &FnDef) {
+        if f.ext.is_some() {
+            return;
+        }
         self.cur_def = Some(f.name.clone());
         let scheme = self.fns[&f.name].clone();
         self.tparams = scheme.tparams.clone();

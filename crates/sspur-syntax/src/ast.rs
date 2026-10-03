@@ -119,6 +119,13 @@ pub struct FnDef {
     pub body: Expr,
     pub span: Span,
     pub sig_span: Span,
+    pub ext: Option<Extern>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Extern {
+    pub lib: Option<String>,
+    pub symbol: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]

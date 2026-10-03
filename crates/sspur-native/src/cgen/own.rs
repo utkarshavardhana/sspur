@@ -254,7 +254,7 @@ impl Cx<'_> {
                 }
                 let t = self.ty(e)?;
                 self.call_suffix = Some("__own".into());
-                let call = self.call_user(fname, vals, Some(&t), Some(args));
+                let call = self.call_user(fname, vals, Some(&t), Some((e, args)));
                 self.call_suffix = None;
                 Ok(format!("{var} = {}; ", call?))
             }
@@ -283,14 +283,14 @@ impl Cx<'_> {
         Ok(format!("({{ int64_t s_ = {av}; int64_t e_ = {bv}; int64_t n_ = e_ > s_ ? e_ - s_ : 0; RawL r_ = raw_alloc(n_, sizeof({oc})); {oc}* d_ = ({oc}*)r_.data; for (int64_t {i} = 0; {i} < n_; {i}++) {{ int64_t {x} = s_ + {i}; d_[{i}] = {body}; }} r_.hdr[1] = n_; ({out}){{n_, d_, r_.hdr}}; }})"))
     }
 
-    pub(super) fn proven_fields(&mut self, owner: &str, fields: &[(String, Expr)]) -> HashSet<String> {
+    pub(super) fn proven_fields(&mut self, e: &Expr, owner: &str, fields: &[(String, Expr)]) -> HashSet<String> {
         let mut out = HashSet::new();
         let Some(decl) = self.field_refines.get(owner).cloned() else { return out };
         for (fname, refine, tyname) in decl {
             let Some((_, fe)) = fields.iter().find(|(n, _)| *n == fname) else { continue };
             let alias = tyname.as_ref().and_then(|n| self.alias_refines.get(n)).cloned();
             let conds: Vec<Expr> = refine.into_iter().chain(alias).collect();
-            if !conds.is_empty() && conds.iter().all(|c| self.refine_holds(c, fe)) {
+            if !conds.is_empty() && (conds.iter().all(|c| self.refine_holds(c, fe)) || self.smt.proves(e, &format!("field:{fname}"))) {
                 out.insert(fname);
             }
         }

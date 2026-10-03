@@ -1,0 +1,9 @@
+[package]
+name = "sspur-smt"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+blake3.workspace = true
+sspur-syntax.workspace = true
+sspur-check.workspace = true

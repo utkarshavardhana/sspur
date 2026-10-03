@@ -14,4 +14,5 @@ sspur-hash.workspace = true
 sspur-eval.workspace = true
 sspur-store.workspace = true
 sspur-native.workspace = true
+sspur-smt.workspace = true
 serde_json.workspace = true

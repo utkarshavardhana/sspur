@@ -72,3 +72,44 @@ fn proven_check_removal_keeps_real_traps() {
     assert_eq!(run(src, "c", &[-3]), Err("contract violated: pre a >= 0 in m".into()));
     assert_eq!(run(src, "g", &[84, 36]), Ok(12));
 }
+
+fn release(src: &str, f: &str, args: &[i64]) -> Result<i64, String> {
+    let m = parse(src).unwrap();
+    let check = sspur_check::check(&m);
+    let r = sspur_native::cgen::compile_release(&m, &check, "-O2").unwrap();
+    assert!(r.functions.iter().any(|n| n == f), "{f} not native: {:?}", r.skipped);
+    r.call(f, args).unwrap()
+}
+
+#[test]
+fn smt_proofs_remove_checks_but_keep_real_traps() {
+    let src = "fn clamp(x: Int, lo: Int, hi: Int) -> Int\n  pre lo <= hi\n  post r >= lo and r <= hi\n= if x < lo then lo else if x > hi then hi else x\nfn pct(x: Int) -> Int\n= clamp(x, 0, 100) * 3 + 1\nfn w(x: Int) -> Int\n= clamp(x, 5, x)\nfn sub(a: Int, b: Int) -> Int\n  pre a <= b\n= b - a\nfn bad(a: Int, b: Int) -> Int\n  post r >= a\n= a - b\nfn gap(a: Int, b: Int) -> Int\n  pre a >= 0 and a <= b\n  post r >= 0\n= b - a\nfn twice(a: Int, b: Int) -> Int\n= if a >= 0 and a <= b then gap(a, b) + gap(a, b) else 0";
+    assert_eq!(release(src, "pct", &[i64::MAX]), Ok(301));
+    assert_eq!(release(src, "pct", &[i64::MIN]), Ok(1));
+    assert_eq!(release(src, "w", &[3]), Err("contract violated: pre lo <= hi in clamp".into()));
+    assert_eq!(release(src, "w", &[9]), Ok(9));
+    assert_eq!(release(src, "sub", &[i64::MIN, 0]), Err("integer overflow".into()));
+    assert_eq!(release(src, "bad", &[1, 1]), Err("contract violated: post r >= a in bad (r = 0)".into()));
+    assert_eq!(release(src, "twice", &[0, i64::MAX]), Err("integer overflow".into()));
+    assert_eq!(release(src, "twice", &[2, 9]), Ok(14));
+    let h = "type E = Bad\nfn h(x: Int) -> Int\n  post r > 0\n= do\n  y = catch (if x < 0 then return 0 - 1 else if x == 0 then raise Bad else x)\n    | Bad => 0\n  5 + y * 0";
+    assert_eq!(release(h, "h", &[-1]), Err("contract violated: post r > 0 in h (r = -1)".into()));
+    assert_eq!(release(h, "h", &[3]), Ok(5));
+    if !sspur_smt::Solver::new().available() {
+        return;
+    }
+    let m = parse(src).unwrap();
+    let c = sspur_native::cgen::c_source(&m, &sspur_check::check(&m));
+    let body = |name: &str| {
+        let head = format!("static RR_I f_{name}(int64_t a0");
+        let start = c.lines().position(|l| l.starts_with(&head) && l.ends_with('{')).unwrap();
+        c.lines().skip(start).take_while(|l| *l != "}").collect::<Vec<_>>().join("\n")
+    };
+    assert!(body("pct").contains("f_clamp__np("), "{}", body("pct"));
+    assert!(!body("pct").contains("overflow"));
+    assert!(!body("clamp__np").contains("TRAPV(4"));
+    assert!(body("bad").contains("TRAPV(4"));
+    assert!(body("w").contains("f_clamp(") && !body("w").contains("f_clamp__np("));
+    assert!(body("sub__np").contains("overflow"));
+    assert!(body("twice").contains("f_gap__np(") && body("twice").contains("overflow"));
+}

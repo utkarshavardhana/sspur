@@ -18,7 +18,7 @@ Each phase has an exit criterion. A phase isn't done until its criterion is met 
 |---|---|
 | 1 | Done. SSP-T median 0.71x Python tokens |
 | 2 | **Done.** 12 suite programs. Spec-only evaluation: Opus 30/30 zero-shot (bar: 70%), Haiku 25/30. See `adr/0002-phase2-compiler-core.md` and `bench/eval/` |
-| 4 | Speed criterion met and exceeded: native code beats C++ -O2 on every benchmark (0.16x typical, 0.65x strings, 0.71x app, 0.88x compute), with in-place reuse, fusion, and proven check elimination (ADR 0005 to 0008). Pending: `sys` profile, ownership checker, threads and atomics, SMT contracts. See `bench/native/` |
+| 4 | Speed criterion met and exceeded: native code beats C++ -O2 on every benchmark (0.16x typical, 0.65x strings, 0.71x app, 0.88x compute), with in-place reuse, fusion, and proven check elimination (ADR 0005 to 0008). SMT contracts: `sspur verify` proves `pre`/`post`/`where` with Z3, and native code drops proven checks (ADR 0009). Pending: `sys` profile, ownership checker, threads and atomics. See `bench/native/` |
 | 3 | Mostly done: store, transactions, query API with context packs, MCP server, contract fuzzing, typed holes. **Exit criterion measured, not met:** on 8 multi-step feature tasks (Sonnet 5.5, CLI ops only), both languages passed 95/95 hidden tests, but SSPUR used **1.96x** Python's total tokens (median 1.68x per task, worse on all 8). The cost comes from extra calls (reference, query, tx file) and verbose JSON tool output, not from the code itself (0.9x Python). Pending: compact CLI output, inline apply, a rerun, effect handlers, coroutines. See `adr/0003-phase3-agent-loop.md` and `bench/agent/` |
 
 ## Language completeness

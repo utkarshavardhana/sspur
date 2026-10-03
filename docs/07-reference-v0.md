@@ -151,6 +151,8 @@ The reason must be a non-empty string literal. Every declassification is reporte
 
 `pre`, `post` (with `r` as the result), and `where` refinements are checked at run time. A violation traps with the contract text. Contracts must be pure.
 
+`sspur verify [file]` checks them statically with Z3 (if installed): each clause is `proved`, `counterexample` (with concrete inputs, confirmed by running them), or `unknown`. `pre` and `where` are checked at every call site, `post` at every return. Native code drops any check Z3 proves can't fail, so relational contracts such as `pre lo <= hi` and `post r >= lo` make callers and callees faster. Calls are checked against the callee's contracts, not its body, so give helpers a `post` that says what callers need.
+
 ## Tests
 
 `test name = <Bool expression>`. Tests may use `catch`: for example, `test t = catch f(1) == 2` followed by an indented `| _ => false` arm.
@@ -174,7 +176,7 @@ Notes: `first`, `last`, `get`, `min`, `max`, and `find` return `Opt`. `counts` r
 
 ## CLI and agent tools
 
-`sspur check|run|test|fuzz|hash|fmt [file]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter.
+`sspur check|run|test|fuzz|verify|hash|fmt [file]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter.
 
 `sspur fuzz` turns contracts into property tests. It generates inputs that satisfy `pre` and `where`, then reports shrunk counterexamples for any `post` violation or trap.
 

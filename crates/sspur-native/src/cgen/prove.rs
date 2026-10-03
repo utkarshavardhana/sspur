@@ -549,7 +549,7 @@ impl Cx<'_> {
         }
     }
 
-    pub(super) fn callee_safe(&mut self, name: &str, args: &[Expr]) -> bool {
+    pub(super) fn callee_safe(&mut self, name: &str, args: &[Expr], site: &Expr) -> bool {
         if self.generics.contains_key(name) {
             return false;
         }
@@ -557,6 +557,10 @@ impl Cx<'_> {
         if !self.entry_checks(&f) || f.params.len() != args.len() {
             return false;
         }
+        self.callee_safe_iv(&f, args) || self.smt.proves(site, "call")
+    }
+
+    fn callee_safe_iv(&mut self, f: &FnDef, args: &[Expr]) -> bool {
         let m = self.know.facts.len();
         let mut scope = HashMap::new();
         let mut keys = Vec::new();
@@ -575,7 +579,7 @@ impl Cx<'_> {
         }
         let saved = std::mem::replace(&mut self.scopes, vec![scope]);
         let mut ok = true;
-        for (i, c) in self.entry_conds(&f) {
+        for (i, c) in self.entry_conds(f) {
             ok = match i {
                 Some(i) => self.with_underscore(&keys[i], |cx| cx.holds(&c)),
                 None => self.holds(&c),

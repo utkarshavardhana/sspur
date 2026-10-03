@@ -19,38 +19,232 @@ const PRELUDE: &str = r#"#include <stdint.h>
 typedef struct { int64_t code, func, clause, value, limit; int64_t* rbuf; int64_t rlen; void* err; int64_t err_type; } Status;
 #include <stdio.h>
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
+#define LIKELY_(x) __builtin_expect(!!(x), 1)
 #define TRAPV(c, cl, val) do { st->code = (c); st->func = FIDX; st->clause = (cl); st->value = (int64_t)(val); return (RRT){.code = (c)}; } while (0)
-typedef struct Blk { struct Blk* next; size_t used, cap; } Blk;
-static Blk* arena_;
-typedef struct { Blk* b; size_t used; } Mark;
-static Mark arena_mark(void) { return (Mark){arena_, arena_ ? arena_->used : 0}; }
-static void arena_release(Mark m) {
-    while (arena_ && arena_ != m.b) { Blk* n = arena_->next; free(arena_); arena_ = n; }
-    if (arena_) arena_->used = m.used;
+#include <sys/mman.h>
+#include <setjmp.h>
+#include <time.h>
+#define GC_SHIFT 16
+#define GC_PAGE ((size_t)1 << GC_SHIFT)
+#define GC_REGION ((size_t)16 << 30)
+#define GC_NCLS 35
+static const uint32_t gc_sizes[GC_NCLS] = {16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 1024, 1280, 1536, 2048, 2560, 3072, 4096, 5120, 6144, 8192, 10240, 12288, 16384, 32768};
+typedef struct GcPage { uint8_t kind, atomic, cls, swept; uint32_t obj, nobj, bump, live; size_t head, npages; void* free; uint64_t freebits[64], mark[64]; } GcPage;
+typedef struct { char* next; char* end; size_t page; } GcCursor;
+static char* gc_lo; static char* gc_hi; static GcPage** gc_meta; static size_t gc_next;
+static size_t* gc_pool; static size_t gc_pool_n, gc_pool_cap;
+static size_t* gc_active; static size_t gc_active_n, gc_active_cap;
+static size_t* gc_partial[2][GC_NCLS]; static size_t gc_partial_n[2][GC_NCLS], gc_partial_cap[2][GC_NCLS];
+static size_t gc_marked_bytes;
+static GcCursor gc_cur[2][GC_NCLS];
+static void* gc_flist[2][GC_NCLS];
+static size_t gc_flist_page[2][GC_NCLS];
+static size_t gc_since, gc_threshold = (size_t)64 << 20, gc_live_bytes, gc_stress;
+static char* gc_stack_base; static int gc_depth; static void* gc_root_ptr; static size_t gc_root_len;
+static const uint8_t gc_class_of[(32768 >> 3) + 1] = {0,0,0,1,2,3,4,5,6,7,7,8,8,9,9,10,10,11,11,11,11,12,12,12,12,13,13,13,13,14,14,14,14,15,15,15,15,15,15,15,15,16,16,16,16,16,16,16,16,17,17,17,17,17,17,17,17,18,18,18,18,18,18,18,18,19,19,19,19,19,19,19,19,19,19,19,19,19,19,19,19,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34};
+static int gc_ready, gc_stats;
+static int64_t gc_collections;
+static void gc_init(void) {
+    gc_lo = (char*)mmap(0, GC_REGION, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+    if (gc_lo == (char*)MAP_FAILED) abort();
+    gc_hi = gc_lo + GC_REGION;
+    gc_meta = (GcPage**)calloc(GC_REGION >> GC_SHIFT, sizeof(GcPage*));
+    const char* stress = getenv("SSPUR_GC_STRESS");
+    if (stress && *stress) { gc_stress = (size_t)atol(stress); gc_threshold = gc_stress; }
+    gc_stats = getenv("SSPUR_GC_STATS") != 0;
+    gc_ready = 1;
 }
-static void* sspur_alloc(size_t n) {
-    n = (n + 7) & ~(size_t)7;
-    if (!arena_ || arena_->used + n > arena_->cap) {
-        size_t cap = n > ((size_t)1 << 20) ? n : ((size_t)1 << 20);
-        Blk* b = (Blk*)malloc(sizeof(Blk) + 16 + cap);
-        b->next = arena_; b->used = 0; b->cap = cap; arena_ = b;
+static void gc_push(size_t** v, size_t* n, size_t* cap, size_t x) {
+    if (*n == *cap) { *cap = *cap ? *cap * 2 : 64; *v = (size_t*)realloc(*v, *cap * sizeof(size_t)); }
+    (*v)[(*n)++] = x;
+}
+static size_t gc_take_pages(size_t n) {
+    if (n == 1 && gc_pool_n) return gc_pool[--gc_pool_n];
+    size_t i = gc_next; gc_next += n;
+    if ((gc_next << GC_SHIFT) > GC_REGION) abort();
+    return i;
+}
+static void gc_release_page(size_t i) {
+    GcPage* m = gc_meta[i];
+    size_t n = m->kind == 2 ? m->npages : 1;
+    if (n > 1 || gc_pool_n > 1024) madvise(gc_lo + (i << GC_SHIFT), n << GC_SHIFT, MADV_FREE);
+    for (size_t k = 0; k < n; k++) { free(gc_meta[i + k]); gc_meta[i + k] = 0; gc_push(&gc_pool, &gc_pool_n, &gc_pool_cap, i + k); }
+}
+static inline void gc_flush_one(int a, int c) {
+    GcCursor* k = &gc_cur[a][c];
+    if (k->page) { GcPage* m = gc_meta[k->page - 1]; char* base = gc_lo + ((k->page - 1) << GC_SHIFT); m->bump = (uint32_t)((k->next - base) / m->obj); }
+}
+static void gc_flush_cursors(void) {
+    for (int a = 0; a < 2; a++) for (int c = 0; c < GC_NCLS; c++) {
+        GcCursor* k = &gc_cur[a][c];
+        if (k->page) { GcPage* m = gc_meta[k->page - 1]; char* base = gc_lo + ((k->page - 1) << GC_SHIFT); m->bump = (uint32_t)((k->next - base) / m->obj); }
     }
-    char* base = (char*)(((uintptr_t)(arena_ + 1) + 15) & ~(uintptr_t)15);
-    void* p = base + arena_->used;
-    arena_->used += n;
-    return p;
 }
+static inline void gc_consider(uintptr_t w, size_t** stack, size_t* sn, size_t* scap) {
+    if (w < (uintptr_t)gc_lo || w >= (uintptr_t)gc_hi) return;
+    size_t pi = (w - (uintptr_t)gc_lo) >> GC_SHIFT;
+    GcPage* m = gc_meta[pi];
+    if (!m) return;
+    if (m->kind == 3) { pi = m->head; m = gc_meta[pi]; }
+    size_t idx = 0;
+    if (m->kind == 1) { idx = (w - (uintptr_t)(gc_lo + (pi << GC_SHIFT))) / m->obj; if (idx >= m->bump) return; }
+    else if (m->kind != 2) return;
+    uint64_t bit = (uint64_t)1 << (idx & 63);
+    if ((m->freebits[idx >> 6] & bit) || (m->mark[idx >> 6] & bit)) return;
+    m->mark[idx >> 6] |= bit;
+    m->live++;
+    if (!m->atomic) { gc_push(stack, sn, scap, pi); gc_push(stack, sn, scap, idx); }
+}
+static void gc_scan_roots(char* lo, char* hi, size_t** st, size_t* sn, size_t* scap) {
+    lo = (char*)(((uintptr_t)lo + 7) & ~(uintptr_t)7);
+    for (char* p = lo; p + 8 <= hi; p += 8) {
+        uintptr_t w = *(uintptr_t*)p;
+        if (w < (uintptr_t)gc_lo || w >= (uintptr_t)gc_hi) continue;
+        gc_consider(w, st, sn, scap);
+        gc_consider(w - 1, st, sn, scap);
+    }
+}
+static void gc_scan(char* lo, char* hi, size_t** st, size_t* sn, size_t* scap) {
+    for (char* p = lo; p + 8 <= hi; p += 8) gc_consider(*(uintptr_t*)p, st, sn, scap);
+}
+static void gc_sweep_page(GcPage* m, size_t i) {
+    char* base = gc_lo + (i << GC_SHIFT); m->free = 0;
+    for (uint32_t w = 0; w * 64 < m->bump; w++) {
+        uint64_t marks = m->mark[w];
+        for (uint32_t b = 0; b < 64; b++) {
+            uint32_t j = w * 64 + b;
+            if (j >= m->bump) break;
+            if (marks & ((uint64_t)1 << b)) continue;
+            m->freebits[w] |= (uint64_t)1 << b;
+            *(void**)(base + (size_t)j * m->obj) = m->free; m->free = base + (size_t)j * m->obj;
+        }
+        m->mark[w] = 0;
+    }
+    m->swept = 1;
+}
+static void __attribute__((noinline)) gc_collect(void) {
+    jmp_buf regs; setjmp(regs);
+    gc_flush_cursors();
+    for (size_t k = 0; k < gc_active_n; k++) { GcPage* m = gc_meta[gc_active[k]]; m->live = 0; if (m->kind == 1 && !m->swept) memset(m->mark, 0, sizeof(m->mark)); }
+    size_t* st = 0; size_t sn = 0, scap = 0;
+    char probe; char* sp = &probe;
+    gc_scan_roots((char*)regs, (char*)regs + sizeof(regs), &st, &sn, &scap);
+    if (gc_stack_base > sp) gc_scan_roots(sp, gc_stack_base, &st, &sn, &scap);
+    if (gc_root_ptr) gc_scan_roots((char*)gc_root_ptr, (char*)gc_root_ptr + gc_root_len, &st, &sn, &scap);
+    while (sn) {
+        size_t idx = st[--sn], pi = st[--sn];
+        GcPage* m = gc_meta[pi];
+        char* obj = gc_lo + (pi << GC_SHIFT) + idx * (m->kind == 1 ? m->obj : 0);
+        size_t len = m->kind == 1 ? m->obj : (m->npages << GC_SHIFT);
+        gc_scan(obj, obj + len, &st, &sn, &scap);
+    }
+    free(st);
+    for (int a = 0; a < 2; a++) for (int c = 0; c < GC_NCLS; c++) { gc_partial_n[a][c] = 0; gc_cur[a][c] = (GcCursor){0, 0, 0}; gc_flist[a][c] = 0; gc_flist_page[a][c] = 0; }
+    size_t keep = 0; gc_live_bytes = 0;
+    for (size_t k = 0; k < gc_active_n; k++) {
+        size_t i = gc_active[k]; GcPage* m = gc_meta[i];
+        if (m->kind == 2) {
+            if (m->mark[0] & 1) { m->mark[0] = 0; gc_live_bytes += m->npages << GC_SHIFT; gc_active[keep++] = i; }
+            else gc_release_page(i);
+            continue;
+        }
+        if (m->live == 0) { gc_release_page(i); continue; }
+        m->swept = 0;
+        gc_live_bytes += (size_t)m->live * m->obj;
+        gc_active[keep++] = i;
+        if (m->live < m->nobj) gc_push(&gc_partial[m->atomic][m->cls], &gc_partial_n[m->atomic][m->cls], &gc_partial_cap[m->atomic][m->cls], i);
+    }
+    gc_active_n = keep;
+    gc_since = 0;
+    if (!gc_stress) { gc_threshold = gc_live_bytes * 2; if (gc_threshold < ((size_t)64 << 20)) gc_threshold = (size_t)64 << 20; }
+    gc_collections++;
+    if (gc_stats) fprintf(stderr, "sspur gc: collection %lld, live %zu KB, active pages %zu\n", (long long)gc_collections, gc_live_bytes >> 10, gc_active_n);
+}
+static void gc_new_page(int atomic, int cls) {
+    size_t i = gc_take_pages(1);
+    GcPage* m = (GcPage*)calloc(1, sizeof(GcPage));
+    m->kind = 1; m->swept = 1; m->atomic = (uint8_t)atomic; m->cls = (uint8_t)cls; m->obj = gc_sizes[cls]; m->nobj = (uint32_t)(GC_PAGE / m->obj);
+    gc_meta[i] = m; gc_push(&gc_active, &gc_active_n, &gc_active_cap, i);
+    char* base = gc_lo + (i << GC_SHIFT);
+    gc_cur[atomic][cls] = (GcCursor){base, base + (size_t)m->nobj * m->obj, i + 1};
+    gc_since += GC_PAGE;
+}
+static void* gc_alloc_large(size_t n, int atomic) {
+    size_t np = (n + GC_PAGE - 1) >> GC_SHIFT;
+    size_t i = gc_take_pages(np);
+    GcPage* m = (GcPage*)calloc(1, sizeof(GcPage));
+    m->kind = 2; m->atomic = (uint8_t)atomic; m->npages = np; m->bump = 1;
+    gc_meta[i] = m;
+    for (size_t k = 1; k < np; k++) { GcPage* c = (GcPage*)calloc(1, sizeof(GcPage)); c->kind = 3; c->head = i; gc_meta[i + k] = c; }
+    gc_push(&gc_active, &gc_active_n, &gc_active_cap, i);
+    gc_since += np << GC_SHIFT;
+    return gc_lo + (i << GC_SHIFT);
+}
+static void* __attribute__((noinline)) gc_alloc_slow(size_t n, int atomic) {
+    if (!gc_ready) gc_init();
+    if (n > 32768) return gc_alloc_large(n, atomic);
+    int cls = gc_class_of[(n + 7) >> 3];
+    for (;;) {
+        GcCursor* k = &gc_cur[atomic][cls];
+        uint32_t sz = gc_sizes[cls];
+        if (k->next && k->next + sz <= k->end) { void* r = k->next; k->next += sz; return r; }
+        void* f = gc_flist[atomic][cls];
+        if (f) {
+            gc_flist[atomic][cls] = *(void**)f; *(void**)f = 0;
+            size_t pi = gc_flist_page[atomic][cls]; GcPage* m = gc_meta[pi];
+            uint32_t j = (uint32_t)(((char*)f - (gc_lo + (pi << GC_SHIFT))) / m->obj);
+            m->freebits[j >> 6] &= ~((uint64_t)1 << (j & 63));
+            return f;
+        }
+        gc_flush_one(atomic, cls);
+        if (gc_since > gc_threshold && gc_depth > 0) { gc_collect(); continue; }
+        if (gc_partial_n[atomic][cls]) {
+            size_t pi = gc_partial[atomic][cls][--gc_partial_n[atomic][cls]];
+            GcPage* m = gc_meta[pi];
+            char* base = gc_lo + (pi << GC_SHIFT);
+            if (!m->swept) gc_sweep_page(m, pi);
+            gc_flist[atomic][cls] = m->free; gc_flist_page[atomic][cls] = pi; m->free = 0;
+            gc_cur[atomic][cls] = (GcCursor){base + (size_t)m->bump * m->obj, base + (size_t)m->nobj * m->obj, pi + 1};
+            gc_since += (size_t)(m->nobj - m->live) * m->obj;
+            continue;
+        }
+        gc_new_page(atomic, cls);
+    }
+}
+static inline __attribute__((always_inline)) void* gc_alloc(size_t n, int atomic) {
+    if (n && n <= 32768) {
+        int cls = gc_class_of[(n + 7) >> 3];
+        GcCursor* k = &gc_cur[atomic][cls];
+        uint32_t sz = gc_sizes[cls];
+        if (LIKELY_(k->next + sz <= k->end)) { void* r = k->next; k->next += sz; return r; }
+    }
+    return gc_alloc_slow(n ? n : 1, atomic);
+}
+static void gc_reset(void) {
+    if (gc_stats) fprintf(stderr, "sspur gc: %lld collections, %zu active pages\n", (long long)gc_collections, gc_active_n);
+    for (size_t k = 0; k < gc_active_n; k++) gc_release_page(gc_active[k]);
+    gc_active_n = 0; gc_since = 0;
+    for (int a = 0; a < 2; a++) for (int c = 0; c < GC_NCLS; c++) { gc_partial_n[a][c] = 0; gc_cur[a][c] = (GcCursor){0, 0, 0}; gc_flist[a][c] = 0; }
+}
+static inline void gc_enter(void* frame, void* root, size_t root_len) {
+    if (gc_depth++ == 0) { gc_stack_base = (char*)frame + 256; gc_root_ptr = root; gc_root_len = root_len; }
+}
+static inline void gc_leave(void) { if (--gc_depth == 0) gc_reset(); }
+int64_t sspur_gc_collections(void) { return gc_collections; }
+static inline void* sspur_alloc(size_t n) { return gc_alloc(n, 0); }
+static inline void* sspur_alloc_atomic(size_t n) { return gc_alloc(n, 1); }
 typedef struct { int64_t len; void* data; int64_t* hdr; } RawL;
-static RawL raw_alloc(int64_t cap, size_t es) {
+static RawL raw_alloc_a(int64_t cap, size_t es, int atomic) {
     if (cap < 4) cap = 4;
-    int64_t* h = (int64_t*)sspur_alloc(16 + (size_t)cap * es);
-    h[0] = cap; h[1] = 0;
-    return (RawL){0, (void*)(h + 2), h};
+    int64_t* h = (int64_t*)gc_alloc(32 + (size_t)cap * es, atomic);
+    h[0] = cap; h[1] = 0; h[2] = atomic; h[3] = 0;
+    return (RawL){0, (void*)(h + 4), h};
 }
-static inline int64_t raw_offset(RawL l, size_t es) { return ((char*)l.data - (char*)(l.hdr + 2)) / (int64_t)es; }
+static RawL raw_alloc(int64_t cap, size_t es) { return raw_alloc_a(cap, es, 0); }
+static inline int64_t raw_offset(RawL l, size_t es) { return ((char*)l.data - (char*)(l.hdr + 4)) / (int64_t)es; }
 static inline __attribute__((always_inline)) RawL raw_reserve(RawL l, int64_t extra, size_t es) {
     if (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0]) return l;
-    RawL n = raw_alloc((l.len + extra) * 2, es);
+    RawL n = raw_alloc_a((l.len + extra) * 2, es, l.hdr ? (int)l.hdr[2] : 0);
     if (l.len) memcpy(n.data, l.data, (size_t)l.len * es);
     n.len = l.len; n.hdr[1] = l.len;
     return n;
@@ -69,7 +263,7 @@ static RawL raw_concat(RawL a, RawL b, size_t es) {
     return r;
 }
 static RawL raw_copy(RawL l, size_t es) {
-    RawL n = raw_alloc(l.len, es);
+    RawL n = raw_alloc_a(l.len, es, l.hdr ? (int)l.hdr[2] : 0);
     if (l.len) memcpy(n.data, l.data, (size_t)l.len * es);
     n.len = l.len; n.hdr[1] = l.len;
     return n;
@@ -141,7 +335,7 @@ void sspur_set_host(const HostApi* h) { host_ = *h; }
 typedef struct { char* p; int64_t len, cap; } SB;
 static void sb_put(SB* b, const char* s, int64_t n) {
     if (n <= 0) return;
-    if (b->len + n > b->cap) { int64_t nc = (b->cap + n) * 2 + 16; char* np = (char*)sspur_alloc((size_t)nc); if (b->len) memcpy(np, b->p, (size_t)b->len); b->p = np; b->cap = nc; }
+    if (b->len + n > b->cap) { int64_t nc = (b->cap + n) * 2 + 16; char* np = (char*)sspur_alloc_atomic((size_t)nc); if (b->len) memcpy(np, b->p, (size_t)b->len); b->p = np; b->cap = nc; }
     memcpy(b->p + b->len, s, (size_t)n); b->len += n;
 }
 static Str sb_done(SB* b) { return (Str){b->len, b->p}; }
@@ -153,12 +347,12 @@ static void sb_int(SB* b, int64_t v) {
 }
 static void sb_f64(SB* b, double v) { char t[64]; int64_t n = host_.fmt_f64(v, t); sb_put(b, t, n); }
 static void sb_f64d(SB* b, double v) { char t[400]; int64_t n = host_.fmt_f64_display(v, t); sb_put(b, t, n); }
-static void sb_strq(SB* b, Str s) { int64_t cap = s.len * 10 + 8; char* o = (char*)sspur_alloc((size_t)cap); int64_t n = host_.str_op(3, s.p, s.len, o, cap); sb_put(b, o, n); }
+static void sb_strq(SB* b, Str s) { int64_t cap = s.len * 10 + 8; char* o = (char*)sspur_alloc_atomic((size_t)cap); int64_t n = host_.str_op(3, s.p, s.len, o, cap); sb_put(b, o, n); }
 static inline Str str_lit(const char* p, int64_t n) { return (Str){n, p}; }
 static inline uint64_t hash_S(Str s) { uint64_t h = 1469598103934665603ULL; for (int64_t i = 0; i < s.len; i++) { h ^= (unsigned char)s.p[i]; h *= 1099511628211ULL; } return hmix(h ^ (uint64_t)s.len); }
 static inline uint64_t hash_D(double v) { return hmix((uint64_t)dkey(v)); }
 static inline int cmp_S(Str a, Str b) { int64_t n = a.len < b.len ? a.len : b.len; int c = n ? memcmp(a.p, b.p, (size_t)n) : 0; if (c) return c < 0 ? -1 : 1; return cmp_I(a.len, b.len); }
-static Str str_cat(Str a, Str b) { if (!b.len) return a; if (!a.len) return b; char* p = (char*)sspur_alloc((size_t)(a.len + b.len)); memcpy(p, a.p, (size_t)a.len); memcpy(p + a.len, b.p, (size_t)b.len); return (Str){a.len + b.len, p}; }
+static Str str_cat(Str a, Str b) { if (!b.len) return a; if (!a.len) return b; char* p = (char*)sspur_alloc_atomic((size_t)(a.len + b.len)); memcpy(p, a.p, (size_t)a.len); memcpy(p + a.len, b.p, (size_t)b.len); return (Str){a.len + b.len, p}; }
 static int64_t utf8_len(Str s) { int64_t n = 0; for (int64_t i = 0; i < s.len; i++) if (((unsigned char)s.p[i] & 0xC0) != 0x80) n++; return n; }
 static int64_t utf8_next(Str s, int64_t i) { i++; while (i < s.len && ((unsigned char)s.p[i] & 0xC0) == 0x80) i++; return i; }
 static int64_t utf8_byte_at(Str s, int64_t k) { int64_t i = 0, c = 0; while (i < s.len && c < k) { i = utf8_next(s, i); c++; } return i; }
@@ -170,11 +364,11 @@ static int64_t str_ends(Str s, Str p) { return p.len <= s.len && (p.len == 0 || 
 static int str_ascii(Str s) { for (int64_t i = 0; i < s.len; i++) if ((unsigned char)s.p[i] >= 0x80) return 0; return 1; }
 static Str str_case(Str s, int64_t op) {
     if (str_ascii(s)) {
-        char* o = (char*)sspur_alloc((size_t)s.len + 1);
+        char* o = (char*)sspur_alloc_atomic((size_t)s.len + 1);
         for (int64_t i = 0; i < s.len; i++) { char c = s.p[i]; o[i] = op == 1 ? (c >= 'A' && c <= 'Z' ? c + 32 : c) : (c >= 'a' && c <= 'z' ? c - 32 : c); }
         return (Str){s.len, o};
     }
-    int64_t cap = s.len * 12 + 16; char* o = (char*)sspur_alloc((size_t)cap); int64_t n = host_.str_op(op, s.p, s.len, o, cap); return (Str){n, o};
+    int64_t cap = s.len * 12 + 16; char* o = (char*)sspur_alloc_atomic((size_t)cap); int64_t n = host_.str_op(op, s.p, s.len, o, cap); return (Str){n, o};
 }
 static inline int ascii_ws(unsigned char c) { return c == ' ' || (c >= 9 && c <= 13); }
 static Str str_trim(Str s) {
@@ -184,8 +378,8 @@ static Str str_trim(Str s) {
     if ((a < b && ((unsigned char)s.p[a] >= 0x80 || (unsigned char)s.p[b - 1] >= 0x80))) { int64_t sp[2] = {0, 0}; host_.str_spans(2, s.p, s.len, sp, 2); return (Str){sp[1], s.p + sp[0]}; }
     return (Str){b - a, s.p + a};
 }
-static Str str_rev(Str s) { if (!s.len) return s; char* o = (char*)sspur_alloc((size_t)s.len); int64_t w = s.len; for (int64_t i = 0; i < s.len;) { int64_t j = utf8_next(s, i); w -= j - i; memcpy(o + w, s.p + i, (size_t)(j - i)); i = j; } return (Str){s.len, o}; }
-static Str str_repeat(Str s, int64_t n) { if (!s.len || !n) return (Str){0, s.p}; char* o = (char*)sspur_alloc((size_t)(s.len * n)); for (int64_t i = 0; i < n; i++) memcpy(o + i * s.len, s.p, (size_t)s.len); return (Str){s.len * n, o}; }
+static Str str_rev(Str s) { if (!s.len) return s; char* o = (char*)sspur_alloc_atomic((size_t)s.len); int64_t w = s.len; for (int64_t i = 0; i < s.len;) { int64_t j = utf8_next(s, i); w -= j - i; memcpy(o + w, s.p + i, (size_t)(j - i)); i = j; } return (Str){s.len, o}; }
+static Str str_repeat(Str s, int64_t n) { if (!s.len || !n) return (Str){0, s.p}; char* o = (char*)sspur_alloc_atomic((size_t)(s.len * n)); for (int64_t i = 0; i < n; i++) memcpy(o + i * s.len, s.p, (size_t)s.len); return (Str){s.len * n, o}; }
 static Str str_replace(Str s, Str from, Str to) {
     SB b = {0};
     if (from.len == 0) { sb_put(&b, to.p, to.len); for (int64_t i = 0; i < s.len;) { int64_t j = utf8_next(s, i); sb_put(&b, s.p + i, j - i); sb_put(&b, to.p, to.len); i = j; } return sb_done(&b); }
@@ -220,7 +414,7 @@ static RawL str_words(Str s) {
         }
         return r;
     }
-    int64_t cap = s.len * 2 + 2; int64_t* sp = (int64_t*)sspur_alloc((size_t)cap * 8);
+    int64_t cap = s.len * 2 + 2; int64_t* sp = (int64_t*)sspur_alloc_atomic((size_t)cap * 8);
     int64_t n = host_.str_spans(1, s.p, s.len, sp, cap);
     RawL r = raw_alloc(n / 2, sizeof(Str));
     for (int64_t i = 0; i + 1 < n; i += 2) { Str w = {sp[i + 1], s.p + sp[i]}; r = raw_push(r, &w, sizeof(Str)); }
@@ -400,6 +594,7 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
             src.push_str(&entries);
             src.push_str(&cx.helpers_late);
             plan_fns.retain(|_, (p, r, _)| !p.iter().chain([&*r]).any(has_fn));
+            let src = cx.atomize(&src);
             let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone() };
             return Ok((src, plan));
         }
@@ -522,6 +717,7 @@ struct Cx<'a> {
     mutable: HashSet<String>,
     fidx: usize,
     inplace: HashSet<String>,
+    atomic_ctypes: HashSet<String>,
     pending_linear: HashSet<String>,
     all_fns: HashMap<String, FnDef>,
 }
@@ -559,6 +755,7 @@ impl<'a> Cx<'a> {
             mutable: HashSet::new(),
             fidx: 0,
             inplace: HashSet::new(),
+            atomic_ctypes: ["int64_t".to_string(), "double".to_string()].into_iter().collect(),
             pending_linear: HashSet::new(),
             all_fns: HashMap::new(),
         }
@@ -659,6 +856,37 @@ impl<'a> Cx<'a> {
         }
     }
 
+    fn pointer_free(&self, t: &Type) -> bool {
+        match t {
+            _ if is(t, "Int") || is(t, "Bool") || is(t, "Unit") || is(t, "F64") => true,
+            Type::Tuple(xs) => xs.iter().all(|x| self.pointer_free(x)),
+            Type::Con(n, a) if n == "Opt" || n == "Guess" => self.pointer_free(&a[0]),
+            Type::Con(n, a) if self.layouts.records.contains_key(n) => self.layouts.record_fields(n, a).is_some_and(|fs| fs.iter().all(|(_, t)| self.pointer_free(t))),
+            _ => self.zero_cost_inner(t).is_some_and(|i| self.pointer_free(&i)),
+        }
+    }
+
+    fn atomize(&self, src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let mut rest = src;
+        while let Some(i) = rest.find("raw_alloc(") {
+            out.push_str(&rest[..i]);
+            let tail = &rest[i..];
+            let close = tail.find(");").or_else(|| tail.find(')'));
+            let call_end = match_paren(tail).unwrap_or(close.unwrap_or(tail.len()));
+            let call = &tail[..call_end];
+            let atomic = call.rfind("sizeof(").map(|k| &call[k + 7..call.len().saturating_sub(1)]).is_some_and(|ty| self.atomic_ctypes.contains(ty.trim_end_matches(')'))) || call.ends_with(", 8)");
+            if atomic {
+                out.push_str(&format!("raw_alloc_a({}, 1)", &call["raw_alloc(".len()..call.len() - 1]));
+            } else {
+                out.push_str(call);
+            }
+            rest = &tail[call_end..];
+        }
+        out.push_str(rest);
+        out
+    }
+
     fn fwd_decl(&mut self, m: &str) {
         if self.declared.insert(m.to_string()) {
             writeln!(self.fwd, "typedef struct {m} {m};").unwrap();
@@ -681,6 +909,9 @@ impl<'a> Cx<'a> {
 
     fn cty(&mut self, t: &Type) -> G {
         let m = self.mangle(t)?;
+        if self.pointer_free(t) {
+            self.atomic_ctypes.insert(m.clone());
+        }
         match t {
             Type::Con(n, _) if matches!(n.as_str(), "Int" | "Bool" | "Unit") => Ok("int64_t".into()),
             Type::Con(n, _) if n == "F64" => Ok("double".into()),
@@ -979,7 +1210,7 @@ impl<'a> Cx<'a> {
         let c = self.cty(t)?;
         writeln!(self.protos, "static {c} {name}(const int64_t** p);").unwrap();
         let body = match t {
-            _ if is(t, "Str") => "int64_t n = *(*p)++; char* s = (char*)sspur_alloc((size_t)n + 1); for (int64_t i = 0; i < n; i += 8) { int64_t w = *(*p)++; memcpy(s + i, &w, (size_t)(n - i < 8 ? n - i : 8)); } return (Str){n, s};".to_string(),
+            _ if is(t, "Str") => "int64_t n = *(*p)++; char* s = (char*)sspur_alloc_atomic((size_t)n + 1); for (int64_t i = 0; i < n; i += 8) { int64_t w = *(*p)++; memcpy(s + i, &w, (size_t)(n - i < 8 ? n - i : 8)); } return (Str){n, s};".to_string(),
             _ if is(t, "F64") => "return bitsd(*(*p)++);".to_string(),
             _ if scalar(t) => "return *(*p)++;".to_string(),
             Type::Con(n, a) if n == "List" => {
@@ -1049,7 +1280,7 @@ impl<'a> Cx<'a> {
         if scalar_abi {
             let sig: String = (0..params.len()).map(|i| format!("int64_t a{i}, ")).collect();
             let rr = self.rr(ret)?;
-            writeln!(s, "int64_t sspur_entry_{name}({sig}Status* st) {{ Mark m = arena_mark(); {rr} r = f_{name}({args}st, -st->limit); arena_release(m); return r.v; }}").unwrap();
+            writeln!(s, "int64_t sspur_entry_{name}({sig}Status* st) {{ gc_enter(__builtin_frame_address(0), st, sizeof(Status)); {rr} r = f_{name}({args}st, -st->limit); gc_leave(); return r.v; }}").unwrap();
         }
         let mut decs = String::new();
         for (i, t) in params.iter().enumerate() {
@@ -1059,7 +1290,7 @@ impl<'a> Cx<'a> {
         }
         let enc = self.helper_enc(ret)?;
         let rr = self.rr(ret)?;
-        writeln!(s, "int64_t sspur_wentry_{name}(const int64_t* in, Status* st, int64_t** out, int64_t* out_len) {{ Mark m = arena_mark(); const int64_t* p = in; {decs}{rr} r = f_{name}({args}st, -st->limit); if (r.code) {{ if (r.code == {T_RAISE}) enc_err(st); arena_release(m); return r.code; }} Buf b = {{0}}; {enc}(&b, r.v); *out = b.data; *out_len = b.len; arena_release(m); return 0; }}").unwrap();
+        writeln!(s, "int64_t sspur_wentry_{name}(const int64_t* in, Status* st, int64_t** out, int64_t* out_len) {{ gc_enter(__builtin_frame_address(0), st, sizeof(Status)); const int64_t* p = in; {decs}{rr} r = f_{name}({args}st, -st->limit); if (r.code) {{ if (r.code == {T_RAISE}) enc_err(st); gc_leave(); return r.code; }} Buf b = {{0}}; {enc}(&b, r.v); *out = b.data; *out_len = b.len; gc_leave(); return 0; }}").unwrap();
         Ok(s)
     }
 
@@ -2379,7 +2610,7 @@ impl<'a> Cx<'a> {
             "counts" => self.counts(r, lt, et, t)?,
             "join" if is(et, "Str") => {
                 let sep = self.expr(&args[0])?;
-                wrap(format!("Str sep_ = {sep}; int64_t n_ = {l}.len > 0 ? ({l}.len - 1) * sep_.len : 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) n_ += {l}.data[{i}].len; char* o_ = (char*)sspur_alloc((size_t)n_ + 1); int64_t w_ = 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ if ({i} && sep_.len) {{ memcpy(o_ + w_, sep_.p, (size_t)sep_.len); w_ += sep_.len; }} if ({l}.data[{i}].len) {{ memcpy(o_ + w_, {l}.data[{i}].p, (size_t){l}.data[{i}].len); w_ += {l}.data[{i}].len; }} }} (Str){{n_, o_}};"))
+                wrap(format!("Str sep_ = {sep}; int64_t n_ = {l}.len > 0 ? ({l}.len - 1) * sep_.len : 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) n_ += {l}.data[{i}].len; char* o_ = (char*)sspur_alloc_atomic((size_t)n_ + 1); int64_t w_ = 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ if ({i} && sep_.len) {{ memcpy(o_ + w_, sep_.p, (size_t)sep_.len); w_ += sep_.len; }} if ({l}.data[{i}].len) {{ memcpy(o_ + w_, {l}.data[{i}].p, (size_t){l}.data[{i}].len); w_ += {l}.data[{i}].len; }} }} (Str){{n_, o_}};"))
             }
             _ => return Err(format!("uses List.{name}")),
         })
@@ -2812,6 +3043,23 @@ fn body_linear(b: &Expr, m: &str) -> bool {
 
 fn is_fresh_map(e: &Expr) -> bool {
     matches!(&e.kind, ExprKind::Call(f, args) if args.is_empty() && is_name(f, "empty_map"))
+}
+
+fn match_paren(s: &str) -> Option<usize> {
+    let mut depth = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn has_fn(t: &Type) -> bool {

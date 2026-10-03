@@ -126,7 +126,10 @@ extern "C" fn host_log(p: *const u8, len: i64) {
     let s = unsafe { host_str(p, len) };
     match LOG_HOOK.with(|h| h.get()) {
         Some((f, ctx)) => f(ctx, s),
-        None => println!("{s}"),
+        None => {
+            use std::io::Write;
+            let _ = writeln!(std::io::stdout(), "{s}");
+        }
     }
 }
 

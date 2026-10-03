@@ -4,16 +4,31 @@
 
 ## Results (Apple Silicon, 2026-10-03, best of 3, wall time including SSPUR's parse, typecheck, and library load)
 
-| Workload | File | C++ clang -O2 | SSPUR | Ratio |
-|---|---|---|---|---|
-| Compute-heavy: recursion, loops, primes, gcd | `compute_big` | 1.01s | 0.96s | **0.95x** |
-| Records, lists, persistent trees, float simulation | `typical` | 0.77s idiomatic, 0.21s hand-tuned (arena) | 0.24s | **0.31x** idiomatic, 1.14x tuned |
-| Strings: build 2M words, lowercase, split, count, sort | `strings_big` | 0.09s | 0.07s | **0.78x** |
-| App: generate CSV, parse with errors, aggregate in a map, report | `app` | 0.16s | 0.16s | **1.00x** |
+| Workload | File | C++ clang -O2 | SSPUR | Ratio | Peak memory C++ / SSPUR |
+|---|---|---|---|---|---|
+| Compute-heavy: recursion, loops, primes, gcd | `compute_big` | 1.01s | 0.96s | **0.95x** | 1 MB / 5 MB |
+| Records, lists, persistent trees, float simulation | `typical` | 0.77s idiomatic, 0.21s hand-tuned (arena, never frees) | 0.27s | **0.35x** idiomatic, 1.29x tuned | 281 MB tuned / 472 MB |
+| Strings: build 2M words, lowercase, split, count, sort | `strings_big` | 0.09s | 0.09s | **1.00x** | 34 MB / 246 MB |
+| App: generate CSV, parse with errors, aggregate in a map, report | `app` | 0.16s | 0.17s | **1.06x** | 34 MB / 117 MB |
+| Long-running loop: 2M iterations, about 7 GB of short-lived garbage | `churn` (x10) | | 1.0s | | **73 MB** flat |
 
 - Every C++ version carries the same safety checks SSPUR always has (overflow, bounds, contracts) via `__builtin_*_overflow` and `abort()`.
 - The output of each pair is identical (checked by `diff`).
 - A cold first build adds about 0.6 to 0.9s of clang time, once. After that it's cached under `~/.cache/sspur/native/`.
+
+## Memory
+
+Native code uses a garbage collector built into the generated runtime:
+- mark-sweep over size-classed 64 KB pages, carved from one reserved 16 GB virtual region (so testing whether a word is a heap pointer is O(1))
+- conservative scanning of registers and the native stack, with interior pointers; the one-past-the-end rule applies to roots only
+- no-scan pages for string bytes and pointer-free list buffers
+- bump-pointer allocation, lazy sweeping, and empty pages detected from mark counts
+
+A collection runs after max(64 MB, 2x live) of allocation. The whole heap is released when native code returns to the interpreter. Memory stays bounded: about 7 GB of garbage peaks at 73 MB.
+
+Compared with the earlier never-freeing arena, the collector costs 0 to 15% of runtime (typical: 0.24s to 0.27s; strings: 0.07s to 0.09s). Peak memory is higher than C++ because collection is deferred until the threshold.
+
+Stress mode is `SSPUR_GC_STRESS=<bytes>`, which collects every N bytes. The suite (4 KB and 100 KB), the benchmarks (3 MB), and all 199 corpus programs (64 KB) produce identical results under it. `SSPUR_GC_STATS=1` prints per-collection statistics.
 
 ## Coverage
 

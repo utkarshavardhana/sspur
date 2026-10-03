@@ -1,0 +1,12 @@
+type P = {x: Int, y: Int}
+
+fn churn(n: Int) -> Int
+= do
+  var total = 0
+  for i in 0..n
+    xs = (0..100).map(j => P{x: i, y: j})
+    total := (total + xs.map(_.x + _.y).sum) % 1000003
+  total
+
+fn main() -> Unit ! log
+= log("{churn(200000)}")

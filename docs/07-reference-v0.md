@@ -4,7 +4,7 @@ This is everything the current compiler implements, and it's all an agent needs 
 
 ## Program shape
 
-A program is a set of definitions: `type`, `fn`, `effect`, and `test`. Order doesn't matter. There are no imports and no comments. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
+A program is a set of definitions: `type`, `fn`, `effect`, `test`, and for services `store` and `svc`. Order doesn't matter. There are no imports and no comments. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
 
 ```
 type Item = {sku: Str, qty: Int where _ > 0, price: Int where _ >= 0}
@@ -164,6 +164,24 @@ fn sum_tree(t: Tree) -> Int
 
 Pass a generator as a value with a thunk, `() => walk(t)`, typed `() -> Unit ! yield[T], e`. A `handle` over `yield` that stops resuming takes a prefix, which also works on infinite generators.
 
+## Services
+
+```
+store Items = table[ItemId, Item]
+
+fn read(id: Str) -> Opt[Item] ! db.read[Items]
+= db.get(Items, ItemId(id))
+
+svc items
+  ep get "/items/{id}" = read
+```
+
+- `store S = table[K, V]`: K is `Str`, `Int`, or a newtype over them. `db.get(S, k)` returns `Opt[V]` and `db.scan(S)` returns `List[V]`; both need `db.read[S]`. `db.put(S, k, v)` and `db.del(S, k)` (returns whether the key existed) need `db.write[S]`.
+- `svc name` followed by `ep METHOD "path" = fname` lines (`get post put patch delete`). Each `{x}` path segment binds the parameter named `x` (`Str`, `Int`, or a newtype). At most one other parameter is the JSON request body, and GET and DELETE take none. A handler may only perform `db.*`, `log`, `div`, and `fail`.
+- Responses: `Opt` none is 404, `Unit` is 204, POST success is 201, other success is 200. `raise` returns `{"error": value}`, with the status chosen by variant name: `NotFound` 404, `Conflict` 409, `Forbidden` 403, `Unauthorized` 401, `Invalid` 400, others 422. A request that fails a refinement or doesn't decode gets 400.
+- JSON: records are objects, lists and tuples are arrays, `Opt` is the value or `null`, newtypes are their inner value, and a variant is `"Name"` or `{"tag": "Name", ...fields}`.
+- `sspur deploy plan file [--out DIR]` writes a CloudFormation template, per-handler IAM policies derived from the effects (only the DynamoDB actions the handler can reach, on its table), and the native Lambda `bootstrap.c`. `sspur deploy local file [--port N]` serves the service on 127.0.0.1 with emulated Lambda and DynamoDB that enforce those policies. Neither command calls AWS. See ADR 0016.
+
 ## Accepted input forms
 
 The parser accepts these common spellings and stores the canonical form:
@@ -228,7 +246,7 @@ Notes: `first`, `last`, `get`, `min`, `max`, and `find` return `Opt`. `counts` r
 
 ## CLI and agent tools
 
-`sspur check|run|test|fuzz|verify|hash|fmt [file]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter.
+`sspur check|run|test|fuzz|verify|hash|fmt [file]`, `sspur deploy plan|local file`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter.
 
 `sspur fuzz` turns contracts into property tests. It generates inputs that satisfy `pre` and `where`, then reports shrunk counterexamples for any `post` violation or trap.
 

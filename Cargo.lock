@@ -500,11 +500,23 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "sspur-check",
+ "sspur-deploy",
  "sspur-eval",
  "sspur-hash",
  "sspur-native",
  "sspur-smt",
  "sspur-store",
+ "sspur-syntax",
+]
+
+[[package]]
+name = "sspur-deploy"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde_json",
+ "sspur-check",
+ "sspur-native",
  "sspur-syntax",
 ]
 

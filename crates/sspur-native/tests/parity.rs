@@ -45,7 +45,7 @@ fn traps_propagate_through_calls_and_recursion_is_bounded() {
 #[test]
 fn control_flow() {
     let src = "fn f(n: Int) -> Int ! div\n= do\n  var s = 0\n  var i = 0\n  while i < n\n    if i % 3 == 0 then s := s + i\n    i := i + 1\n  for j in 0..n\n    s := s - 1\n  s\nfn g(a: Bool, b: Bool) -> Bool\n= a and not b or not a and b\nfn early(x: Int) -> Int\n= do\n  if x > 10 then return 99\n  x * 2";
-    assert_eq!(run(src, "f", &[10]), Ok(0 + 3 + 6 + 9 - 10));
+    assert_eq!(run(src, "f", &[10]), Ok(3 + 6 + 9 - 10));
     assert_eq!(run(src, "g", &[1, 0]), Ok(1));
     assert_eq!(run(src, "g", &[1, 1]), Ok(0));
     assert_eq!(run(src, "early", &[11]), Ok(99));

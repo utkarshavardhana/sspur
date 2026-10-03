@@ -1,0 +1,44 @@
+fn ints(n: Int) -> List[Int]
+= (0..n).map(i => (i * 7919) % 10007 - 5000)
+
+fn floats(n: Int, k: Int) -> List[F64]
+= (0..n).map(i => ((i * k) % 1009).to_f64 / 128.0 - 3.5)
+
+fn affine_pos(xs: List[Int], r: Int) -> Int
+= xs.map(x => 3 * x + r).filter(y => y > 0).sum
+
+fn sq_sum(xs: List[Int], r: Int) -> Int
+= xs.map(x => (x + r) * (x - r)).sum
+
+fn count_over(xs: List[Int], t: Int) -> Int
+= xs.filter(x => x > t).len
+
+fn shifted(xs: List[Int], r: Int) -> List[Int]
+= xs.map(x => x * 5 - r)
+
+fn dot(a: List[F64], b: List[F64]) -> F64
+= (0..a.len).map(i => a[i] * b[i]).sum
+
+fn saxpy(k: F64, a: List[F64], b: List[F64]) -> List[F64]
+= (0..a.len).map(i => k * a[i] + b[i])
+
+fn main() -> Unit ! log
+= do
+  xs = ints(1000000)
+  a = floats(1000000, 31)
+  b = floats(1000000, 17)
+  var s1 = 0
+  var s2 = 0
+  var s3 = 0
+  var s4 = 0
+  var d = 0.0
+  var y = 0.0
+  for r in 0..40
+    s1 := s1 + affine_pos(xs, r)
+    s2 := s2 + sq_sum(xs, r)
+    s3 := s3 + count_over(xs, r * 50 - 1000)
+    s4 := s4 + shifted(xs, r).sum
+    d := d + dot(a, b)
+    y := y + saxpy(r.to_f64 * 0.25, a, b).sum
+  log("affine {s1} squares {s2} count {s3} shifted {s4}")
+  log("dot {(d * 1000.0).round} saxpy {(y * 1000.0).round}")

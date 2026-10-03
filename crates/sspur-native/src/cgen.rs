@@ -8,10 +8,13 @@ use std::path::PathBuf;
 use std::process::Command;
 
 mod conc;
+pub mod export;
+mod ffi;
 mod fuse;
 mod lower;
 mod own;
 mod prove;
+mod simd;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
 type G<T = String> = Result<T, String>;
@@ -129,12 +132,27 @@ static int64_t __attribute__((noinline)) par_run(ParFn fn, void* cx, int64_t bas
     return r;
 }
 static inline void par_release(void) { __atomic_store_n(&par_busy, 0, __ATOMIC_RELEASE); }
+static int sum_i64(const int64_t* d, int64_t n, int64_t* out) {
+    int64_t acc = 0, miss = 0;
+    for (int64_t i = 0; i < n; i += 64) {
+        int64_t e = n - i > 64 ? i + 64 : n;
+        if (LIKELY_(miss < 8 + (i >> 9) && acc >= -(1LL << 62) && acc <= (1LL << 62))) {
+            uint64_t s = 0, f = 0;
+            for (int64_t j = i; j < e; j++) { s += (uint64_t)d[j]; f |= (uint64_t)d[j] + (1ULL << 56) >= (1ULL << 57); }
+            if (LIKELY_(!f)) { acc += (int64_t)s; continue; }
+            miss++;
+        }
+        for (int64_t j = i; j < e; j++) if (UNLIKELY(__builtin_add_overflow(acc, d[j], &acc))) return 1;
+    }
+    *out = acc;
+    return 0;
+}
 #include <sys/mman.h>
 #include <setjmp.h>
 #include <time.h>
 #define GC_SHIFT 16
 #define GC_PAGE ((size_t)1 << GC_SHIFT)
-#define GC_REGION ((size_t)16 << 30)
+#define GC_REGION ((size_t)8 << 30)
 #define GC_NCLS 35
 static const uint32_t gc_sizes[GC_NCLS] = {16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 1024, 1280, 1536, 2048, 2560, 3072, 4096, 5120, 6144, 8192, 10240, 12288, 16384, 32768};
 typedef struct GcPage { uint8_t kind, atomic, cls, swept; uint32_t obj, nobj, bump, live; size_t head, npages; void* free; uint64_t freebits[64], mark[64]; } GcPage;
@@ -377,7 +395,7 @@ static inline void* sspur_alloc(size_t n) { return gc_alloc(n, 0); }
 static inline void* sspur_alloc_atomic(size_t n) { return gc_alloc(n, 1); }
 typedef struct { int64_t len; void* data; int64_t* hdr; } RawL;
 static RawL raw_alloc_a(int64_t cap, size_t es, int atomic) {
-    if (UNLIKELY(cap > ((int64_t)1 << 32))) sspur_trap((Status*)gc_root_ptr, 15, 0, 0, 0);
+    if (UNLIKELY(cap > (((int64_t)1 << 31) / (int64_t)es))) sspur_trap((Status*)gc_root_ptr, 15, 0, 0, 0);
     if (cap < 4) cap = 4;
     int64_t* h = (int64_t*)gc_alloc(32 + (size_t)cap * es, atomic);
     h[0] = cap; h[1] = 0; h[2] = atomic; h[3] = 0;
@@ -567,6 +585,12 @@ static void buf_push(Buf* b, int64_t w) {
     b->data[b->len++] = w;
 }
 void sspur_buf_free(int64_t* p) { free(p); }
+typedef int64_t (*SspurDb)(int64_t op, const char* store, const int64_t* k, int64_t kn, const int64_t* v, int64_t vn, int64_t** out, int64_t* on);
+SspurDb sspur_db;
+static void db_fail(Status* st, int64_t* m, int64_t n) {
+    if (!m) { const char* t = "db effects need a deploy host: run the service with 'sspur deploy local'"; n = (int64_t)strlen(t); m = (int64_t*)malloc((size_t)n); memcpy(m, t, (size_t)n); }
+    st->rbuf = m; st->rlen = n;
+}
 typedef struct { int64_t len; const char* p; } Str;
 typedef struct {
     int64_t (*fmt_f64)(double x, char* out);
@@ -761,7 +785,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (src, mut plan) = generate(m, check)?;
+    let (src, mut plan) = generate(m, check, None)?;
     plan.skipped.retain(|n, _| lower::original_name(n) == n);
     if let Some((_, _, why)) = &lowered {
         for (n, reason) in plan.skipped.iter_mut() {
@@ -770,7 +794,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
             }
         }
     }
-    let lib = build(&src, opt)?;
+    let lib = build(&src, opt, &plan.links)?;
     let library = unsafe { libloading::Library::new(&lib) }.map_err(|e| format!("cannot load {}: {e}", lib.display()))?;
     let mut scalar = HashMap::new();
     let mut rich = HashMap::new();
@@ -799,16 +823,46 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
     Ok(assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines, free, plan.err_types))
 }
 
+pub struct CProgram {
+    pub src: String,
+    pub fns: BTreeMap<String, (Vec<Type>, Type)>,
+    pub skipped: BTreeMap<String, String>,
+    pub err_types: Vec<Type>,
+    pub refines: Vec<(String, String, Type)>,
+}
+
+pub fn c_program(m: &Module, check: &CheckOutput) -> Result<CProgram, String> {
+    let lowered = lower::lower(m, check);
+    let (m, check) = match &lowered {
+        Some((lm, lc, _)) => (lm, lc),
+        None => (m, check),
+    };
+    let (src, plan) = generate(m, check, None)?;
+    let fns = plan.fns.into_iter().map(|(n, (p, r, _))| (n, (p, r))).collect();
+    Ok(CProgram { src, fns, skipped: plan.skipped, err_types: plan.err_types, refines: plan.refines })
+}
+
 pub fn c_source(m: &Module, check: &CheckOutput) -> String {
     let lowered = lower::lower(m, check);
     let (m, check) = match &lowered {
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    match generate(m, check) {
+    match generate(m, check, None) {
         Ok((src, _)) => src,
         Err(e) => format!("/* {e} */\n"),
     }
+}
+
+pub fn export_c(m: &Module, check: &CheckOutput, prefix: &str) -> Result<export::Export, String> {
+    let lowered = lower::lower(m, check);
+    let (m, check) = match &lowered {
+        Some((lm, lc, _)) => (lm, lc),
+        None => (m, check),
+    };
+    let (source, plan) = generate(m, check, Some(prefix))?;
+    let w = plan.export.ok_or("no export plan")?;
+    Ok(export::Export { source, header: w.header, exported: w.exported, skipped: w.skipped, links: plan.links })
 }
 
 struct Plan {
@@ -816,9 +870,11 @@ struct Plan {
     fns: BTreeMap<String, (Vec<Type>, Type, bool)>,
     skipped: BTreeMap<String, String>,
     refines: Vec<(String, String, Type)>,
+    links: Vec<String>,
+    export: Option<export::Wrappers>,
 }
 
-fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
+fn generate(m: &Module, check: &CheckOutput, export: Option<&str>) -> Result<(String, Plan), String> {
     let defs: Vec<&FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f) } else { None }).collect();
     let index: HashMap<String, usize> = defs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
     let mut skipped = BTreeMap::new();
@@ -853,6 +909,15 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
         .collect();
     let generic_defs: HashMap<String, FnDef> = defs.iter().filter(|f| !f.tparams.is_empty()).map(|f| (f.name.clone(), (*f).clone())).collect();
     let smt = sspur_smt::Oracle::new(m, check);
+    let mut links: Option<Vec<String>> = None;
+    for f in defs.iter().filter(|f| f.ext.is_some()) {
+        let l = links.get_or_insert_with(Vec::new);
+        for a in f.ext.as_ref().and_then(|x| x.lib.as_deref()).map(sspur_syntax::ffi::link_args).unwrap_or_default() {
+            if !l.contains(&a) {
+                l.push(a);
+            }
+        }
+    }
     loop {
         let mut cx = Cx::new(check, &ok, &alias_refines, &field_refines, &smt);
         cx.generics = generic_defs.iter().filter(|(n, _)| ok.contains(*n)).map(|(n, f)| (n.clone(), f.clone())).collect();
@@ -867,7 +932,8 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
                 continue;
             };
             let snapshot = cx.snapshot();
-            match cx.function(f, &params, &ret, index[&f.name], &f.name) {
+            let r = if f.ext.is_some() { cx.extern_fn(f, &params, &ret, index[&f.name]) } else { cx.function(f, &params, &ret, index[&f.name], &f.name) };
+            match r {
                 Ok(code) => {
                     bodies.push_str(&code);
                     let scalar = !f.effects.iter().any(|e| e.name == "fail") && params.iter().chain([&ret]).all(|t| matches!(t, Type::Con(n, a) if a.is_empty() && matches!(n.as_str(), "Int" | "Bool" | "Unit")));
@@ -905,7 +971,14 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
                 entries.push_str(&cx.entries(&f.name, &params, &ret, scalar)?);
             }
             entries.push_str(&cx.enc_err_fn()?);
+            let exported = match export {
+                Some(p) => Some(cx.export_wrappers(p, &defs, &index, &plan_fns, &skipped)?),
+                None => None,
+            };
             let mut src = String::from(PRELUDE);
+            if links.is_some() || export.is_some() {
+                src.push_str(ffi::FFI_PRELUDE);
+            }
             src.push_str(&cx.fwd);
             src.push_str(&cx.defs);
             src.push_str(&cx.protos);
@@ -923,9 +996,12 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
             src.push_str(&bodies);
             src.push_str(&entries);
             src.push_str(&cx.helpers_late);
+            if let Some(w) = &exported {
+                src.push_str(&w.c);
+            }
             plan_fns.retain(|_, (p, r, _)| !p.iter().chain([&*r]).any(|t| has_fn(t) || conc::opaque(&cx.layouts, t)));
             let src = cx.atomize(&src);
-            let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone() };
+            let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone(), links: links.unwrap_or_default(), export: exported };
             return Ok((src, plan));
         }
         for (n, e) in failed {
@@ -944,7 +1020,7 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
 }
 
 fn precheck(f: &FnDef) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "conc") && !f.tparams.iter().any(|p| p.name == e.name)) {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())
@@ -955,8 +1031,8 @@ fn cache_dir() -> PathBuf {
     base.join("native")
 }
 
-fn build(src: &str, opt: &str) -> Result<PathBuf, String> {
-    let key = blake3::hash(format!("{opt}\n{src}").as_bytes()).to_hex().to_string();
+fn build(src: &str, opt: &str, links: &[String]) -> Result<PathBuf, String> {
+    let key = blake3::hash(format!("{opt}{}\n{src}", links.iter().map(|l| format!(" {l}")).collect::<String>()).as_bytes()).to_hex().to_string();
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let lib = dir.join(format!("{}.{}", &key[..32], std::env::consts::DLL_EXTENSION));
@@ -967,7 +1043,7 @@ fn build(src: &str, opt: &str) -> Result<PathBuf, String> {
     std::fs::write(&c, src).map_err(|e| e.to_string())?;
     let tmp = lib.with_extension("tmp");
     let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
-    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w", "-o"]).arg(&tmp).arg(&c).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w", "-o"]).arg(&tmp).arg(&c).args(links).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
         return Err(format!("{cc} failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
     }
@@ -1077,6 +1153,7 @@ struct Cx<'a> {
     par_mode: bool,
     par_memo: HashMap<String, bool>,
     par_heavy: HashSet<String>,
+    vec: Option<simd::Vecx>,
 }
 
 impl<'a> Cx<'a> {
@@ -1134,6 +1211,7 @@ impl<'a> Cx<'a> {
             par_mode: false,
             par_memo: HashMap::new(),
             par_heavy: HashSet::new(),
+            vec: None,
         }
     }
 
@@ -2083,6 +2161,9 @@ impl<'a> Cx<'a> {
     }
 
     fn checked(&mut self, op: BinOp, x: &str, y: &str, ra: Iv, rb: Iv) -> String {
+        if let Some(v) = self.vchecked(op, x, y, ra, rb) {
+            return v;
+        }
         if iv_safe(op, ra, rb) {
             return format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; a_ {} b_; }})", op.symbol());
         }
@@ -2216,7 +2297,11 @@ impl<'a> Cx<'a> {
             }
             ExprKind::Index(a, i) => {
                 let (av, iv) = (self.expr(a)?, self.expr(i)?);
-                if self.index_safe(a, i) || self.smt.proves(e, "index") {
+                if self.vec.is_some() {
+                    if let Some(s) = self.vindex(a, i, &av, &iv) {
+                        return Ok(s);
+                    }
+                } else if self.index_safe(a, i) || self.smt.proves(e, "index") {
                     return Ok(format!("(({av}).data[{iv}])"));
                 }
                 Ok(format!("({{ __auto_type l_ = {av}; int64_t i_ = {iv}; if (UNLIKELY(i_ < 0 || i_ >= l_.len)) TRAPV({T_INDEX}, l_.len, i_); l_.data[i_]; }})"))
@@ -2239,7 +2324,7 @@ impl<'a> Cx<'a> {
                 }
                 if is(&at, "Int") {
                     let (ra, rb) = (self.range(a), self.range(b));
-                    if *op != BinOp::Pow && !iv_safe(*op, ra, rb) && self.smt.proves(e, "arith") {
+                    if self.vec.is_none() && *op != BinOp::Pow && !iv_safe(*op, ra, rb) && self.smt.proves(e, "arith") {
                         return Ok(format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; a_ {} b_; }})", op.symbol()));
                     }
                     return Ok(self.checked(*op, &x, &y, ra, rb));
@@ -2263,7 +2348,13 @@ impl<'a> Cx<'a> {
             }
             ExprKind::Unary(UnOp::Neg, x) => {
                 let v = self.expr(x)?;
-                if is(&t, "F64") || self.range(x).0 > FULL.0 || self.smt.proves(e, "neg") {
+                if is(&t, "F64") {
+                    return Ok(format!("(-({v}))"));
+                }
+                let proven = self.range(x).0 > FULL.0;
+                if let Some(s) = self.vneg(&v, proven) {
+                    Ok(s)
+                } else if proven || self.smt.proves(e, "neg") {
                     Ok(format!("(-({v}))"))
                 } else {
                     Ok(format!("({{ int64_t t_ = {v}; if (UNLIKELY(t_ == INT64_MIN)) TRAPV({T_OVERFLOW}, 0, 0); -t_; }})"))
@@ -2616,7 +2707,7 @@ impl<'a> Cx<'a> {
             }
             "repeat" => {
                 let n = arg(self, 0)?;
-                format!("({{ Str s_ = {r}; int64_t n_ = {n}; if (UNLIKELY(n_ < 0)) TRAPV({T_REPEAT}, 0, 0); if (UNLIKELY(s_.len && n_ > (((int64_t)1 << 32) / s_.len))) TRAPV(15, 0, 0); str_repeat(s_, n_); }})")
+                format!("({{ Str s_ = {r}; int64_t n_ = {n}; if (UNLIKELY(n_ < 0)) TRAPV({T_REPEAT}, 0, 0); if (UNLIKELY(s_.len && n_ > (((int64_t)1 << 28) / s_.len))) TRAPV(15, 0, 0); str_repeat(s_, n_); }})")
             }
             "is_alpha" => format!("({{ Str s_ = {r}; host_.str_class(1, s_.p, s_.len); }})"),
             "split" | "chars" | "words" => {
@@ -2889,7 +2980,35 @@ impl<'a> Cx<'a> {
         Ok(s)
     }
 
+    fn db_call(&mut self, name: &str, args: &[Expr], t: &Type) -> G {
+        let ExprKind::Name(store) = &args[0].kind else { return Err("has a db operation without a store".into()) };
+        let op = match name {
+            "get" => 1,
+            "put" => 2,
+            "del" => 3,
+            _ => 4,
+        };
+        let mut s = String::from("({ Buf kb_ = {0}; Buf vb_ = {0}; ");
+        for (buf, a) in ["kb_", "vb_"].iter().zip(&args[1..]) {
+            let at = self.ty(a)?;
+            let enc = self.helper_enc(&at)?;
+            let v = self.expr(a)?;
+            write!(s, "{enc}(&{buf}, {v}); ").unwrap();
+        }
+        write!(s, "int64_t* ob_ = 0; int64_t ol_ = 0; int64_t rc_ = sspur_db ? sspur_db({op}, {}, kb_.data, kb_.len, vb_.data, vb_.len, &ob_, &ol_) : -1; free(kb_.data); free(vb_.data); if (UNLIKELY(rc_)) {{ db_fail(st, ob_, ol_); TRAPV({T_MSG}, 0, 0); }} ", c_lit(store)).unwrap();
+        if is(t, "Unit") {
+            s.push_str("free(ob_); 0LL; })");
+        } else {
+            let dec = self.helper_dec(t)?;
+            write!(s, "const int64_t* dp_ = ob_; __auto_type dr_ = {dec}(&dp_); free(ob_); dr_; }})").unwrap();
+        }
+        Ok(s)
+    }
+
     fn method(&mut self, e: &Expr, recv: &Expr, name: &str, args: &[Expr], t: &Type) -> G {
+        if matches!(&recv.kind, ExprKind::Name(n) if n == "db") && self.lookup("db").is_none() && sspur_check::db_op(name).is_some() && !args.is_empty() {
+            return self.db_call(name, args, t);
+        }
         if self.check.user_methods.contains(&(e.span.start, e.span.end)) {
             let mut vals = vec![(self.expr(recv)?, self.ty(recv)?)];
             for a in args {
@@ -3058,9 +3177,9 @@ impl<'a> Cx<'a> {
             "reverse" => wrap(format!("RawL r_ = raw_alloc({l}.len, sizeof({ec})); {ec}* d_ = ({ec}*)r_.data; for (int64_t {i} = 0; {i} < {l}.len; {i}++) d_[{i}] = {l}.data[{l}.len - 1 - {i}]; r_.hdr[1] = {l}.len; ({lc}){{{l}.len, d_, r_.hdr}};")),
             "sum" => {
                 if is(et, "F64") {
-                    wrap(format!("double s_ = 0.0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) s_ += {l}.data[{i}]; s_;"))
+                    wrap(format!("double s_ = -0.0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) s_ += {l}.data[{i}]; {l}.len ? s_ : 0.0;"))
                 } else {
-                    wrap(format!("int64_t s_ = 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) if (UNLIKELY(__builtin_add_overflow(s_, {l}.data[{i}], &s_))) TRAPV({T_OVERFLOW}, 0, 0); s_;"))
+                    wrap(format!("int64_t s_; if (UNLIKELY(sum_i64({l}.data, {l}.len, &s_))) TRAPV({T_OVERFLOW}, 0, 0); s_;"))
                 }
             }
             "contains" => {

@@ -215,4 +215,50 @@ test t_closed = closed() == ()
     }
     std::fs::remove_file(&path).ok();
     assert_eq!(outputs[0], outputs[1]);
+
+#[test]
+fn vectorized_pipelines_trap_exactly_like_the_interpreter() {
+    if std::process::Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/simd.ssp")).unwrap();
+    let extra = "
+fn mixed_fault(xs: List[Int], n: Int, a: Int) -> Int
+= (0..n).map(i => xs[i] * 0 + (if i == a then 9223372036854775807 else 1)).sum
+
+test add_63 = bump(200, 63, 9223372036854775807) == 0
+test add_64 = bump(200, 64, 9223372036854775807) == 0
+test sum_127 = ramp_sum(200, 126, 4611686018427387904) == 0
+test sum_128 = spike_sum(200, 128, 9223372036854775807) == 0
+test neg_64 = negs(200, 64) == 0
+test mul_65 = tripled(200, 65, 3074457345618258603) == 0
+test mul_neg = tripled(200, 65, -3074457345618258603) == 0
+test sq_big = sq_sum([5, 3037000500]) == 0
+test idx_far = idx_sum(ints(100), 130) == 0
+test ovf_before_idx = mixed_fault(ints(100), 200, 70) == 0
+test idx_before_ovf = mixed_fault(ints(100), 200, 150) == 0
+test big_add = bump(2000000, 1500001, 9223372036854775807) == 0
+test big_sum = spike_sum(2000000, 1999999, 9223372036854775807) == 0
+test big_masked = masked(2000000, 1234567) == 2000001000000 - 1234568
+test big_affine = affine_pos(ints(2000000)) == ints(2000000).map(x => 3 * x + 1).filter(y => y > 0).sum
+";
+    let path = std::env::temp_dir().join(format!("sspur_simd_traps_{}.ssp", std::process::id()));
+    std::fs::write(&path, format!("{base}\n{extra}")).unwrap();
+    let run = |interp: bool, threads: Option<&str>| {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_sspur"));
+        cmd.arg("test").arg(&path);
+        if interp {
+            cmd.arg("--interp");
+        }
+        if let Some(t) = threads {
+            cmd.env("SSPUR_THREADS", t);
+        }
+        String::from_utf8(cmd.output().unwrap().stdout).unwrap()
+    };
+    let expected = run(true, None);
+    assert_eq!(expected.lines().filter(|l| l.starts_with("FAIL")).count(), 13, "{expected}");
+    for threads in [None, Some("1"), Some("3")] {
+        assert_eq!(run(false, threads), expected, "threads {threads:?}");
+    }
+    std::fs::remove_file(&path).ok();
 }

@@ -1,5 +1,6 @@
 #![allow(clippy::mutable_key_type)]
 mod builtins;
+mod ffi;
 pub mod fuzz;
 mod sched;
 pub mod value;
@@ -143,6 +144,7 @@ impl Interp {
                     it.add_type(t)
                 }
                 Def::Effect(e) => it.ops.extend(e.ops.iter().map(|o| o.name.clone())),
+                Def::Store(_) | Def::Svc(_) => {}
             }
         }
         it
@@ -290,6 +292,9 @@ impl Interp {
     }
 
     fn call_fn_inner(&self, f: &FnDef, args: Vec<Value>, parent: &Rc<Env>) -> R {
+        if f.ext.is_some() {
+            return ffi::call(f, &args);
+        }
         let env = Env::child(parent);
         for (p, v) in f.params.iter().zip(args) {
             self.check_value_type(&p.ty, &v, &format!("parameter '{}' of {}", p.name, f.name))?;
@@ -653,7 +658,7 @@ impl Interp {
             },
             ExprKind::Unary(UnOp::Not, x) => Ok(Value::Bool(!self.truthy(x, env)?)),
             ExprKind::Range(a, b) => match (self.eval(a, env)?, self.eval(b, env)?) {
-                (Value::Int(a), Value::Int(b)) if b as i128 - a as i128 > 1 << 32 => trap("out of memory"),
+                (Value::Int(a), Value::Int(b)) if b as i128 - a as i128 > 1 << 26 => trap("out of memory"),
                 (Value::Int(a), Value::Int(b)) => Ok(Value::list((a..b).map(Value::Int).collect())),
                 _ => trap("range bounds must be Int"),
             },

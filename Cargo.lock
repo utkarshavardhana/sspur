@@ -500,6 +500,7 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "sspur-check",
+ "sspur-deploy",
  "sspur-eval",
  "sspur-hash",
  "sspur-native",
@@ -509,9 +510,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "sspur-deploy"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde_json",
+ "sspur-check",
+ "sspur-native",
+ "sspur-syntax",
+]
+
+[[package]]
 name = "sspur-eval"
 version = "0.1.0"
 dependencies = [
+ "libloading",
  "sspur-native",
  "sspur-syntax",
 ]

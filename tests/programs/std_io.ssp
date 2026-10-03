@@ -1,0 +1,67 @@
+fn scratch(tag: Str) -> Str ! env, time
+= "{trim_end_slash(env_var("TMPDIR").or("/tmp"))}/sspur_std_{tag}_{mono_ns()}"
+
+fn trim_end_slash(p: Str) -> Str
+= if p.ends_with("/") then p.take(p.len - 1) else p
+
+fn write_read(tag: Str, text: Str) -> Res[Str, Str] ! fs, env, time
+= do
+  p = scratch(tag)
+  w = write_file(p, text)
+  a = append_file(p, "!")
+  r = if w.is_err or a.is_err then err("write failed") else read_file(p)
+  gone = remove_file(p)
+  r
+
+fn log_lines(tag: Str, lines: List[Str]) -> List[Str] ! fs, env, time
+= do
+  p = scratch(tag)
+  for l in lines
+    r = append_file(p, l + "\n")
+  out = read_file(p).or("").split("\n").filter(l => not l.is_empty)
+  gone = remove_file(p)
+  out
+
+fn listing(tag: Str) -> Res[List[Str], Str] ! fs, env, time
+= do
+  dir = scratch(tag)
+  made = write_file(dir, "x")
+  r = match list_dir(dir)
+    | ok(names) => ok(names)
+    | err(e) => err(e.drop(dir.len))
+  gone = remove_file(dir)
+  r
+
+fn missing(tag: Str) -> Str ! fs, env, time
+= do
+  p = scratch(tag) + "_nope"
+  match read_file(p)
+  | ok(_) => "found"
+  | err(e) => e.drop(p.len) + remove_file(p).map(u => "").or(" twice")
+
+fn tmp_sorted() -> Bool ! fs, env
+= match list_dir(env_var("TMPDIR").or("/tmp"))
+  | ok(names) => names == names.sort
+  | err(_) => false
+
+fn elapsed() -> Bool ! time
+= do
+  a = mono_ns()
+  sleep_ms(2)
+  b = mono_ns()
+  b - a >= 1000000 and now_ms() > 1600000000000
+
+fn env_ok() -> Bool ! env
+= env_var("PATH").is_some and env_var("SSPUR_SURELY_UNSET_VAR").is_none and env_var("A=B").is_none
+
+fn arg_count() -> Int ! env
+= args().len
+
+test round_trip = write_read("rt", "héllo\nworld") == ok("héllo\nworld!")
+test appends = log_lines("log", ["one", "two", "three"]) == ["one", "two", "three"]
+test dir_is_file = listing("dir") == err(": not a directory")
+test not_found = missing("miss") == ": not found twice"
+test sorted_listing = tmp_sorted()
+test clocks = elapsed()
+test env_vars = env_ok()
+test no_args = arg_count() == 0

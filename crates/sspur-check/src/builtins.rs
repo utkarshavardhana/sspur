@@ -132,6 +132,7 @@ pub const STD_GLOBALS: &[&str] = &[
     "write_file(path: Str, s: Str) -> Res[Unit, Str] ! fs",
     "append_file(path: Str, s: Str) -> Res[Unit, Str] ! fs",
     "list_dir(path: Str) -> Res[List[Str], Str] ! fs",
+    "remove_file(path: Str) -> Res[Unit, Str] ! fs",
     "read_line() -> Opt[Str] ! io",
     "read_lines() -> List[Str] ! io",
     "now_ms() -> Int ! time",
@@ -159,6 +160,9 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("List", "pop_back[A](xs: List[A]) -> Opt[(A, List[A])]"),
     ("List", "to_set[A](xs: List[A]) -> Set[A]"),
     ("List", "to_heap[A](xs: List[A]) -> Heap[A]"),
+    ("Res", "is_err[A, E](r: Res[A, E]) -> Bool"),
+    ("Res", "or_[A, E](r: Res[A, E], d: A) -> A"),
+    ("Res", "map[A, B, E, e](r: Res[A, E], f: A -> B ! e) -> Res[B, E] ! e"),
     ("#Set", "add[A](s: Set[A], x: A) -> Set[A]"),
     ("#Set", "remove[A](s: Set[A], x: A) -> Set[A]"),
     ("#Set", "has[A](s: Set[A], x: A) -> Bool"),
@@ -219,7 +223,7 @@ pub const STD_METHODS: &[(&str, &str)] = &[
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

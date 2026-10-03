@@ -267,3 +267,72 @@ test big_affine = affine_pos(ints(2000000)) == ints(2000000).map(x => 3 * x + 1)
     }
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn std_library_traps_are_identical_in_both_tiers() {
+    if std::process::Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let src = "type E = Bad{why: Str}
+fn chunk(n: Int) -> Int
+= [1, 2, 3].chunks(n).len
+fn window(n: Int) -> Int
+= [1, 2, 3].windows(n).len
+fn stepped(k: Int) -> Int
+= range(0, 10, k).len
+fn huge() -> Int
+= range(0, 9223372036854775807, 1).len
+fn dice(lo: Int, hi: Int) -> Int
+= rand_int(1, lo, hi).0
+fn fixed(d: Int) -> Str
+= 1.5.fmt(d)
+fn g(a: Int, b: Int) -> Int
+= a.gcd(b)
+fn l(a: Int, b: Int) -> Int
+= a.lcm(b)
+fn unwrap(s: Str) -> Int ! fail[Str]
+= json.decode[Int](s).get
+fn first_bad(xs: List[Int]) -> List[Int]
+= xs.sort_with((a, b) => a / b)
+test t_chunk = chunk(0) == 0
+test t_window = window(-1) == 0
+test t_step = stepped(0) == 0
+test t_huge = huge() == 0
+test t_dice = dice(3, 3) == 0
+test t_fmt = fixed(21) == \"\"
+test t_gcd = g(-9223372036854775807 - 1, 0) == 0
+test t_lcm = l(9223372036854775807, 2) == 0
+test t_raise = catch unwrap(\"x\") == 0
+  | e => e == \"invalid JSON\"
+test t_cmp = first_bad([3, 0, 1]) == []
+test t_ok = chunk(2) == 2 and g(12, 18) == 6 and unwrap(\"5\") == 5
+";
+    let path = std::env::temp_dir().join(format!("sspur_std_traps_{}.ssp", std::process::id()));
+    std::fs::write(&path, src).unwrap();
+    let expected = [
+        "FAIL  t_chunk: chunk size must be > 0",
+        "FAIL  t_window: window size must be > 0",
+        "FAIL  t_step: range step must not be 0",
+        "FAIL  t_huge: out of memory",
+        "FAIL  t_dice: rand_int needs lo < hi",
+        "FAIL  t_fmt: fmt digits must be in 0..=20",
+        "FAIL  t_gcd: integer overflow",
+        "FAIL  t_lcm: integer overflow",
+        "FAIL  t_cmp: division by zero",
+        "2 passed, 9 failed",
+    ];
+    let mut outputs = Vec::new();
+    for mode in ["--interp", "--release"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_sspur")).arg("test").arg(mode).arg(&path).output().unwrap();
+        let out = String::from_utf8(out.stdout).unwrap();
+        for line in expected {
+            assert!(out.lines().any(|l| l == line), "{mode}: missing {line:?} in\n{out}");
+        }
+        outputs.push(out);
+    }
+    let native = std::process::Command::new(env!("CARGO_BIN_EXE_sspur")).arg("native").arg("--release").arg(&path).output().unwrap();
+    let native = String::from_utf8(native.stdout).unwrap();
+    std::fs::remove_file(&path).ok();
+    assert!(!native.contains("interp "), "{native}");
+    assert_eq!(outputs[0], outputs[1]);
+}

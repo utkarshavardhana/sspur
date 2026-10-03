@@ -78,6 +78,12 @@ impl Interp {
             Value::Opt(o) => self.opt_method(name, o, a),
             Value::Res(r) => match name {
                 "is_ok" => Ok(Value::Bool(r.is_ok())),
+                "is_err" => Ok(Value::Bool(r.is_err())),
+                "or" => Ok(r.map_or_else(|_| a[0].clone(), |v| (*v).clone())),
+                "map" => Ok(Value::Res(match r {
+                    Ok(v) => Ok(Rc::new(self.apply(&a[0], vec![(*v).clone()])?)),
+                    Err(e) => Err(e),
+                })),
                 "get" => match r {
                     Ok(v) => Ok((*v).clone()),
                     Err(e) => Err(Ctrl::Raise((*e).clone())),

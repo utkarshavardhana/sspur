@@ -1,0 +1,47 @@
+type Row = {name: Str, price: F64, qty: Int}
+
+fn parse_kv(line: Str) -> Opt[(Str, Str)]
+= line.split_once("=").map(p => (p.0.trim, p.1.trim))
+
+fn config(text: Str) -> Map[Str, Str]
+= text.split("\n").fold(empty_map(), (m, l) => match parse_kv(l)
+  | some((k, v)) => m.put(k, v)
+  | none => m)
+
+fn table(rows: List[Row]) -> Str
+= do
+  w = rows.map(_.name.len).max.or(0)
+  rows.fold(str_buf(), (b, r) => b.add(r.name.pad_right(w, " ")).add(" | ").add(r.price.fmt(2).pad_left(8, " ")).add(" | ").add(r.qty.str.pad_left(3, "0")).add("\n")).str
+
+fn sum_floats(s: Str) -> F64
+= s.split(",").map(x => x.to_f64.or(0.0)).sum
+
+fn finds(s: Str) -> List[Opt[Int]]
+= [s.index_of("é"), s.index_of("lo"), s.index_of(""), s.index_of("zz")]
+
+fn utf8(s: Str) -> Str
+= "{s.bytes.len} {s.codes} {from_codes(s.codes) == some(s)} {from_bytes(s.bytes) == some(s)} {from_bytes([255])} {from_codes([55296])}"
+
+fn floats() -> List[Str]
+= [3.14159.fmt(2), 2.5.fmt(0), (-0.004).fmt(2), 1e21.fmt(1), 0.125.fmt(2), 1.0.fmt(5), (0.0 / 0.0).fmt(3), 100.0.fmt(0)]
+
+fn parses() -> List[Opt[F64]]
+= ["1.5", " -2e3 ", ".5", "5.", "1e", "abc", "+7", "inf", "1_0", ""].map(_.to_f64)
+
+fn build(n: Int) -> Int
+= (0..n).fold(str_buf(), (b, i) => b.add("{i % 10}")).byte_len
+
+fn pads() -> List[Str]
+= ["ab".pad_left(5, "xy"), "abc".pad_left(2, "-"), "é".pad_right(3, "·"), "x".pad_left(4, "")]
+
+test kv = parse_kv(" host = example.com ") == some(("host", "example.com"))
+test kv_none = parse_kv("no equals") == none
+test cfg = config("a=1\nb = two\n\nc=x=y").items == [("a", "1"), ("b", "two"), ("c", "x=y")]
+test tbl = table([Row{name: "tea", price: 3.5, qty: 7}, Row{name: "coffee", price: 12.25, qty: 120}]) == "tea    |     3.50 | 007\ncoffee |    12.25 | 120\n"
+test float_sum = sum_floats("1.5,2.25,x,-0.75") == 3.0
+test find_chars = finds("héllo") == [some(1), some(3), some(0), none]
+test utf8_round = utf8("aé日") == "6 [97, 233, 26085] true true none none"
+test fixed = floats() == ["3.14", "2", "-0.00", "1000000000000000000000.0", "0.12", "1.00000", "NaN", "100"]
+test parse_floats = parses() == [some(1.5), some(-2000.0), some(0.5), some(5.0), none, none, some(7.0), none, none, none]
+test builder = build(100000) == 100000
+test padding = pads() == ["xyxab", "abc", "é··", "x"]

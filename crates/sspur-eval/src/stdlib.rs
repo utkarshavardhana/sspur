@@ -176,7 +176,7 @@ fn pad(x: &str, n: i64, fill: &str, left: bool) -> R {
     if copies > (1i64 << 28) / fill.len() as i64 {
         return trap("out of memory");
     }
-    let p = fill.repeat(copies as usize);
+    let p: String = fill.repeat(copies as usize).chars().take((n - len) as usize).collect();
     Ok(Value::str(&if left { p + x } else { x.to_string() + &p }))
 }
 
@@ -276,6 +276,10 @@ impl Interp {
                 });
                 io_res(p, r)
             }
+            "remove_file" => {
+                let p = s(&a[0])?;
+                io_res(p, std::fs::remove_file(p).map(|_| Value::Unit))
+            }
             "read_line" => opt(read_line_raw()?.map(|l| Value::str(&l))),
             "read_lines" => {
                 let mut out = Vec::new();
@@ -348,7 +352,7 @@ impl Interp {
         Ok(match name {
             "binary_search" => {
                 let i = lower(&a[0]);
-                opt((i < xs.len() && xs[i] == a[0]).then(|| Value::Int(i as i64)))
+                opt((i < xs.len() && xs[i] == a[0]).then_some(Value::Int(i as i64)))
             }
             "lower_bound" => Value::Int(lower(&a[0]) as i64),
             "sort_with" => {

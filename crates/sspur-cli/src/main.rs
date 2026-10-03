@@ -257,6 +257,9 @@ fn edit(args: &Args) -> ExitCode {
 }
 
 fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
+    if cmd == "run" {
+        sspur_native::set_program_args(args.pos.iter().skip(2).cloned().collect());
+    }
     let json = args.has("--json");
     let (label, text, loaded) = match args.pos.get(1) {
         Some(path) => match std::fs::read_to_string(path) {
@@ -342,10 +345,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        "run" => match {
-            sspur_native::set_program_args(args.pos.iter().skip(2).cloned().collect());
-            native_interp(&loaded, args).run_main()
-        } {
+        "run" => match native_interp(&loaded, args).run_main() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("runtime error: {e}");

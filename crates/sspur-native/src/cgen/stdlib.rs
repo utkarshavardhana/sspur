@@ -299,6 +299,10 @@ impl Cx<'_> {
                 self.std("fs");
                 format!("({{ Str p_ = {}; Str s_ = {}; Str e_ = {{0, 0}}; int k_ = ss_write_file(p_, s_, {}, &e_); {}}})", v(0), v(1), i32::from(n == "append_file"), res("k_", "e_"))
             }
+            "remove_file" => {
+                self.std("fs");
+                format!("({{ Str p_ = {}; Str e_ = {{0, 0}}; int k_ = ss_remove_file(p_, &e_); {}}})", v(0), res("k_", "e_"))
+            }
             "list_dir" => {
                 self.std("fs");
                 let lt = arg0(t);
@@ -335,7 +339,7 @@ impl Cx<'_> {
 
     pub(super) fn std_method(&mut self, r: &str, rt: &Type, name: &str, args: &[Expr], t: &Type) -> G {
         let Type::Con(n, _) = rt else { return Err("bad receiver".into()) };
-        let vals: Vec<String> = args.iter().map(|a| self.expr(a)).collect::<G<_>>()?;
+        let vals: Vec<String> = if name == "map" { vec![] } else { args.iter().map(|a| self.expr(a)).collect::<G<_>>()? };
         let et = arg0(rt);
         match n.as_str() {
             "#Set" => {
@@ -401,6 +405,14 @@ impl Cx<'_> {
             }),
             _ => Ok(match name {
                 "is_ok" => format!("(({r}).ok)"),
+                "is_err" => format!("((int64_t)!({r}).ok)"),
+                "or" => format!("({{ __auto_type r_ = {r}; __auto_type d_ = {}; r_.ok ? r_.v : d_; }})", vals[0]),
+                "map" => {
+                    let x = self.fresh("rm");
+                    let body = self.apply(&args[0], vec![(x.clone(), et.clone())])?;
+                    let oc = self.cty(t)?;
+                    format!("({{ __auto_type r_ = {r}; {oc} o_; memset(&o_, 0, sizeof o_); if (r_.ok) {{ __auto_type {x} = r_.v; o_.ok = 1; o_.v = {body}; }} else o_.e = r_.e; o_; }})")
+                }
                 "get" => {
                     let errt = arg1(rt);
                     let rv = self.fresh("rv");
@@ -806,5 +818,34 @@ impl Cx<'_> {
         };
         writeln!(self.helpers, "static int {name}(SsJ* v, {c}* out, SsJE* e) {{ {body} }}").unwrap();
         Ok(name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_runtime_section_compiles_alone() {
+        if Command::new("clang").arg("--version").output().is_err() {
+            return;
+        }
+        let keys: Vec<&str> = STD_RT.split("//@ ").skip(1).filter_map(|p| p.split_whitespace().next()).collect();
+        assert!(keys.len() >= 10);
+        let m = sspur_syntax::parse("").unwrap();
+        for key in keys {
+            let check = CheckOutput::default();
+            let (eligible, alias, fields) = (HashSet::new(), HashMap::new(), HashMap::new());
+            let smt = sspur_smt::Oracle::new(&m, &check);
+            let mut cx = Cx::new(&check, &eligible, &alias, &fields, &smt);
+            cx.std_cty(&Type::con("#StrBuf"), "BU").unwrap();
+            cx.std(key);
+            let src = format!("{PRELUDE}{}{}", cx.defs, cx.protos);
+            let path = std::env::temp_dir().join(format!("sspur_std_rt_{}_{key}.c", std::process::id()));
+            std::fs::write(&path, &src).unwrap();
+            let out = Command::new("clang").args(["-fsyntax-only", "-Werror=implicit-function-declaration", "-Werror=implicit-int"]).arg(&path).output().unwrap();
+            std::fs::remove_file(&path).ok();
+            assert!(out.status.success(), "section {key}: {}", String::from_utf8_lossy(&out.stderr));
+        }
     }
 }

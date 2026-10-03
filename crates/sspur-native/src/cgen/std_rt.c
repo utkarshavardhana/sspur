@@ -36,10 +36,11 @@ static uint32_t ss_utf8_get(Str s, int64_t* i) {
     for (int j = 1; j <= k; j++) cp = (cp << 6) | (p[*i + j] & 0x3F);
     *i += k + 1; return cp;
 }
-//@ fs fail utf8
+//@ sys
 #include <fcntl.h>
 #include <errno.h>
 #include <dirent.h>
+//@ fs fail utf8 sys
 static Str ss_why(Str path, int e) {
     SB_INIT(b); sb_put(&b, path.p, path.len); sb_put(&b, ": ", 2);
     const char* w = e == -1 ? "invalid path" : e == -2 ? "invalid UTF-8" : e == ENOENT ? "not found" : (e == EACCES || e == EPERM) ? "permission denied" : e == EISDIR ? "is a directory" : e == ENOTDIR ? "not a directory" : e == EEXIST ? "already exists" : 0;
@@ -74,6 +75,11 @@ static int ss_write_file(Str path, Str s, int append, Str* err) {
     }
     close(fd); return 1;
 }
+static int ss_remove_file(Str path, Str* err) {
+    char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
+    if (unlink(c) != 0) { *err = ss_why(path, errno); return 0; }
+    return 1;
+}
 static int ss_list_dir(Str path, RawL* out, Str* err) {
     char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
     DIR* d = opendir(c); if (!d) { *err = ss_why(path, errno); return 0; }
@@ -87,7 +93,7 @@ static int ss_list_dir(Str path, RawL* out, Str* err) {
     if (r.len > 1) raw_msort((char*)r.data, r.len, sizeof(Str), cmp_S_p, (char*)sspur_alloc((size_t)r.len * sizeof(Str)));
     *out = r; return 1;
 }
-//@ io fail utf8
+//@ io fail utf8 sys
 static int ss_read_line(Str* out, Status* st) {
     int64_t cap = 128, n = 0; char* buf = (char*)malloc((size_t)cap); int got = 0;
     for (;;) {
@@ -148,7 +154,7 @@ static Str ss_pad(Str s, int64_t n, Str fill, int left, Status* st) {
     if (!fill.len || len >= n) return s;
     int64_t fc = utf8_len(fill), copies = (n - len + fc - 1) / fc;
     if (copies > ((int64_t)1 << 28) / fill.len) sspur_trap(st, 15, 0, 0, 0);
-    Str p = str_repeat(fill, copies);
+    Str p = str_take(str_repeat(fill, copies), n - len);
     return left ? str_cat(p, s) : str_cat(s, p);
 }
 static RawL ss_codes(Str s) { RawL r = raw_alloc_a(s.len, 8, 1); int64_t* d = (int64_t*)r.data; int64_t i = 0, k = 0; while (i < s.len) d[k++] = ss_utf8_get(s, &i); r.len = k; r.hdr[1] = k; return r; }

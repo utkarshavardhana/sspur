@@ -6,10 +6,8 @@ A program is `type`, `fn` and `test` definitions in any order. No imports, no co
 type Item = {sku: Str, qty: Int where _ >= 0}
 type Err = Missing{sku: Str} | Short{want: Int, have: Int} | Empty
 type Tree[T] = Leaf | Node{l: Tree[T], v: T, r: Tree[T]}
-type Id = new Str
 
 fn take(xs: List[Item], sku: Str, n: Int where _ > 0) -> List[Item] ! fail[Err]
-  pre n < 1000
   post r.len == xs.len
 = do
   it = xs.find(_.sku == sku).ok_or(Missing{sku})
@@ -35,7 +33,7 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `for
 - `match e` then arms on following lines: `| Pat => e`, `| Pat if cond => e`. Patterns: `_`, name, literal, tuple, `Ctor`, `Ctor{f, g: pat}`, `some(p)`, `none`, `ok(p)`, `err(p)`. Must be exhaustive.
 - Errors: `raise Ctor{..}`. `catch e` + arms like match handles them; a catch over every variant removes `fail[E]`.
 - Records `Item{sku: "a", qty: 1}`, shorthand `Item{sku, qty}`; update `x with qty := 2, a.b := 3, xs[0] := v`.
-- Lambdas `x => e`, `(a, b) => e`, single expression. `_` in an argument is a lambda: `xs.map(_.qty * _.p)` is `x => x.qty * x.p`; `sort_by((-_.n, _.name))`.
+- Lambdas `x => e`, `(a, b) => e`, single expression. `_` makes the innermost call argument a lambda: `xs.map(_.qty * _.p)` is `x => x.qty * x.p`, `sort_by((-_.n, _.name))`; in `f(g(_.a))` it binds inside `g`, so write `x => f(g(x.a))`.
 - Strings: `"n={n} {x.name}"` interpolates any `{expr}`; `\{` is a literal brace. `+` joins Str and List.
 - Operators low to high: `or`, `and`, `not`, `== != < <= > >=`, `..`, `+ -`, `* / %`, `**`, unary `-`. Int `/` truncates; overflow and `/ 0` trap.
 - `xs[i]` traps out of range, `t.0` tuple field, `none`, `some(x)`, `ok(x)`, `err(e)`.
@@ -49,5 +47,5 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `for
 
 ## CLI
 - `./sspur src` prints the codebase. `./sspur q body|sig|callers NAME` print one item.
-- `./sspur edit --test <<'EOF'` + definitions + `EOF`: each definition replaces the one with its name or is added. Lines `rename OLD NEW` (renames a fn, type, test or constructor and all its uses) and `remove NAME` may come first. Atomic: if anything fails to typecheck nothing changes and errors print as `def:line:col CODE msg`. `--test` then runs all tests, printing failures and `N passed, M failed`. Send all definitions of a step, or of the whole task, in one edit.
+- `./sspur edit --test -e '<definitions>'` (one single-quoted, multi-line argument; or a file, or stdin): each definition replaces the one with its name or is added. Lines `rename OLD NEW` (a fn, type, test or constructor, with all uses) and `remove NAME` may come first. Atomic: if anything fails to typecheck nothing changes and errors print as `def:line:col CODE msg`. `--test` then runs every test and prints failures and `N passed, M failed`, so no separate test run is needed. Put all changes of the task in one edit.
 - `./sspur test`, `./sspur check`.

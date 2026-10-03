@@ -22,10 +22,17 @@ All analyses are compile-time and fall back to the copying code whenever a condi
 
 Deep uniqueness is the invariant behind in-place reuse. An owned variable starts from a fresh value, and an `__own` function builds its result only from its input's cell, its own fields (each once), fresh constructors, and recursive results. No other reference to any `T` cell can exist, so mutating it can't be observed. A trap during an in-place update aborts the native call. Functions containing `catch` don't use ownership, so a partial update can never be observed.
 
+## Cheaper traps and calls
+
+- Traps (overflow, bounds, contracts, depth) can't be caught; `catch` only handles `raise`. So a trap now records its status and `longjmp`s from a cold, never-inlined function straight to the native entry point. Only `raise` still travels through return codes.
+- Calls to functions whose effects are only `log`/`div` (so they can't `raise`) skip the result check entirely.
+- A self tail call in a function without `post` becomes a jump to the top of the function. The depth counter still increments on every jump, so the recursion limit traps exactly where it did before. When the function has entry checks, the jump is taken only if the call-site proof (ADR 0007) covers them.
+- Counters updated only by `v := v + 1` from a start below 2^61 are bounded by 2^62. Reaching the overflow would take more than 140 years at one increment per nanosecond, so their increment is unchecked. This is the one place a time bound stands in for a proof.
+
 ## Speed over memory
 
 When speed and memory trade off, speed wins. The collector now waits for max(256 MB, 4x live) of allocation (it was max(64 MB, 2x live)).
 
 ## Result (vs C++ clang -O2)
 
-`typical` 0.27s to 0.12s: 0.16x idiomatic C++, 0.58x hand-tuned C++. Its tree phase runs at 0.5x hand-tuned C++ with 7 MB of memory, since one node is allocated per insert instead of a path copy. `app` 1.17x to 0.72x, `strings_big` 0.97x to 0.78x.
+`typical` 0.27s to 0.12s: 0.16x idiomatic C++, 0.58x hand-tuned C++. Its tree phase runs at 0.5x hand-tuned C++ with 7 MB of memory, since one node is allocated per insert instead of a path copy. `app` 1.17x to 0.72x, `strings_big` 0.97x to 0.80x, `compute_big` 0.95x to 0.88x (fib and gcd beat C++ once calls stop carrying error codes).

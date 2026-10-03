@@ -25,7 +25,10 @@ typedef struct { int64_t code, func, clause, value, limit; int64_t* rbuf; int64_
 #include <stdio.h>
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 #define LIKELY_(x) __builtin_expect(!!(x), 1)
-#define TRAPV(c, cl, val) do { st->code = (c); st->func = FIDX; st->clause = (cl); st->value = (int64_t)(val); return (RRT){.code = (c)}; } while (0)
+#include <setjmp.h>
+static jmp_buf* sspur_jb;
+static void __attribute__((noinline, cold, noreturn)) sspur_trap(Status* st, int64_t c, int64_t f, int64_t cl, int64_t v) { st->code = c; st->func = f; st->clause = cl; st->value = v; longjmp(*sspur_jb, 1); }
+#define TRAPV(c, cl, val) sspur_trap(st, (c), FIDX, (cl), (int64_t)(val))
 #include <sys/mman.h>
 #include <setjmp.h>
 #include <time.h>
@@ -784,6 +787,8 @@ struct Cx<'a> {
     fn_decls: String,
     hits: HashSet<String>,
     hit_ok: bool,
+    tail_spans: own::Spans,
+    tail_split: bool,
 }
 
 impl<'a> Cx<'a> {
@@ -832,6 +837,8 @@ impl<'a> Cx<'a> {
             fn_decls: String::new(),
             hits: HashSet::new(),
             hit_ok: false,
+            tail_spans: own::Spans::new(),
+            tail_split: false,
         }
     }
 
@@ -1355,7 +1362,7 @@ impl<'a> Cx<'a> {
         if scalar_abi {
             let sig: String = (0..params.len()).map(|i| format!("int64_t a{i}, ")).collect();
             let rr = self.rr(ret)?;
-            writeln!(s, "int64_t sspur_entry_{name}({sig}Status* st) {{ gc_enter(__builtin_frame_address(0), st, sizeof(Status)); {rr} r = f_{name}({args}st, -st->limit); gc_leave(); return r.v; }}").unwrap();
+            writeln!(s, "int64_t sspur_entry_{name}({sig}Status* st) {{ jmp_buf jb; jmp_buf* saved = sspur_jb; gc_enter(__builtin_frame_address(0), st, sizeof(Status)); sspur_jb = &jb; if (setjmp(jb)) {{ sspur_jb = saved; gc_leave(); return 0; }} {rr} r = f_{name}({args}st, -st->limit); sspur_jb = saved; gc_leave(); return r.v; }}").unwrap();
         }
         let mut decs = String::new();
         for (i, t) in params.iter().enumerate() {
@@ -1365,7 +1372,7 @@ impl<'a> Cx<'a> {
         }
         let enc = self.helper_enc(ret)?;
         let rr = self.rr(ret)?;
-        writeln!(s, "int64_t sspur_wentry_{name}(const int64_t* in, Status* st, int64_t** out, int64_t* out_len) {{ gc_enter(__builtin_frame_address(0), st, sizeof(Status)); const int64_t* p = in; {decs}{rr} r = f_{name}({args}st, -st->limit); if (r.code) {{ if (r.code == {T_RAISE}) enc_err(st); gc_leave(); return r.code; }} Buf b = {{0}}; {enc}(&b, r.v); *out = b.data; *out_len = b.len; gc_leave(); return 0; }}").unwrap();
+        writeln!(s, "int64_t sspur_wentry_{name}(const int64_t* in, Status* st, int64_t** out, int64_t* out_len) {{ jmp_buf jb; jmp_buf* saved = sspur_jb; gc_enter(__builtin_frame_address(0), st, sizeof(Status)); sspur_jb = &jb; if (setjmp(jb)) {{ sspur_jb = saved; gc_leave(); return st->code; }} const int64_t* p = in; {decs}{rr} r = f_{name}({args}st, -st->limit); sspur_jb = saved; if (r.code) {{ if (r.code == {T_RAISE}) enc_err(st); gc_leave(); return r.code; }} Buf b = {{0}}; {enc}(&b, r.v); *out = b.data; *out_len = b.len; gc_leave(); return 0; }}").unwrap();
         Ok(s)
     }
 
@@ -1478,11 +1485,17 @@ impl<'a> Cx<'a> {
             self.own_fn = None;
         }
         let split = env.is_none() && self.entry_checks(f);
+        self.tail_spans.clear();
+        self.tail_split = split;
+        if env.is_none() && f.posts.is_empty() && !self.generics.contains_key(&f.name) && !cname.ends_with("__lin") && !matches!(f.body.kind, ExprKind::Table(_)) {
+            own::tail_calls(&f.body, &f.name, &mut self.tail_spans);
+        }
+        let label = if self.tail_spans.is_empty() { "" } else { "tail_: ;\n" };
         let mut s = format!("#define RRT {rr}\n#define FIDX {fidx}\nstatic {rr} {fname_c}({env_pre}{}) {{\n{env_line}", sig.join(", "));
         if split {
             writeln!(s, "  if (UNLIKELY(depth + 1 > 0)) TRAPV({T_DEPTH}, 0, 0);").unwrap();
         } else {
-            writeln!(s, "  depth += 1; if (UNLIKELY(depth > 0)) TRAPV({T_DEPTH}, 0, 0);").unwrap();
+            writeln!(s, "{label}  depth += 1; if (UNLIKELY(depth > 0)) TRAPV({T_DEPTH}, 0, 0);").unwrap();
         }
         for (i, (p, t)) in f.params.iter().zip(params).enumerate() {
             self.scopes[0].insert(p.name.clone(), (format!("a{i}"), t.clone()));
@@ -1507,7 +1520,7 @@ impl<'a> Cx<'a> {
         if split {
             let args: String = (0..params.len()).map(|i| format!("a{i}, ")).collect();
             writeln!(self.protos, "static {rr} {fname_c}__np({});", sig.join(", ")).unwrap();
-            writeln!(s, "  return {fname_c}__np({args}st, depth);\n}}\nstatic {rr} {fname_c}__np({}) {{\n  depth += 1; if (UNLIKELY(depth > 0)) TRAPV({T_DEPTH}, 0, 0);", sig.join(", ")).unwrap();
+            writeln!(s, "  return {fname_c}__np({args}st, depth);\n}}\nstatic {rr} {fname_c}__np({}) {{\n{label}  depth += 1; if (UNLIKELY(depth > 0)) TRAPV({T_DEPTH}, 0, 0);", sig.join(", ")).unwrap();
         }
         self.assume_entry(f);
         let body = match &f.body.kind {
@@ -1563,6 +1576,10 @@ impl<'a> Cx<'a> {
         Ok((cname, subst_map(&decl_ret, &map)))
     }
 
+    fn may_raise(&self, name: &str) -> bool {
+        self.fn_def(name).is_none_or(|f| f.effects.iter().any(|e| !matches!(e.name.as_str(), "log" | "div")))
+    }
+
     fn fn_def(&self, name: &str) -> Option<&FnDef> {
         self.all_fns.get(name)
     }
@@ -1591,6 +1608,10 @@ impl<'a> Cx<'a> {
             names.push(t);
         }
         let call_args: String = names.iter().map(|n| format!("{n}, ")).collect();
+        if !self.may_raise(name) {
+            write!(s, "{rr} c_ = f_{cname}({call_args}st, depth); c_.v; }})").unwrap();
+            return Ok(s);
+        }
         let handlers = self.handlers("c_.code")?;
         write!(s, "{rr} c_ = f_{cname}({call_args}st, depth); if (UNLIKELY(c_.code)) {{ {handlers}return (RRT){{.code = c_.code}}; }} c_.v; }})").unwrap();
         Ok(s)
@@ -1840,6 +1861,21 @@ impl<'a> Cx<'a> {
                         for a in args {
                             vals.push((self.expr(a)?, self.ty(a)?));
                         }
+                        if self.tail_spans.contains(&(e.span.start, e.span.end))
+                            && self.catch_stack.is_empty()
+                            && self.lookup(n).is_none()
+                            && (!self.tail_split || self.callee_safe(n, args)) {
+                                let z = self.zero(&t)?;
+                                let mut s = String::from("({ ");
+                                for (i, (v, _)) in vals.iter().enumerate() {
+                                    write!(s, "__auto_type tc{i}_ = {v}; ").unwrap();
+                                }
+                                for i in 0..vals.len() {
+                                    write!(s, "a{i} = tc{i}_; ").unwrap();
+                                }
+                                write!(s, "goto tail_; {z}; }})").unwrap();
+                                return Ok(s);
+                            }
                         self.call_user(n, vals, Some(&t), Some(args))
                     }
                 }

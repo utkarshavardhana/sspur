@@ -297,3 +297,24 @@ impl Cx<'_> {
         out
     }
 }
+
+pub(super) fn tail_calls(e: &Expr, name: &str, out: &mut Spans) {
+    match &e.kind {
+        ExprKind::Call(f, _) if is_name(f, name) => {
+            out.insert(key(e));
+        }
+        ExprKind::If(_, a, b) => {
+            tail_calls(a, name, out);
+            if let Some(b) = b {
+                tail_calls(b, name, out);
+            }
+        }
+        ExprKind::Match(_, arms) => arms.iter().for_each(|a| tail_calls(&a.body, name, out)),
+        ExprKind::Block(stmts) => {
+            if let Some(Stmt::Expr(x)) = stmts.last() {
+                tail_calls(x, name, out);
+            }
+        }
+        _ => {}
+    }
+}

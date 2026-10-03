@@ -412,6 +412,9 @@ impl Cx<'_> {
         let mut rhs = Vec::new();
         assigns(rest, name, &mut rhs);
         let mut iv = self.range(init);
+        if !rhs.is_empty() && rhs.iter().all(|x| is_increment(x, name)) && iv.0 >= 0 && iv.1 <= 1 << 61 {
+            return Some((iv.0, 1 << 62));
+        }
         let key = self.fresh("inv");
         let saved_blocked = std::mem::replace(&mut self.know.blocked, bound);
         self.scopes.push(HashMap::from([(name.to_string(), (key.clone(), Type::int()))]));
@@ -600,4 +603,10 @@ impl Cx<'_> {
         let k = self.fixed_var(key)?;
         k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_').then(|| format!("hit_{map}_{k}"))
     }
+}
+
+fn is_increment(e: &Expr, name: &str) -> bool {
+    let is_v = |x: &Expr| matches!(&x.kind, ExprKind::Name(n) if n == name);
+    let one = |x: &Expr| matches!(x.kind, ExprKind::Int(1));
+    matches!(&e.kind, ExprKind::Binary(BinOp::Add, a, b) if (is_v(a) && one(b)) || (one(a) && is_v(b)))
 }

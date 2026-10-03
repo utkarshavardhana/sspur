@@ -17,7 +17,7 @@ Native code uses a conservative mark-sweep collector built into the generated C 
 | Roots | Registers (via `setjmp`), the native stack from the outermost entry frame, and the `Status` block (which holds in-flight raised errors) |
 | Precision | Conservative and interior-pointer aware. Pointers exactly at an object boundary also count for the preceding object, but only for roots (optimized loops keep end pointers in registers) |
 | No-scan objects | String bytes, plus list buffers whose element type has no pointers (decided at codegen) |
-| Trigger | After max(64 MB, 2x live bytes) allocated, checked when a page's cursor is exhausted and before every large allocation |
+| Trigger | After max(64 MB, 2x live bytes) allocated (raised to max(256 MB, 4x live) by ADR 0008), checked when a page's cursor is exhausted and before every large allocation |
 | Page reuse | A free-page bitmap. Large objects take the first free run that fits, and freed runs are unmapped so RSS drops |
 | Lifetime | The whole heap is reset when native code returns to the interpreter |
 

@@ -6,9 +6,9 @@
 
 | Workload | File | C++ clang -O2 | SSPUR | Ratio | Peak memory C++ / SSPUR |
 |---|---|---|---|---|---|
-| Compute-heavy: recursion, loops, primes, gcd | `compute_big` | 1.01s | 0.96s | **0.95x** | 1 MB / 4 MB |
+| Compute-heavy: recursion, loops, primes, gcd | `compute_big` | 1.01s | 0.89s | **0.88x** | 1 MB / 4 MB |
 | Records, lists, persistent trees, float simulation | `typical` | 0.75s idiomatic, 0.21s hand-tuned (arena, never frees) | 0.12s | **0.16x** idiomatic, **0.58x** tuned | 90 MB / 83 MB (tuned: 282 MB) |
-| Strings: build 2M words, lowercase, split, count, sort | `strings_big` | 0.09s | 0.07s | **0.78x** | 34 MB / 171 MB |
+| Strings: build 2M words, lowercase, split, count, sort | `strings_big` | 0.10s | 0.08s | **0.80x** | 34 MB / 171 MB |
 | App: generate CSV, parse with errors, aggregate in a map, report | `app` | 0.15s | 0.11s | **0.72x** | 33 MB / 147 MB |
 | Long-running loop: 2M iterations, about 700 MB of short-lived garbage | `churn` | | 0.06s | | 265 MB |
 
@@ -53,7 +53,7 @@ Stress mode is `SSPUR_GC_STRESS=<bytes>`, which collects every N bytes. The suit
 | `counts` uses a hash table consistent with SSPUR equality | O(n), first-seen order preserved |
 | ASCII fast paths for case mapping, `words`, and `trim` | Unicode-exact host fallback only for non-ASCII text |
 | Single-allocation `join`, hand-written integer formatting | No `snprintf`, no reallocation chains |
-| Trap paths behind `__builtin_expect`; status and depth in registers | Safety checks stay off the hot path |
+| Traps `longjmp` from a cold function to the entry; calls to functions that can't `raise` carry no result check; self tail calls are loops | Safety checks stay off the hot path; recursion costs what it does in C |
 | Generic functions monomorphized; closures are a function pointer plus an arena environment | Template-like specialization; no boxing |
 
 ## Tiers

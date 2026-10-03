@@ -247,20 +247,20 @@ impl Interp {
             }
             "Secret" | "Pii" | "Untrusted" => Value::Wrap(name.as_str().into(), Rc::new(self.generate(&arg(0), rng, opts, depth + 1)?)),
             "Guess" => Value::Guess(Rc::new(self.generate(&arg(0), rng, opts, depth + 1)?), rng.below(101) as f64 / 100.0),
-            "Map" => {
+            "Map" | "HashMap" if name == "Map" || !self.types.contains_key(name) => {
                 let mut m = BTreeMap::new();
                 for _ in 0..if deep { 0 } else { rng.below(5) } {
                     m.insert(self.generate(&arg(0), rng, opts, depth + 1)?, self.generate(&arg(1), rng, opts, depth + 1)?);
                 }
                 Value::Map(Rc::new(m))
             }
-            "Set" | "Heap" if !self.types.contains_key(name) => {
+            "Set" | "Heap" | "HashSet" if !self.types.contains_key(name) => {
                 let mut xs = Vec::new();
                 for _ in 0..if deep { 0 } else { rng.below(6) } {
                     xs.push(self.generate(&arg(0), rng, opts, depth + 1)?);
                 }
                 xs.sort();
-                if name == "Set" {
+                if name != "Heap" {
                     Value::Set(Rc::new(xs.into_iter().collect()))
                 } else {
                     Value::Heap(Rc::new(xs))

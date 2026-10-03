@@ -435,13 +435,13 @@ impl D<'_> {
                     _ => return Err(self.err(&want, v)),
                 },
                 "List" => NVal::List(self.items(v, &want, &a[0])?),
-                "#Set" => NVal::Set(self.items(v, &want, &a[0])?),
+                "#Set" | "#HashSet" => NVal::Set(self.items(v, &want, &a[0])?),
                 "#Heap" => NVal::Heap(self.items(v, &want, &a[0])?),
                 "Opt" => match v {
                     None | Some(Jv::Null) => NVal::Opt(None),
                     Some(x) => NVal::Opt(Some(Box::new(self.dec(Some(x), &a[0])?))),
                 },
-                "Map" => {
+                "Map" | "#HashMap" => {
                     let mut kv = Vec::new();
                     if strip(self.l, &a[0]) == Type::str() {
                         let Some(Jv::Obj(items)) = v else { return Err(self.err(&want, v)) };

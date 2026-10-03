@@ -375,6 +375,7 @@ fn map_method(name: &str, m: &Rc<BTreeMap<Value, Value>>, mut a: Vec<Value>) -> 
         "values" => Value::list(m.values().cloned().collect()),
         "items" => Value::list(m.iter().map(|(k, v)| pair(k, v)).collect()),
         "len" => Value::Int(m.len() as i64),
+        "is_empty" => Value::Bool(m.is_empty()),
         _ => return trap(format!("no method '{name}' on Map")),
     })
 }

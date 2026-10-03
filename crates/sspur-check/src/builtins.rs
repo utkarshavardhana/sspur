@@ -115,7 +115,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("*", "str[A](x: A) -> Str"),
 ];
 
-pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0)];
+pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1)];
 
 pub const STD_GLOBALS: &[&str] = &[
     "empty_set[A]() -> Set[A]",
@@ -157,6 +157,8 @@ pub const STD_GLOBALS: &[&str] = &[
     "rand_exp(seed: Int, rate: F64) -> (F64, Int)",
     "rand_bool(seed: Int, p: F64) -> (Bool, Int)",
     "bits(n: Int) -> Bits",
+    "hash_map[K, V]() -> HashMap[K, V]",
+    "hash_set[A]() -> HashSet[A]",
     "time_ms(ms: Int) -> Time",
     "date(y: Int, m: Int, d: Int) -> Opt[Time]",
     "datetime(y: Int, mo: Int, d: Int, h: Int, mi: Int, s: Int) -> Opt[Time]",
@@ -256,6 +258,26 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("Int", "format(n: Int, spec: Str) -> Str"),
     ("F64", "format(x: F64, spec: Str) -> Str"),
     ("Str", "format(s: Str, spec: Str) -> Str"),
+    ("#HashMap", "get[K, V](m: HashMap[K, V], k: K) -> Opt[V]"),
+    ("#HashMap", "put[K, V](m: HashMap[K, V], k: K, v: V) -> HashMap[K, V]"),
+    ("#HashMap", "remove[K, V](m: HashMap[K, V], k: K) -> HashMap[K, V]"),
+    ("#HashMap", "has[K, V](m: HashMap[K, V], k: K) -> Bool"),
+    ("#HashMap", "keys[K, V](m: HashMap[K, V]) -> List[K]"),
+    ("#HashMap", "values[K, V](m: HashMap[K, V]) -> List[V]"),
+    ("#HashMap", "items[K, V](m: HashMap[K, V]) -> List[(K, V)]"),
+    ("#HashMap", "len[K, V](m: HashMap[K, V]) -> Int"),
+    ("#HashMap", "is_empty[K, V](m: HashMap[K, V]) -> Bool"),
+    ("#HashSet", "add[A](s: HashSet[A], x: A) -> HashSet[A]"),
+    ("#HashSet", "remove[A](s: HashSet[A], x: A) -> HashSet[A]"),
+    ("#HashSet", "has[A](s: HashSet[A], x: A) -> Bool"),
+    ("#HashSet", "len[A](s: HashSet[A]) -> Int"),
+    ("#HashSet", "is_empty[A](s: HashSet[A]) -> Bool"),
+    ("#HashSet", "items[A](s: HashSet[A]) -> List[A]"),
+    ("#HashSet", "union[A](s: HashSet[A], t: HashSet[A]) -> HashSet[A]"),
+    ("#HashSet", "inter[A](s: HashSet[A], t: HashSet[A]) -> HashSet[A]"),
+    ("#HashSet", "diff[A](s: HashSet[A], t: HashSet[A]) -> HashSet[A]"),
+    ("List", "to_hash_set[A](xs: List[A]) -> HashSet[A]"),
+    ("List", "to_hash_map[K, V](xs: List[(K, V)]) -> HashMap[K, V]"),
     ("#Bits", "has(b: Bits, i: Int) -> Bool"),
     ("#Bits", "set(b: Bits, i: Int) -> Bits"),
     ("#Bits", "clear(b: Bits, i: Int) -> Bits"),
@@ -328,7 +350,7 @@ pub const STD_METHODS: &[(&str, &str)] = &[
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "bits", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "bits", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

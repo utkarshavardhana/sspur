@@ -1,0 +1,58 @@
+type Pt = {x: Int, y: Int}
+
+fn word_index(text: Str) -> HashMap[Str, List[Int]]
+= text.words.enumerate.fold(hash_map(), (m, p) => m.put(p.1, m.get(p.1).or([]).push(p.0)))
+
+fn visited(path: List[Pt]) -> HashSet[Pt]
+= path.fold(hash_set(), (s, p) => s.add(p))
+
+fn two_sum(xs: List[Int], target: Int) -> Opt[(Int, Int)]
+= do
+  seen = xs.enumerate.map(p => (p.1, p.0)).to_hash_map
+  hits = xs.enumerate.filter(p => seen.get(target - p.1).is_some_and_not(p.0, seen.get(target - p.1).or(-1)))
+  hits.first.map(p => (p.0, seen.get(target - p.1).get))
+
+fn is_some_and_not(o: Opt[Int], i: Int, j: Int) -> Bool
+= o.is_some and i != j
+
+fn churn(n: Int) -> (Int, Int, Bool)
+= do
+  m = (0..n).fold(hash_map(), (m, i) => m.put(i * 7919 % 1000, i))
+  gone = (0..500).fold(m, (m, i) => m.remove(i * 2))
+  (m.len, gone.len, gone.has(1) and not gone.has(2))
+
+fn set_ops(a: List[Int], b: List[Int]) -> List[List[Int]]
+= do
+  x = a.to_hash_set
+  y = b.to_hash_set
+  [x.union(y).items, x.inter(y).items, x.diff(y).items, y.diff(x).items]
+
+fn counts(xs: List[Str]) -> List[(Str, Int)]
+= xs.fold(hash_map(), (m, w) => m.put(w, m.get(w).or(0) + 1)).items
+
+fn rebuild(m: HashMap[Int, Str]) -> HashMap[Int, Str]
+= m.items.to_hash_map
+
+fn drop_all(s: HashSet[Int], xs: List[Int]) -> HashSet[Int]
+= xs.fold(s, (acc, x) => acc.remove(x))
+
+fn insert_all(s: HashSet[Int], xs: List[Int]) -> (Int, List[Int])
+= do
+  t = xs.fold(s, (acc, x) => acc.add(x))
+  (t.len, t.items)
+
+fn show(m: HashMap[Str, Int], s: HashSet[Int]) -> Str
+= "{m} {s} {m.keys} {m.values} {s.len}"
+
+test index = word_index("a b a c b a").get("a") == some([0, 2, 5]) and word_index("").is_empty and word_index("x y").keys == ["x", "y"]
+test points = visited([Pt{x: 1, y: 2}, Pt{x: 1, y: 2}, Pt{x: 0, y: 0}]).len == 2 and visited([]).items == []
+test pairs = two_sum([2, 7, 11, 15], 9) == some((0, 1)) and two_sum([1, 2], 10) == none
+test churning = churn(5000) == (1000, 500, true)
+test algebra = set_ops([1, 2, 3, 4], [3, 4, 5]) == [[1, 2, 3, 4, 5], [3, 4], [1, 2], [5]]
+test counted = counts(["b", "a", "b", "c", "b"]) == [("a", 1), ("b", 3), ("c", 1)]
+test equality = [1, 2, 3].to_hash_set == [3, 2, 1, 2].to_hash_set and hash_map().put(1, "a") != hash_map().put(1, "b") and rebuild(hash_map().put(2, "x").put(1, "y")) == hash_map().put(1, "y").put(2, "x")
+test removal = drop_all([1, 2, 3].to_hash_set, [2, 9, 2]).items == [1, 3] and drop_all(hash_set(), [1]).len == 0
+test display = show(hash_map().put("b", 2).put("a", 1), [3, 1, 2].to_hash_set) == "{\"a\": 1, \"b\": 2} {1, 2, 3} [\"a\", \"b\"] [1, 2] 3"
+test json_form = json.encode(hash_map().put("k", [1])) == "{\"k\":[1]}" and json.decode[HashMap[Str, Int]]("{\"b\":2,\"a\":1}") == ok(hash_map().put("a", 1).put("b", 2)) and json.decode[HashSet[Int]]("[3,1,3]").map(_.len) == ok(2) and json.encode(hash_map().put(2, true)) == "[[2,true]]"
+test nested = hash_map().put([1, 2], hash_set().add("x")).get([1, 2]).map(_.has("x")) == some(true)
+test big = insert_all(hash_set(), (0..3000).map(_ * 3)).0 == 3000 and drop_all((0..3000).to_hash_set, (0..3000)).is_empty

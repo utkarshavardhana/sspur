@@ -97,7 +97,7 @@ impl Layouts {
                     self.encode(x, &a[0], out)?;
                 }
             }
-            (NVal::Set(xs) | NVal::Heap(xs), Type::Con(n, a)) if n == "#Set" || n == "#Heap" => {
+            (NVal::Set(xs) | NVal::Heap(xs), Type::Con(n, a)) if n == "#Set" || n == "#Heap" || n == "#HashSet" => {
                 out.push(xs.len() as i64);
                 for x in xs {
                     self.encode(x, &a[0], out)?;
@@ -113,7 +113,7 @@ impl Layouts {
                     self.encode(e, &a[1], out)?;
                 }
             },
-            (NVal::Map(kv), Type::Con(n, a)) if n == "Map" => {
+            (NVal::Map(kv), Type::Con(n, a)) if n == "Map" || n == "#HashMap" => {
                 out.push(kv.len() as i64);
                 for (k, v) in kv {
                     self.encode(k, &a[0], out)?;
@@ -169,13 +169,13 @@ impl Layouts {
                 }
                 "Bool" => NVal::Bool(next()? != 0),
                 "F64" => NVal::Float(f64::from_bits(next()? as u64)),
-                "#Set" | "#Heap" => {
+                "#Set" | "#Heap" | "#HashSet" => {
                     let len = next()?;
                     let mut xs = Vec::with_capacity(len.clamp(0, 1 << 16) as usize);
                     for _ in 0..len {
                         xs.push(self.decode(words, pos, &a[0])?);
                     }
-                    if n == "#Set" { NVal::Set(xs) } else { NVal::Heap(xs) }
+                    if n == "#Heap" { NVal::Heap(xs) } else { NVal::Set(xs) }
                 }
                 "Res" => {
                     if next()? == 1 {
@@ -205,7 +205,7 @@ impl Layouts {
                     }
                     NVal::List(xs)
                 }
-                "Map" => {
+                "Map" | "#HashMap" => {
                     let len = next()?;
                     let mut kv = Vec::new();
                     for _ in 0..len {

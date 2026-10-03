@@ -2,7 +2,7 @@ use super::*;
 
 const STD_RT: &str = include_str!("std_rt.c");
 
-pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits"];
+pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits", "#HashMap", "#HashSet"];
 
 fn section(key: &str) -> (Vec<&'static str>, &'static str) {
     for part in STD_RT.split("//@ ").skip(1) {
@@ -57,6 +57,8 @@ impl Cx<'_> {
             "#Time" => "TM".into(),
             "#Duration" => "DU".into(),
             "#Bits" => "BI".into(),
+            "#HashMap" => format!("HM_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
+            "#HashSet" => format!("HS_{}", self.mangle(&a[0])?),
             _ => format!("RS_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
         })
     }
@@ -65,6 +67,16 @@ impl Cx<'_> {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         match n.as_str() {
             "#Time" | "#Duration" => Ok("int64_t".into()),
+            "#HashMap" | "#HashSet" => {
+                if self.helpers_done.insert("hamt_type".into()) {
+                    writeln!(self.defs, "typedef struct SsHN SsHN;").unwrap();
+                }
+                self.fwd_decl(m);
+                if self.complete.insert(m.to_string()) {
+                    writeln!(self.defs, "struct {m} {{ SsHN* root; int64_t len; }};").unwrap();
+                }
+                Ok(m.to_string())
+            }
             "#Bits" => {
                 if self.helpers_done.insert("bits_type".into()) {
                     writeln!(self.defs, "typedef struct {{ int64_t n; uint64_t* w; }} SBits;").unwrap();
@@ -150,6 +162,12 @@ impl Cx<'_> {
             }
             "#StrBuf" => "return cmp_S((Str){a.len, a.data}, (Str){b.len, b.data});".into(),
             "#Time" | "#Duration" => "return cmp_I(a, b);".into(),
+            "#HashMap" | "#HashSet" => {
+                let (m, he) = self.hash_parts(t)?;
+                let kc = self.helper_cmp(&a[0])?;
+                let vc = if n == "#HashMap" { format!("c = {}(xa[i]->v, xb[i]->v); if (c) return c; ", self.helper_cmp(&a[1])?) } else { String::new() };
+                format!("{he}** xa = hsort_{m}(a.root, a.len); {he}** xb = hsort_{m}(b.root, b.len); int64_t n = a.len < b.len ? a.len : b.len; for (int64_t i = 0; i < n; i++) {{ int c = {kc}(xa[i]->k, xb[i]->k); if (c) return c; {vc}}} return cmp_I(a.len, b.len);")
+            }
             "#Bits" => {
                 self.std("bits");
                 "return ss_bits_cmp(a, b);".into()
@@ -177,6 +195,12 @@ impl Cx<'_> {
             }
             "#StrBuf" => "buf_push(b, v.len); for (int64_t i = 0; i < v.len; i += 8) { int64_t w = 0; memcpy(&w, v.data + i, (size_t)(v.len - i < 8 ? v.len - i : 8)); buf_push(b, w); }".into(),
             "#Time" | "#Duration" => "buf_push(b, v);".into(),
+            "#HashMap" | "#HashSet" => {
+                let (m, he) = self.hash_parts(t)?;
+                let ek = self.helper_enc(&a[0])?;
+                let ev = if n == "#HashMap" { format!(" {}(b, xs[i]->v);", self.helper_enc(&a[1])?) } else { String::new() };
+                format!("{he}** xs = hsort_{m}(v.root, v.len); buf_push(b, v.len); for (int64_t i = 0; i < v.len; i++) {{ {ek}(b, xs[i]->k);{ev} }}")
+            }
             "#Bits" => "buf_push(b, v.n); for (int64_t k = 0; k < (v.n + 63) / 64; k++) buf_push(b, (int64_t)v.w[k]);".into(),
             _ => {
                 let (ea, ee) = (self.helper_enc(&a[0])?, self.helper_enc(&a[1])?);
@@ -199,6 +223,13 @@ impl Cx<'_> {
                 format!("int64_t n = *(*p)++; {c} h = {{0}}; for (int64_t i = 0; i < n; i++) {{ __auto_type x = {d}(p); h.root = hpush_{hm}(h.root, x); }} return h;")
             }
             "#Time" | "#Duration" => "return *(*p)++;".into(),
+            "#HashMap" | "#HashSet" => {
+                let (m, he) = self.hash_parts(t)?;
+                let dk = self.helper_dec(&a[0])?;
+                let kh = self.helper_hash(&a[0])?;
+                let dv = if n == "#HashMap" { format!(" e.v = {}(p);", self.helper_dec(&a[1])?) } else { String::new() };
+                format!("int64_t n = *(*p)++; {c} s = {{0, 0}}; for (int64_t i = 0; i < n; i++) {{ {he} e; e.k = {dk}(p);{dv} e.h = {kh}(e.k); int ad = 0; s.root = hm_put(s.root, (const char*)&e, 0, sizeof({he}), heq_{m}, &ad); s.len += ad; }} return s;")
+            }
             "#Bits" => {
                 self.std("bits");
                 "SBits v; v.n = *(*p)++; v.w = ss_bw_alloc(v.n); for (int64_t k = 0; k < (v.n + 63) / 64; k++) v.w[k] = (uint64_t)*(*p)++; return v;".into()
@@ -238,6 +269,12 @@ impl Cx<'_> {
                 self.std("bits");
                 "(void)q; ss_bits_show(b, v);".into()
             }
+            "#HashMap" | "#HashSet" => {
+                let (m, he) = self.hash_parts(t)?;
+                let sk = self.helper_show(&a[0])?;
+                let sv = if n == "#HashMap" { format!(" sb_put(b, \": \", 2); {}(b, xs[i]->v, 1);", self.helper_show(&a[1])?) } else { String::new() };
+                format!("(void)q; {he}** xs = hsort_{m}(v.root, v.len); sb_put(b, \"{{\", 1); for (int64_t i = 0; i < v.len; i++) {{ if (i) sb_put(b, \", \", 2); {sk}(b, xs[i]->k, 1);{sv} }} sb_put(b, \"}}\", 1);")
+            }
             _ => {
                 let (sa, se) = (self.helper_show(&a[0])?, self.helper_show(&a[1])?);
                 format!("if (v.ok) {{ sb_put(b, \"ok(\", 3); {sa}(b, v.v, 1); }} else {{ sb_put(b, \"err(\", 4); {se}(b, v.e, 1); }} sb_put(b, \")\", 1);")
@@ -261,6 +298,11 @@ impl Cx<'_> {
             }
             "#StrBuf" => "h = hash_S((Str){v.len, v.data});".into(),
             "#Time" | "#Duration" => "h = hash_I(v);".into(),
+            "#HashMap" | "#HashSet" => {
+                let (_, he) = self.hash_parts(t)?;
+                let hv = if n == "#HashMap" { format!(" + {}(xs[i]->v)", self.helper_hash(&a[1])?) } else { String::new() };
+                format!("{he}** xs = ({he}**)sspur_alloc((size_t)(v.len + 1) * sizeof({he}*)); int64_t c = 0; hm_fill(v.root, (char**)xs, &c, sizeof({he})); uint64_t s = 0; for (int64_t i = 0; i < c; i++) s += hmix(xs[i]->h * 31{hv}); h = hmix(s ^ (uint64_t)v.len);")
+            }
             "#Bits" => "h = hash_I(v.n); for (int64_t k = 0; k < (v.n + 63) / 64; k++) h = hmix(h * 31 + v.w[k]);".into(),
             _ => {
                 let (ha, he) = (self.helper_hash(&a[0])?, self.helper_hash(&a[1])?);
@@ -301,7 +343,7 @@ impl Cx<'_> {
         Ok(Some(match n {
             "ok" => format!("({{ __auto_type v_ = {}; {c} r_; memset(&r_, 0, sizeof r_); r_.ok = 1; r_.v = v_; r_; }})", v(0)),
             "err" => format!("({{ __auto_type v_ = {}; {c} r_; memset(&r_, 0, sizeof r_); r_.e = v_; r_; }})", v(0)),
-            "empty_set" | "empty_heap" => format!("(({c}){{0}})"),
+            "empty_set" | "empty_heap" | "hash_map" | "hash_set" => format!("(({c}){{0}})"),
             "str_buf" => "((SBuf){0, 0, 0})".into(),
             "range" => {
                 self.std("fail");
@@ -525,6 +567,7 @@ impl Cx<'_> {
                     _ => return Err(format!("uses Time.{name}")),
                 })
             }
+            "#HashMap" | "#HashSet" => self.hash_method(r, rt, name, &vals, t),
             "#Bits" => {
                 self.std("bits");
                 Ok(match name {
@@ -775,6 +818,13 @@ impl Cx<'_> {
                 let (mm, _, sc) = self.set_parts(t)?;
                 wrap(format!("{sc} s_ = {{0}}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) s_.root = mput_{mm}(s_.root, {l}.data[{i}], 0, sspur_prio()); s_;"))
             }
+            "to_hash_set" | "to_hash_map" => {
+                let (m, he) = self.hash_parts(t)?;
+                let hc = self.cty(t)?;
+                let kh = self.helper_hash(&arg0(t))?;
+                let fill = if name == "to_hash_set" { format!("e_.k = {l}.data[{i}];") } else { format!("e_.k = {l}.data[{i}].f0; e_.v = {l}.data[{i}].f1;") };
+                wrap(format!("{hc} o_ = {{0, 0}}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ {he} e_; {fill} e_.h = {kh}(e_.k); int ad_ = 0; o_.root = hm_put(o_.root, (const char*)&e_, 0, sizeof({he}), heq_{m}, &ad_); o_.len += ad_; }} o_;"))
+            }
             "to_bits" => {
                 self.std("bits");
                 let n = self.expr(&args[0])?;
@@ -797,6 +847,71 @@ impl Cx<'_> {
                 wrap(format!("{hc} h_ = {{0}}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) h_.root = hpush_{hm}(h_.root, {l}.data[{i}]); h_;"))
             }
             _ => return Err(format!("uses List.{name}")),
+        })
+    }
+
+    pub(super) fn hash_parts(&mut self, t: &Type) -> G<(String, String)> {
+        let Type::Con(n, a) = t else { return Err("bad hash type".into()) };
+        let m = self.mangle(t)?;
+        let he = format!("HE_{m}");
+        self.cty(t)?;
+        if self.helpers_done.insert(format!("hamt_{m}")) {
+            self.std("hamt");
+            let kc = self.cty(&a[0])?;
+            let vf = if n == "#HashMap" { format!("{} v; ", self.cty(&a[1])?) } else { String::new() };
+            let kcmp = self.helper_cmp(&a[0])?;
+            self.fwd_decl(&he);
+            writeln!(self.defs, "struct {he} {{ uint64_t h; {kc} k; {vf}}};").unwrap();
+            writeln!(self.protos, "static int heq_{m}(const void* a, const void* b);").unwrap();
+            writeln!(self.protos, "static {he}** hsort_{m}(SsHN* root, int64_t n);").unwrap();
+            let h = &mut self.helpers;
+            writeln!(h, "static int heq_{m}(const void* a, const void* b) {{ return {kcmp}(((const {he}*)a)->k, ((const {he}*)b)->k) == 0; }}").unwrap();
+            writeln!(h, "static int hek_{m}(const void* a, const void* b) {{ return {kcmp}((*({he}* const*)a)->k, (*({he}* const*)b)->k); }}").unwrap();
+            writeln!(h, "static {he}** hsort_{m}(SsHN* root, int64_t n) {{ {he}** xs = ({he}**)sspur_alloc((size_t)(n + 1) * sizeof({he}*)); int64_t c = 0; hm_fill(root, (char**)xs, &c, sizeof({he})); if (n > 1) raw_msort((char*)xs, n, sizeof({he}*), hek_{m}, (char*)sspur_alloc((size_t)n * sizeof({he}*))); return xs; }}").unwrap();
+        }
+        Ok((m, he))
+    }
+
+    fn hash_method(&mut self, r: &str, rt: &Type, name: &str, vals: &[String], t: &Type) -> G {
+        let Type::Con(n, a) = rt else { return Err("bad hash type".into()) };
+        let is_map = n == "#HashMap";
+        let (m, he) = self.hash_parts(rt)?;
+        let kh = self.helper_hash(&a[0])?;
+        let hc = self.cty(rt)?;
+        let s = self.fresh("hv");
+        let head = format!("{hc} {s} = {r}; ");
+        let probe = |k: &str| format!("{he} e_; e_.k = {k}; e_.h = {kh}(e_.k); ");
+        let es = format!("sizeof({he})");
+        Ok(match name {
+            "get" => {
+                let oc = self.cty(t)?;
+                format!("({{ {head}{}{he}* x_ = ({he}*)hm_find({s}.root, &e_, {es}, heq_{m}); {oc} o_ = {{0}}; if (x_) {{ o_.some = 1; o_.v = x_->v; }} o_; }})", probe(&vals[0]))
+            }
+            "has" => format!("({{ {head}{}(int64_t)(hm_find({s}.root, &e_, {es}, heq_{m}) != 0); }})", probe(&vals[0])),
+            "put" | "add" => {
+                let setv = if is_map { format!("e_.v = {}; ", vals[1]) } else { String::new() };
+                format!("({{ {head}{}{setv}int ad_ = 0; {hc} o_; o_.root = hm_put({s}.root, (const char*)&e_, 0, {es}, heq_{m}, &ad_); o_.len = {s}.len + ad_; o_; }})", probe(&vals[0]))
+            }
+            "remove" => format!("({{ {head}{}int rm_ = 0; {hc} o_; o_.root = {s}.root ? hm_del({s}.root, (const char*)&e_, 0, {es}, heq_{m}, &rm_) : 0; o_.len = {s}.len - rm_; o_; }})", probe(&vals[0])),
+            "len" => format!("(({r}).len)"),
+            "is_empty" => format!("((int64_t)(({r}).len == 0))"),
+            "keys" | "values" | "items" => {
+                let lc = self.cty(t)?;
+                let et = elem(t, "List").ok_or("bad items type")?;
+                let ec = self.cty(&et)?;
+                let fill = match (name, is_map) {
+                    ("values", _) => "d_[i_] = xs_[i_]->v;",
+                    ("items", true) => "d_[i_].f0 = xs_[i_]->k; d_[i_].f1 = xs_[i_]->v;",
+                    _ => "d_[i_] = xs_[i_]->k;",
+                };
+                format!("({{ {head}{he}** xs_ = hsort_{m}({s}.root, {s}.len); int64_t n_ = {s}.len; RawL r_ = raw_alloc(n_, sizeof({ec})); {ec}* d_ = ({ec}*)r_.data; for (int64_t i_ = 0; i_ < n_; i_++) {{ {fill} }} r_.hdr[1] = n_; ({lc}){{n_, d_, r_.hdr}}; }})")
+            }
+            "union" => format!("({{ {head}{hc} o_ = {}; {hc} big_ = {s}, small_ = o_; if (small_.len > big_.len) {{ big_ = o_; small_ = {s}; }} {he}** xs_ = ({he}**)sspur_alloc((size_t)(small_.len + 1) * sizeof({he}*)); int64_t c_ = 0; hm_fill(small_.root, (char**)xs_, &c_, {es}); for (int64_t i_ = 0; i_ < c_; i_++) {{ int ad_ = 0; big_.root = hm_put(big_.root, (const char*)xs_[i_], 0, {es}, heq_{m}, &ad_); big_.len += ad_; }} big_; }})", vals[0]),
+            "inter" | "diff" => {
+                let keep = if name == "inter" { "" } else { "!" };
+                format!("({{ {head}{hc} o_ = {}; {hc} t_ = {{0, 0}}; {he}** xs_ = ({he}**)sspur_alloc((size_t)({s}.len + 1) * sizeof({he}*)); int64_t c_ = 0; hm_fill({s}.root, (char**)xs_, &c_, {es}); for (int64_t i_ = 0; i_ < c_; i_++) if ({keep}hm_find(o_.root, xs_[i_], {es}, heq_{m})) {{ int ad_ = 0; t_.root = hm_put(t_.root, (const char*)xs_[i_], 0, {es}, heq_{m}, &ad_); t_.len += ad_; }} t_; }})", vals[0])
+            }
+            _ => return Err(format!("uses {}.{name}", &n[1..])),
         })
     }
 
@@ -861,6 +976,20 @@ impl Cx<'_> {
                 let (hm, _) = self.heap_helpers(&t)?;
                 let ec = self.cty(&a[0])?;
                 format!("RawL x = hsorted_{hm}(v.root); {}", seq(self, &a[0], "x.len", &format!("(({ec}*)x.data)[i]"))?)
+            }
+            Type::Con(n, a) if n == "#HashSet" => {
+                let (m, he) = self.hash_parts(&t)?;
+                format!("{he}** xs = hsort_{m}(v.root, v.len); {}", seq(self, &a[0], "v.len", "xs[i]->k")?)
+            }
+            Type::Con(n, a) if n == "#HashMap" => {
+                let (m, he) = self.hash_parts(&t)?;
+                let (ek, ev) = (self.json_enc(&a[0])?, self.json_enc(&a[1])?);
+                let fill = format!("{he}** xs = hsort_{m}(v.root, v.len); int64_t n = v.len; ");
+                if self.json_strip(&a[0]) == Type::str() {
+                    format!("{fill}sb_put(b, \"{{\", 1); for (int64_t i = 0; i < n; i++) {{ if (i) sb_put(b, \",\", 1); {ek}(b, xs[i]->k); sb_put(b, \":\", 1); {ev}(b, xs[i]->v); }} sb_put(b, \"}}\", 1);")
+                } else {
+                    format!("{fill}sb_put(b, \"[\", 1); for (int64_t i = 0; i < n; i++) {{ if (i) sb_put(b, \",\", 1); sb_put(b, \"[\", 1); {ek}(b, xs[i]->k); sb_put(b, \",\", 1); {ev}(b, xs[i]->v); sb_put(b, \"]\", 1); }} sb_put(b, \"]\", 1);")
+                }
             }
             Type::Con(n, a) if n == "Opt" => {
                 let e = self.json_enc(&a[0])?;
@@ -971,6 +1100,23 @@ impl Cx<'_> {
             Type::Con(n, a) if n == "#Heap" => {
                 let (hm, _) = self.heap_helpers(&t)?;
                 format!("{c} h = {{0}}; {} *out = h; return 1;", items(self, &a[0], &format!("h.root = hpush_{hm}(h.root, x);"))?)
+            }
+            Type::Con(n, a) if n == "#HashSet" => {
+                let (m, he) = self.hash_parts(&t)?;
+                let kh = self.helper_hash(&a[0])?;
+                format!("{c} s = {{0, 0}}; {} *out = s; return 1;", items(self, &a[0], &format!("{he} he_; he_.k = x; he_.h = {kh}(he_.k); int ad_ = 0; s.root = hm_put(s.root, (const char*)&he_, 0, sizeof({he}), heq_{m}, &ad_); s.len += ad_;"))?)
+            }
+            Type::Con(n, a) if n == "#HashMap" => {
+                let (m, he) = self.hash_parts(&t)?;
+                let kh = self.helper_hash(&a[0])?;
+                let (dk, dv) = (self.json_dec(&a[0])?, self.json_dec(&a[1])?);
+                let (kc, vc) = (self.cty(&a[0])?, self.cty(&a[1])?);
+                let ins = format!("{he} he_; he_.k = k; he_.v = x; he_.h = {kh}(he_.k); int ad_ = 0; mo.root = hm_put(mo.root, (const char*)&he_, 0, sizeof({he}), heq_{m}, &ad_); mo.len += ad_;");
+                if self.json_strip(&a[0]) == Type::str() {
+                    format!("if (!v || v->t != SJ_OBJ) {bad} {c} mo = {{0, 0}}; for (int64_t i = 0; i < v->len; i++) {{ SsJ kj; memset(&kj, 0, sizeof kj); kj.t = SJ_STR; kj.s = v->keys[i]; {kc} k; if (!{dk}(&kj, &k, e)) return 0; sj_push(e, v->keys[i]); {vc} x; memset(&x, 0, sizeof x); if (!{dv}(&v->items[i], &x, e)) return 0; e->n--; {ins} }} *out = mo; return 1;")
+                } else {
+                    format!("if (!v || v->t != SJ_ARR) {bad} {c} mo = {{0, 0}}; for (int64_t i = 0; i < v->len; i++) {{ SsJ* p = &v->items[i]; sj_pushi(e, i); if (p->t != SJ_ARR || p->len != 2) {} {kc} k; memset(&k, 0, sizeof k); {vc} x; memset(&x, 0, sizeof x); if (!{dk}(&p->items[0], &k, e) || !{dv}(&p->items[1], &x, e)) return 0; e->n--; {ins} }} *out = mo; return 1;", err("[key, value]", "p"))
+                }
             }
             Type::Con(n, a) if n == "Opt" => {
                 let d = self.json_dec(&a[0])?;

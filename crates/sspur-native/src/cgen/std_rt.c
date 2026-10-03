@@ -699,3 +699,121 @@ static int ss_bits_unjson(Str s, SBits* out) {
     for (int64_t k = 0; k < s.len; k++) if (s.p[s.len - 1 - k] == '1') b.w[k >> 6] |= 1ULL << (k & 63);
     *out = b; return 1;
 }
+//@ hamt
+typedef struct SsHN SsHN;
+struct SsHN { uint32_t dm, nm, col, pad_; };
+typedef int (*SsHEq)(const void*, const void*);
+#define HN_H(e) (*(const uint64_t*)(const void*)(e))
+static inline char* hn_ents(SsHN* n) { return (char*)(n + 1); }
+static inline int64_t hn_nd(SsHN* n) { return n->col ? (int64_t)n->col : __builtin_popcount(n->dm); }
+static inline SsHN** hn_kids(SsHN* n, size_t es) { return (SsHN**)(void*)(hn_ents(n) + (size_t)hn_nd(n) * es); }
+static SsHN* hn_alloc(uint32_t dm, uint32_t nm, uint32_t col, size_t es) {
+    int64_t nd = col ? (int64_t)col : __builtin_popcount(dm);
+    SsHN* r = (SsHN*)sspur_alloc(sizeof(SsHN) + (size_t)nd * es + (size_t)__builtin_popcount(nm) * sizeof(SsHN*));
+    r->dm = dm; r->nm = nm; r->col = col; r->pad_ = 0; return r;
+}
+static void* hm_find(SsHN* n, const void* e, size_t es, SsHEq eq) {
+    uint64_t h = HN_H(e); int sh = 0;
+    while (n) {
+        if (n->col) { for (uint32_t i = 0; i < n->col; i++) { char* x = hn_ents(n) + (size_t)i * es; if (eq(x, e)) return x; } return 0; }
+        uint32_t bit = 1u << ((h >> sh) & 31);
+        if (n->dm & bit) { char* x = hn_ents(n) + (size_t)__builtin_popcount(n->dm & (bit - 1)) * es; return HN_H(x) == h && eq(x, e) ? x : 0; }
+        if (!(n->nm & bit)) return 0;
+        n = hn_kids(n, es)[__builtin_popcount(n->nm & (bit - 1))]; sh += 5;
+    }
+    return 0;
+}
+static SsHN* hm_pair(const char* a, const char* b, int sh, size_t es) {
+    if (sh > 60) { SsHN* r = hn_alloc(0, 0, 2, es); memcpy(hn_ents(r), a, es); memcpy(hn_ents(r) + es, b, es); return r; }
+    uint32_t ia = (uint32_t)((HN_H(a) >> sh) & 31), ib = (uint32_t)((HN_H(b) >> sh) & 31);
+    if (ia == ib) { SsHN* r = hn_alloc(0, 1u << ia, 0, es); hn_kids(r, es)[0] = hm_pair(a, b, sh + 5, es); return r; }
+    SsHN* r = hn_alloc((1u << ia) | (1u << ib), 0, 0, es);
+    memcpy(hn_ents(r), ia < ib ? a : b, es); memcpy(hn_ents(r) + es, ia < ib ? b : a, es);
+    return r;
+}
+static SsHN* hm_put(SsHN* n, const char* e, int sh, size_t es, SsHEq eq, int* added) {
+    uint64_t h = HN_H(e);
+    if (!n) { SsHN* r = hn_alloc(1u << ((h >> sh) & 31), 0, 0, es); memcpy(hn_ents(r), e, es); *added = 1; return r; }
+    if (n->col) {
+        size_t sz = (size_t)n->col * es;
+        for (uint32_t i = 0; i < n->col; i++) if (eq(hn_ents(n) + (size_t)i * es, e)) { SsHN* r = hn_alloc(0, 0, n->col, es); memcpy(hn_ents(r), hn_ents(n), sz); memcpy(hn_ents(r) + (size_t)i * es, e, es); *added = 0; return r; }
+        SsHN* r = hn_alloc(0, 0, n->col + 1, es); memcpy(hn_ents(r), hn_ents(n), sz); memcpy(hn_ents(r) + sz, e, es); *added = 1; return r;
+    }
+    uint32_t bit = 1u << ((h >> sh) & 31);
+    int64_t nd = __builtin_popcount(n->dm), nk = __builtin_popcount(n->nm);
+    size_t body = (size_t)nd * es + (size_t)nk * sizeof(SsHN*);
+    if (n->dm & bit) {
+        int64_t i = __builtin_popcount(n->dm & (bit - 1)); char* x = hn_ents(n) + (size_t)i * es;
+        if (HN_H(x) == h && eq(x, e)) { SsHN* r = hn_alloc(n->dm, n->nm, 0, es); memcpy(hn_ents(r), hn_ents(n), body); memcpy(hn_ents(r) + (size_t)i * es, e, es); *added = 0; return r; }
+        SsHN* sub = hm_pair(x, e, sh + 5, es);
+        SsHN* r = hn_alloc(n->dm & ~bit, n->nm | bit, 0, es);
+        memcpy(hn_ents(r), hn_ents(n), (size_t)i * es); memcpy(hn_ents(r) + (size_t)i * es, hn_ents(n) + (size_t)(i + 1) * es, (size_t)(nd - i - 1) * es);
+        int64_t j = __builtin_popcount(n->nm & (bit - 1)); SsHN** ok = hn_kids(n, es); SsHN** rk = hn_kids(r, es);
+        memcpy(rk, ok, (size_t)j * sizeof(SsHN*)); rk[j] = sub; memcpy(rk + j + 1, ok + j, (size_t)(nk - j) * sizeof(SsHN*));
+        *added = 1; return r;
+    }
+    if (n->nm & bit) {
+        int64_t j = __builtin_popcount(n->nm & (bit - 1));
+        SsHN* c = hm_put(hn_kids(n, es)[j], e, sh + 5, es, eq, added);
+        SsHN* r = hn_alloc(n->dm, n->nm, 0, es); memcpy(hn_ents(r), hn_ents(n), body); hn_kids(r, es)[j] = c; return r;
+    }
+    int64_t i = __builtin_popcount(n->dm & (bit - 1));
+    SsHN* r = hn_alloc(n->dm | bit, n->nm, 0, es);
+    memcpy(hn_ents(r), hn_ents(n), (size_t)i * es); memcpy(hn_ents(r) + (size_t)i * es, e, es); memcpy(hn_ents(r) + (size_t)(i + 1) * es, hn_ents(n) + (size_t)i * es, (size_t)(nd - i) * es);
+    memcpy(hn_kids(r, es), hn_kids(n, es), (size_t)nk * sizeof(SsHN*));
+    *added = 1; return r;
+}
+static SsHN* hm_del(SsHN* n, const char* e, int sh, size_t es, SsHEq eq, int* removed) {
+    uint64_t h = HN_H(e);
+    if (n->col) {
+        for (uint32_t i = 0; i < n->col; i++) if (eq(hn_ents(n) + (size_t)i * es, e)) {
+            *removed = 1;
+            if (n->col == 1) return 0;
+            SsHN* r = hn_alloc(0, 0, n->col - 1, es);
+            memcpy(hn_ents(r), hn_ents(n), (size_t)i * es); memcpy(hn_ents(r) + (size_t)i * es, hn_ents(n) + (size_t)(i + 1) * es, (size_t)(n->col - i - 1) * es);
+            return r;
+        }
+        return n;
+    }
+    uint32_t bit = 1u << ((h >> sh) & 31);
+    int64_t nd = __builtin_popcount(n->dm), nk = __builtin_popcount(n->nm);
+    if (n->dm & bit) {
+        int64_t i = __builtin_popcount(n->dm & (bit - 1)); char* x = hn_ents(n) + (size_t)i * es;
+        if (!(HN_H(x) == h && eq(x, e))) return n;
+        *removed = 1;
+        if (nd == 1 && nk == 0) return 0;
+        SsHN* r = hn_alloc(n->dm & ~bit, n->nm, 0, es);
+        memcpy(hn_ents(r), hn_ents(n), (size_t)i * es); memcpy(hn_ents(r) + (size_t)i * es, hn_ents(n) + (size_t)(i + 1) * es, (size_t)(nd - i - 1) * es);
+        memcpy(hn_kids(r, es), hn_kids(n, es), (size_t)nk * sizeof(SsHN*));
+        return r;
+    }
+    if (!(n->nm & bit)) return n;
+    int64_t j = __builtin_popcount(n->nm & (bit - 1));
+    SsHN** ok = hn_kids(n, es);
+    SsHN* nc = hm_del(ok[j], e, sh + 5, es, eq, removed);
+    if (!*removed) return n;
+    if (!nc) {
+        if (nd == 0 && nk == 1) return 0;
+        SsHN* r = hn_alloc(n->dm, n->nm & ~bit, 0, es); SsHN** rk = hn_kids(r, es);
+        memcpy(hn_ents(r), hn_ents(n), (size_t)nd * es); memcpy(rk, ok, (size_t)j * sizeof(SsHN*)); memcpy(rk + j, ok + j + 1, (size_t)(nk - j - 1) * sizeof(SsHN*));
+        return r;
+    }
+    if (hn_nd(nc) == 1 && (nc->col || nc->nm == 0)) {
+        int64_t i = __builtin_popcount(n->dm & (bit - 1));
+        SsHN* r = hn_alloc(n->dm | bit, n->nm & ~bit, 0, es); SsHN** rk = hn_kids(r, es);
+        memcpy(hn_ents(r), hn_ents(n), (size_t)i * es); memcpy(hn_ents(r) + (size_t)i * es, hn_ents(nc), es); memcpy(hn_ents(r) + (size_t)(i + 1) * es, hn_ents(n) + (size_t)i * es, (size_t)(nd - i) * es);
+        memcpy(rk, ok, (size_t)j * sizeof(SsHN*)); memcpy(rk + j, ok + j + 1, (size_t)(nk - j - 1) * sizeof(SsHN*));
+        return r;
+    }
+    SsHN* r = hn_alloc(n->dm, n->nm, 0, es);
+    memcpy(hn_ents(r), hn_ents(n), (size_t)nd * es + (size_t)nk * sizeof(SsHN*)); hn_kids(r, es)[j] = nc;
+    return r;
+}
+static void hm_fill(SsHN* n, char** out, int64_t* c, size_t es) {
+    if (!n) return;
+    int64_t nd = hn_nd(n);
+    for (int64_t i = 0; i < nd; i++) out[(*c)++] = hn_ents(n) + (size_t)i * es;
+    if (n->col) return;
+    int64_t nk = __builtin_popcount(n->nm); SsHN** k = hn_kids(n, es);
+    for (int64_t j = 0; j < nk; j++) hm_fill(k[j], out, c, es);
+}

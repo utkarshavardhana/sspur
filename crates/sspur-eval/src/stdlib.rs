@@ -461,6 +461,7 @@ impl Interp {
             "inf" => Value::Float(f64::INFINITY),
             "nan" => Value::Float(f64::NAN),
             "bits" => crate::stdx::bits_new(int(&a[0])?)?,
+            "big" | "parse_big" | "decimal" => crate::stdbig::global(n, &a)?,
             "hash_map" => Value::Map(Rc::new(BTreeMap::new())),
             "hash_set" => Value::Set(Rc::new(BTreeSet::new())),
             "time_ms" | "date" | "datetime" | "parse_time" | "now" | "millis" | "secs" | "mins" | "hours" | "days" => crate::stdtime::global(n, &a)?,

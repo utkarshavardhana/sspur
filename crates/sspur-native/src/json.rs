@@ -49,6 +49,8 @@ pub fn encode(l: &Layouts, v: &NVal, t: &Type, out: &mut String) -> Option<()> {
         (NVal::Unit, _) => out.push_str("null"),
         (NVal::Int(n) | NVal::Dur(n), _) => write!(out, "{n}").unwrap(),
         (NVal::Time(t), _) => quote(&crate::chrono::iso(*t), out),
+        (NVal::Big(b), _) => write!(out, "{b}").unwrap(),
+        (NVal::Dec(m, s), _) => quote(&crate::bigint::dec_str(m, *s), out),
         (NVal::Bits(n, w), _) => {
             out.push('"');
             for i in (0..*n).rev() {
@@ -403,6 +405,17 @@ impl D<'_> {
                 },
                 "#Duration" => match self.dec(v, &Type::int()).map_err(|_| self.err(&want, v))? {
                     NVal::Int(n) => NVal::Dur(n),
+                    _ => return Err(self.err(&want, v)),
+                },
+                "#BigInt" => match v {
+                    Some(Jv::Num(s)) if s.bytes().enumerate().all(|(i, c)| c.is_ascii_digit() || (i == 0 && c == b'-')) => NVal::Big(crate::bigint::Big::parse(s).ok_or_else(|| self.err(&want, v))?),
+                    _ => return Err(self.err(&want, v)),
+                },
+                "#Dec" => match v {
+                    Some(Jv::Num(s) | Jv::Str(s)) => match crate::bigint::dec_parse(s) {
+                        Some((m, sc)) => NVal::Dec(m, sc),
+                        None => return Err(self.err(&want, v)),
+                    },
                     _ => return Err(self.err(&want, v)),
                 },
                 "#Bits" => match v {

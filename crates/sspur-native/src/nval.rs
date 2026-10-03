@@ -24,6 +24,8 @@ pub enum NVal {
     Time(i64),
     Dur(i64),
     Bits(i64, Vec<u64>),
+    Big(crate::bigint::Big),
+    Dec(crate::bigint::Big, i64),
 }
 
 #[derive(Clone, Default)]
@@ -65,6 +67,15 @@ impl Layouts {
         match (v, t) {
             (NVal::Unit, _) => out.push(0),
             (NVal::Int(n) | NVal::Time(n) | NVal::Dur(n), _) => out.push(*n),
+            (NVal::Big(b), _) => {
+                out.push(if b.neg { -(b.mag.len() as i64) } else { b.mag.len() as i64 });
+                out.extend(b.mag.iter().map(|x| i64::from(*x)));
+            }
+            (NVal::Dec(b, s), _) => {
+                out.push(if b.neg { -(b.mag.len() as i64) } else { b.mag.len() as i64 });
+                out.extend(b.mag.iter().map(|x| i64::from(*x)));
+                out.push(*s);
+            }
             (NVal::Bits(n, w), _) => {
                 out.push(*n);
                 out.extend(w.iter().map(|x| *x as i64));
@@ -159,6 +170,15 @@ impl Layouts {
                 "Int" => NVal::Int(next()?),
                 "#Time" => NVal::Time(next()?),
                 "#Duration" => NVal::Dur(next()?),
+                "#BigInt" | "#Dec" => {
+                    let cnt = next()?;
+                    let mut mag = Vec::new();
+                    for _ in 0..cnt.unsigned_abs().min(1 << 24) {
+                        mag.push(next()? as u32);
+                    }
+                    let b = crate::bigint::Big { neg: cnt < 0, mag };
+                    if n == "#Dec" { NVal::Dec(b, next()?) } else { NVal::Big(b) }
+                }
                 "#Bits" => {
                     let n = next()?;
                     let mut w = Vec::new();
@@ -343,6 +363,8 @@ impl fmt::Display for NVal {
             NVal::Guess(v, c) => write!(f, "guess({v}, {c})"),
             NVal::Time(t) => write!(f, "{}", crate::chrono::iso(*t)),
             NVal::Dur(d) => write!(f, "{}", crate::chrono::dur_str(*d)),
+            NVal::Big(b) => write!(f, "{b}"),
+            NVal::Dec(m, s) => write!(f, "{}", crate::bigint::dec_str(m, *s)),
             NVal::Bits(n, w) => {
                 let items: Vec<String> = (0..*n).filter(|&i| w[(i / 64) as usize] >> (i % 64) & 1 == 1).map(|i| i.to_string()).collect();
                 write!(f, "bits({n}){{{}}}", items.join(", "))

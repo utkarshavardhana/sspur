@@ -115,7 +115,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("*", "str[A](x: A) -> Str"),
 ];
 
-pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1)];
+pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0)];
 
 pub const STD_GLOBALS: &[&str] = &[
     "empty_set[A]() -> Set[A]",
@@ -157,6 +157,9 @@ pub const STD_GLOBALS: &[&str] = &[
     "rand_exp(seed: Int, rate: F64) -> (F64, Int)",
     "rand_bool(seed: Int, p: F64) -> (Bool, Int)",
     "bits(n: Int) -> Bits",
+    "big(n: Int) -> BigInt",
+    "parse_big(s: Str) -> Opt[BigInt]",
+    "decimal(s: Str) -> Opt[Dec]",
     "hash_map[K, V]() -> HashMap[K, V]",
     "hash_set[A]() -> HashSet[A]",
     "time_ms(ms: Int) -> Time",
@@ -278,6 +281,29 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("#HashSet", "diff[A](s: HashSet[A], t: HashSet[A]) -> HashSet[A]"),
     ("List", "to_hash_set[A](xs: List[A]) -> HashSet[A]"),
     ("List", "to_hash_map[K, V](xs: List[(K, V)]) -> HashMap[K, V]"),
+    ("#BigInt", "add(a: BigInt, b: BigInt) -> BigInt"),
+    ("#BigInt", "sub(a: BigInt, b: BigInt) -> BigInt"),
+    ("#BigInt", "mul(a: BigInt, b: BigInt) -> BigInt"),
+    ("#BigInt", "div(a: BigInt, b: BigInt) -> BigInt"),
+    ("#BigInt", "rem(a: BigInt, b: BigInt) -> BigInt"),
+    ("#BigInt", "divmod(a: BigInt, b: BigInt) -> (BigInt, BigInt)"),
+    ("#BigInt", "pow(a: BigInt, e: Int) -> BigInt"),
+    ("#BigInt", "neg(a: BigInt) -> BigInt"),
+    ("#BigInt", "abs(a: BigInt) -> BigInt"),
+    ("#BigInt", "sign(a: BigInt) -> Int"),
+    ("#BigInt", "to_int(a: BigInt) -> Opt[Int]"),
+    ("#BigInt", "to_f64(a: BigInt) -> F64"),
+    ("#BigInt", "to_dec(a: BigInt) -> Dec"),
+    ("#Dec", "add(a: Dec, b: Dec) -> Dec"),
+    ("#Dec", "sub(a: Dec, b: Dec) -> Dec"),
+    ("#Dec", "mul(a: Dec, b: Dec) -> Dec"),
+    ("#Dec", "div(a: Dec, b: Dec, scale: Int) -> Dec"),
+    ("#Dec", "round(a: Dec, scale: Int) -> Dec"),
+    ("#Dec", "scale(a: Dec) -> Int"),
+    ("#Dec", "neg(a: Dec) -> Dec"),
+    ("#Dec", "abs(a: Dec) -> Dec"),
+    ("#Dec", "sign(a: Dec) -> Int"),
+    ("#Dec", "to_f64(a: Dec) -> F64"),
     ("#Bits", "has(b: Bits, i: Int) -> Bool"),
     ("#Bits", "set(b: Bits, i: Int) -> Bits"),
     ("#Bits", "clear(b: Bits, i: Int) -> Bits"),
@@ -350,7 +376,7 @@ pub const STD_METHODS: &[(&str, &str)] = &[
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "bits", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

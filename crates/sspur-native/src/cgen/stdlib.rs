@@ -2,7 +2,7 @@ use super::*;
 
 const STD_RT: &str = include_str!("std_rt.c");
 
-pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits", "#HashMap", "#HashSet"];
+pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits", "#HashMap", "#HashSet", "#BigInt", "#Dec"];
 
 fn section(key: &str) -> (Vec<&'static str>, &'static str) {
     for part in STD_RT.split("//@ ").skip(1) {
@@ -57,6 +57,8 @@ impl Cx<'_> {
             "#Time" => "TM".into(),
             "#Duration" => "DU".into(),
             "#Bits" => "BI".into(),
+            "#BigInt" => "BG".into(),
+            "#Dec" => "DC".into(),
             "#HashMap" => format!("HM_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
             "#HashSet" => format!("HS_{}", self.mangle(&a[0])?),
             _ => format!("RS_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
@@ -67,6 +69,13 @@ impl Cx<'_> {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         match n.as_str() {
             "#Time" | "#Duration" => Ok("int64_t".into()),
+            "#BigInt" | "#Dec" => {
+                if self.helpers_done.insert("big_type".into()) {
+                    writeln!(self.defs, "typedef struct {{ int64_t n; uint32_t* d; }} SBig;").unwrap();
+                    writeln!(self.defs, "typedef struct {{ SBig m; int64_t s; }} SDec;").unwrap();
+                }
+                Ok(if n == "#Dec" { "SDec" } else { "SBig" }.into())
+            }
             "#HashMap" | "#HashSet" => {
                 if self.helpers_done.insert("hamt_type".into()) {
                     writeln!(self.defs, "typedef struct SsHN SsHN;").unwrap();
@@ -162,6 +171,14 @@ impl Cx<'_> {
             }
             "#StrBuf" => "return cmp_S((Str){a.len, a.data}, (Str){b.len, b.data});".into(),
             "#Time" | "#Duration" => "return cmp_I(a, b);".into(),
+            "#BigInt" => {
+                self.std("big");
+                "return ss_big_cmp(a, b);".into()
+            }
+            "#Dec" => {
+                self.std("dec");
+                "return ss_dec_cmp(a, b);".into()
+            }
             "#HashMap" | "#HashSet" => {
                 let (m, he) = self.hash_parts(t)?;
                 let kc = self.helper_cmp(&a[0])?;
@@ -195,6 +212,8 @@ impl Cx<'_> {
             }
             "#StrBuf" => "buf_push(b, v.len); for (int64_t i = 0; i < v.len; i += 8) { int64_t w = 0; memcpy(&w, v.data + i, (size_t)(v.len - i < 8 ? v.len - i : 8)); buf_push(b, w); }".into(),
             "#Time" | "#Duration" => "buf_push(b, v);".into(),
+            "#BigInt" => "buf_push(b, v.n); for (int64_t k = 0; k < (v.n < 0 ? -v.n : v.n); k++) buf_push(b, (int64_t)v.d[k]);".into(),
+            "#Dec" => "buf_push(b, v.m.n); for (int64_t k = 0; k < (v.m.n < 0 ? -v.m.n : v.m.n); k++) buf_push(b, (int64_t)v.m.d[k]); buf_push(b, v.s);".into(),
             "#HashMap" | "#HashSet" => {
                 let (m, he) = self.hash_parts(t)?;
                 let ek = self.helper_enc(&a[0])?;
@@ -223,6 +242,11 @@ impl Cx<'_> {
                 format!("int64_t n = *(*p)++; {c} h = {{0}}; for (int64_t i = 0; i < n; i++) {{ __auto_type x = {d}(p); h.root = hpush_{hm}(h.root, x); }} return h;")
             }
             "#Time" | "#Duration" => "return *(*p)++;".into(),
+            "#BigInt" | "#Dec" => {
+                self.std("big");
+                let tail = if n == "#Dec" { "SDec o; o.m = v; o.s = *(*p)++; return o;" } else { "return v;" };
+                format!("SBig v; v.n = *(*p)++; int64_t k = v.n < 0 ? -v.n : v.n; v.d = ss_limbs(k); for (int64_t i = 0; i < k; i++) v.d[i] = (uint32_t)*(*p)++; {tail}")
+            }
             "#HashMap" | "#HashSet" => {
                 let (m, he) = self.hash_parts(t)?;
                 let dk = self.helper_dec(&a[0])?;
@@ -269,6 +293,14 @@ impl Cx<'_> {
                 self.std("bits");
                 "(void)q; ss_bits_show(b, v);".into()
             }
+            "#BigInt" => {
+                self.std("big");
+                "(void)q; ss_big_put(b, v);".into()
+            }
+            "#Dec" => {
+                self.std("dec");
+                "(void)q; ss_dec_put(b, v);".into()
+            }
             "#HashMap" | "#HashSet" => {
                 let (m, he) = self.hash_parts(t)?;
                 let sk = self.helper_show(&a[0])?;
@@ -298,6 +330,8 @@ impl Cx<'_> {
             }
             "#StrBuf" => "h = hash_S((Str){v.len, v.data});".into(),
             "#Time" | "#Duration" => "h = hash_I(v);".into(),
+            "#BigInt" => "h = hash_I(v.n); for (int64_t k = 0; k < (v.n < 0 ? -v.n : v.n); k++) h = hmix(h * 31 + v.d[k]);".into(),
+            "#Dec" => "h = hash_I(v.m.n ^ (v.s << 40)); for (int64_t k = 0; k < (v.m.n < 0 ? -v.m.n : v.m.n); k++) h = hmix(h * 31 + v.m.d[k]);".into(),
             "#HashMap" | "#HashSet" => {
                 let (_, he) = self.hash_parts(t)?;
                 let hv = if n == "#HashMap" { format!(" + {}(xs[i]->v)", self.helper_hash(&a[1])?) } else { String::new() };
@@ -455,6 +489,18 @@ impl Cx<'_> {
                 self.std("env");
                 format!("({{ RawL r_ = raw_alloc(ss_argc, sizeof(Str)); for (int64_t i_ = 0; i_ < ss_argc; i_++) ((Str*)r_.data)[i_] = ss_argv[i_]; r_.len = ss_argc; r_.hdr[1] = ss_argc; ({c}){{r_.len, (Str*)r_.data, r_.hdr}}; }})")
             }
+            "big" => {
+                self.std("big");
+                format!("ss_big_from({})", v(0))
+            }
+            "parse_big" => {
+                self.std("big");
+                format!("({{ Str s_ = {}; SBig b_; {c} o_ = {{0}}; if (ss_big_parse(s_, &b_)) {{ o_.some = 1; o_.v = b_; }} o_; }})", v(0))
+            }
+            "decimal" => {
+                self.std("dec");
+                format!("({{ Str s_ = {}; SDec d_; {c} o_; memset(&o_, 0, sizeof o_); if (ss_dec_parse(s_, &d_)) {{ o_.some = 1; o_.v = d_; }} o_; }})", v(0))
+            }
             "bits" => {
                 self.std("bits");
                 format!("ss_bits_new({}, st)", v(0))
@@ -568,6 +614,47 @@ impl Cx<'_> {
                 })
             }
             "#HashMap" | "#HashSet" => self.hash_method(r, rt, name, &vals, t),
+            "#BigInt" => {
+                self.std("big");
+                let bin = |f: &str| format!("({{ SBig a_ = {r}; SBig b_ = {}; {f}; }})", vals.first().cloned().unwrap_or_default());
+                Ok(match name {
+                    "add" => bin("ss_big_add(a_, b_)"),
+                    "sub" => bin("ss_big_sub(a_, b_)"),
+                    "mul" => bin("ss_big_mul(a_, b_, st)"),
+                    "div" => bin("ss_big_div(a_, b_, st)"),
+                    "rem" => bin("ss_big_rem(a_, b_, st)"),
+                    "divmod" => {
+                        let tc = self.cty(t)?;
+                        bin(&format!("{tc} o_; ss_big_divmod(a_, b_, &o_.f0, &o_.f1, st); o_"))
+                    }
+                    "pow" => format!("({{ SBig a_ = {r}; int64_t e_ = {}; ss_big_pow(a_, e_, st); }})", vals[0]),
+                    "neg" => format!("ss_big_neg({r})"),
+                    "abs" => format!("ss_big_abs({r})"),
+                    "sign" => format!("ss_big_sign({r})"),
+                    "to_int" => {
+                        let oc = self.cty(t)?;
+                        format!("({{ int64_t v_; {oc} o_ = {{0}}; if (ss_big_to({r}, &v_)) {{ o_.some = 1; o_.v = v_; }} o_; }})")
+                    }
+                    "to_f64" => format!("ss_big_f64({r})"),
+                    "to_dec" => format!("({{ SDec o_; o_.m = {r}; o_.s = 0; o_; }})"),
+                    _ => return Err(format!("uses BigInt.{name}")),
+                })
+            }
+            "#Dec" => {
+                self.std("dec");
+                Ok(match name {
+                    "add" | "sub" => format!("({{ SDec a_ = {r}; SDec b_ = {}; ss_dec_add(a_, b_, {}); }})", vals[0], i32::from(name == "sub")),
+                    "mul" => format!("({{ SDec a_ = {r}; SDec b_ = {}; ss_dec_mul(a_, b_, st); }})", vals[0]),
+                    "div" => format!("({{ SDec a_ = {r}; SDec b_ = {}; int64_t k_ = {}; ss_dec_div(a_, b_, k_, st); }})", vals[0], vals[1]),
+                    "round" => format!("({{ SDec a_ = {r}; int64_t k_ = {}; ss_dec_round(a_, k_, st); }})", vals[0]),
+                    "scale" => format!("(({r}).s)"),
+                    "neg" => format!("({{ SDec a_ = {r}; a_.m = ss_big_neg(a_.m); a_; }})"),
+                    "abs" => format!("({{ SDec a_ = {r}; a_.m = ss_big_abs(a_.m); a_; }})"),
+                    "sign" => format!("ss_big_sign(({r}).m)"),
+                    "to_f64" => format!("ss_dec_f64({r})"),
+                    _ => return Err(format!("uses Dec.{name}")),
+                })
+            }
             "#Bits" => {
                 self.std("bits");
                 Ok(match name {
@@ -959,6 +1046,14 @@ impl Cx<'_> {
             _ if is(&t, "Str") => "sj_quote(b, v);".to_string(),
             Type::Con(n, _) if n == "#StrBuf" => "sj_quote(b, (Str){v.len, v.data});".to_string(),
             Type::Con(n, _) if n == "#Duration" => "sb_int(b, v);".to_string(),
+            Type::Con(n, _) if n == "#BigInt" => {
+                self.std("big");
+                "ss_big_put(b, v);".to_string()
+            }
+            Type::Con(n, _) if n == "#Dec" => {
+                self.std("dec");
+                "sj_quote(b, ss_dec_str(v));".to_string()
+            }
             Type::Con(n, _) if n == "#Bits" => {
                 self.std("bits");
                 "ss_bits_json(b, v);".to_string()
@@ -1080,6 +1175,14 @@ impl Cx<'_> {
             _ if is(&t, "Str") => format!("if (!v || v->t != SJ_STR) {bad} *out = v->s; return 1;"),
             Type::Con(n, _) if n == "#StrBuf" => format!("if (!v || v->t != SJ_STR) {bad} *out = (SBuf){{v->s.len, (char*)v->s.p, 0}}; return 1;"),
             Type::Con(n, _) if n == "#Duration" => format!("if (!sj_int(v, out)) {bad} return 1;"),
+            Type::Con(n, _) if n == "#BigInt" => {
+                self.std("big");
+                format!("if (!v || v->t != SJ_NUM) {bad} for (int64_t i = 0; i < v->s.len; i++) if (!((v->s.p[i] >= '0' && v->s.p[i] <= '9') || (i == 0 && v->s.p[i] == '-'))) {bad} if (!ss_big_parse(v->s, out)) {bad} return 1;")
+            }
+            Type::Con(n, _) if n == "#Dec" => {
+                self.std("dec");
+                format!("if (!v || (v->t != SJ_NUM && v->t != SJ_STR) || !ss_dec_parse(v->s, out)) {bad} return 1;")
+            }
             Type::Con(n, _) if n == "#Bits" => {
                 self.std("bits");
                 format!("if (!v || v->t != SJ_STR || !ss_bits_unjson(v->s, out)) {bad} return 1;")
@@ -1201,6 +1304,7 @@ mod tests {
             let mut cx = Cx::new(&check, &eligible, &alias, &fields, &smt);
             cx.std_cty(&Type::con("#StrBuf"), "BU").unwrap();
             cx.std_cty(&Type::con("#Bits"), "BI").unwrap();
+            cx.std_cty(&Type::con("#BigInt"), "BG").unwrap();
             cx.std(key);
             let src = format!("{PRELUDE}{}{}", cx.defs, cx.protos);
             let path = std::env::temp_dir().join(format!("sspur_std_rt_{}_{key}.c", std::process::id()));

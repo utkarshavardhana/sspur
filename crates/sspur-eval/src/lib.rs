@@ -4,6 +4,7 @@ mod ffi;
 pub mod fuzz;
 mod sched;
 mod stdlib;
+mod stdbig;
 mod stdtime;
 mod stdx;
 pub mod value;
@@ -1227,6 +1228,8 @@ pub fn to_nval(v: &Value) -> Option<sspur_native::nval::NVal> {
         Value::Time(t) => NVal::Time(*t),
         Value::Dur(d) => NVal::Dur(*d),
         Value::Bits(n, w) => NVal::Bits(*n, (**w).clone()),
+        Value::Big(b) => NVal::Big((**b).clone()),
+        Value::Dec(m, s) => NVal::Dec((**m).clone(), *s),
         _ => return None,
     })
 }
@@ -1262,6 +1265,8 @@ pub fn from_nval(v: sspur_native::nval::NVal) -> Value {
         NVal::Time(t) => Value::Time(t),
         NVal::Dur(d) => Value::Dur(d),
         NVal::Bits(n, w) => Value::Bits(n, Rc::new(w)),
+        NVal::Big(b) => Value::Big(Rc::new(b)),
+        NVal::Dec(m, s) => Value::Dec(Rc::new(m), s),
     }
 }
 

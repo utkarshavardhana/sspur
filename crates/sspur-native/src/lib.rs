@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 pub mod bare;
+pub mod bigint;
 pub mod cgen;
 pub mod chrono;
 pub mod json;

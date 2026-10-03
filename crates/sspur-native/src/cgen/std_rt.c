@@ -817,3 +817,210 @@ static void hm_fill(SsHN* n, char** out, int64_t* c, size_t es) {
     int64_t nk = __builtin_popcount(n->nm); SsHN** k = hn_kids(n, es);
     for (int64_t j = 0; j < nk; j++) hm_fill(k[j], out, c, es);
 }
+//@ big
+#define SS_MAXL ((int64_t)1 << 22)
+static inline int64_t ss_bl(SBig a) { return a.n < 0 ? -a.n : a.n; }
+static uint32_t* ss_limbs(int64_t n) { return (uint32_t*)sspur_alloc_atomic((size_t)(n > 0 ? n : 1) * 4); }
+static SBig ss_big_mk(int neg, uint32_t* d, int64_t len) { while (len > 0 && !d[len - 1]) len--; SBig r; r.n = neg && len ? -len : len; r.d = d; return r; }
+static int ss_mcmp(const uint32_t* a, int64_t na, const uint32_t* b, int64_t nb) { if (na != nb) return na < nb ? -1 : 1; for (int64_t i = na - 1; i >= 0; i--) if (a[i] != b[i]) return a[i] < b[i] ? -1 : 1; return 0; }
+static int64_t ss_madd(const uint32_t* a, int64_t na, const uint32_t* b, int64_t nb, uint32_t* o) {
+    if (na < nb) { const uint32_t* t = a; a = b; b = t; int64_t k = na; na = nb; nb = k; }
+    uint64_t c = 0;
+    for (int64_t i = 0; i < na; i++) { uint64_t t = (uint64_t)a[i] + (i < nb ? b[i] : 0) + c; o[i] = (uint32_t)t; c = t >> 32; }
+    if (c) o[na++] = (uint32_t)c;
+    return na;
+}
+static int64_t ss_msub(const uint32_t* a, int64_t na, const uint32_t* b, int64_t nb, uint32_t* o) {
+    int64_t br = 0;
+    for (int64_t i = 0; i < na; i++) { int64_t t = (int64_t)a[i] - (int64_t)(i < nb ? b[i] : 0) - br; br = 0; if (t < 0) { t += (int64_t)1 << 32; br = 1; } o[i] = (uint32_t)t; }
+    while (na > 0 && !o[na - 1]) na--;
+    return na;
+}
+static int64_t ss_mmul(const uint32_t* a, int64_t na, const uint32_t* b, int64_t nb, uint32_t* o) {
+    if (!na || !nb) return 0;
+    memset(o, 0, (size_t)(na + nb) * 4);
+    for (int64_t i = 0; i < na; i++) {
+        uint64_t c = 0, x = a[i];
+        for (int64_t j = 0; j < nb; j++) { uint64_t t = x * b[j] + o[i + j] + c; o[i + j] = (uint32_t)t; c = t >> 32; }
+        o[i + nb] = (uint32_t)c;
+    }
+    int64_t n = na + nb; while (n > 0 && !o[n - 1]) n--;
+    return n;
+}
+static int64_t ss_mdivs(const uint32_t* a, int64_t na, uint32_t d, uint32_t* q, uint32_t* r) {
+    uint64_t rr = 0;
+    for (int64_t i = na - 1; i >= 0; i--) { uint64_t cur = (rr << 32) | a[i]; q[i] = (uint32_t)(cur / d); rr = cur % d; }
+    *r = (uint32_t)rr; while (na > 0 && !q[na - 1]) na--;
+    return na;
+}
+static void ss_mdivmod(const uint32_t* u, int64_t nu, const uint32_t* v, int64_t nv, uint32_t** q, int64_t* nq, uint32_t** r, int64_t* nr) {
+    if (ss_mcmp(u, nu, v, nv) < 0) { *q = ss_limbs(1); *nq = 0; *r = ss_limbs(nu); memcpy(*r, u, (size_t)nu * 4); *nr = nu; return; }
+    if (nv == 1) { uint32_t rem; *q = ss_limbs(nu); *nq = ss_mdivs(u, nu, v[0], *q, &rem); *r = ss_limbs(1); (*r)[0] = rem; *nr = rem ? 1 : 0; return; }
+    int64_t n = nv, m = nu - nv; int s = __builtin_clz(v[n - 1]);
+    uint32_t* vn = ss_limbs(n); uint32_t* un = ss_limbs(nu + 1); uint32_t* qq = ss_limbs(m + 1);
+    for (int64_t i = n - 1; i > 0; i--) vn[i] = s ? (v[i] << s) | (v[i - 1] >> (32 - s)) : v[i];
+    vn[0] = v[0] << s;
+    un[nu] = s ? u[nu - 1] >> (32 - s) : 0;
+    for (int64_t i = nu - 1; i > 0; i--) un[i] = s ? (u[i] << s) | (u[i - 1] >> (32 - s)) : u[i];
+    un[0] = u[0] << s;
+    uint64_t b = (uint64_t)1 << 32;
+    for (int64_t j = m; j >= 0; j--) {
+        uint64_t num = ((uint64_t)un[j + n] << 32) | un[j + n - 1];
+        uint64_t qhat = num / vn[n - 1], rhat = num - qhat * vn[n - 1];
+        while (qhat >= b || qhat * vn[n - 2] > b * rhat + un[j + n - 2]) { qhat--; rhat += vn[n - 1]; if (rhat >= b) break; }
+        int64_t k = 0, t;
+        for (int64_t i = 0; i < n; i++) { uint64_t p = qhat * vn[i]; t = (int64_t)un[i + j] - k - (int64_t)(p & 0xFFFFFFFFULL); un[i + j] = (uint32_t)t; k = (int64_t)(p >> 32) - (t >> 32); }
+        t = (int64_t)un[j + n] - k; un[j + n] = (uint32_t)t;
+        qq[j] = (uint32_t)qhat;
+        if (t < 0) {
+            qq[j] -= 1; uint64_t c = 0;
+            for (int64_t i = 0; i < n; i++) { uint64_t w = (uint64_t)un[i + j] + vn[i] + c; un[i + j] = (uint32_t)w; c = w >> 32; }
+            un[j + n] += (uint32_t)c;
+        }
+    }
+    uint32_t* rr = ss_limbs(n);
+    for (int64_t i = 0; i < n; i++) rr[i] = s ? (un[i] >> s) | (un[i + 1] << (32 - s)) : un[i];
+    int64_t lq = m + 1; while (lq > 0 && !qq[lq - 1]) lq--;
+    int64_t lr = n; while (lr > 0 && !rr[lr - 1]) lr--;
+    *q = qq; *nq = lq; *r = rr; *nr = lr;
+}
+static SBig ss_big_from(int64_t v) { uint64_t u = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v; uint32_t* d = ss_limbs(2); d[0] = (uint32_t)u; d[1] = (uint32_t)(u >> 32); return ss_big_mk(v < 0, d, 2); }
+static int ss_big_to(SBig a, int64_t* out) {
+    int64_t n = ss_bl(a); if (n > 2) return 0;
+    uint64_t u = (n > 0 ? a.d[0] : 0) | ((uint64_t)(n > 1 ? a.d[1] : 0) << 32);
+    if (a.n < 0) { if (u > ((uint64_t)1 << 63)) return 0; *out = (int64_t)((uint64_t)0 - u); return 1; }
+    if (u > (uint64_t)INT64_MAX) return 0;
+    *out = (int64_t)u; return 1;
+}
+static SBig ss_big_neg(SBig a) { a.n = -a.n; return a; }
+static SBig ss_big_abs(SBig a) { if (a.n < 0) a.n = -a.n; return a; }
+static int64_t ss_big_sign(SBig a) { return a.n > 0 ? 1 : a.n < 0 ? -1 : 0; }
+static SBig ss_big_add(SBig a, SBig b) {
+    int64_t na = ss_bl(a), nb = ss_bl(b); int an = a.n < 0, bn = b.n < 0;
+    uint32_t* o = ss_limbs((na > nb ? na : nb) + 1);
+    if (an == bn) return ss_big_mk(an, o, ss_madd(a.d, na, b.d, nb, o));
+    if (ss_mcmp(a.d, na, b.d, nb) < 0) return ss_big_mk(bn, o, ss_msub(b.d, nb, a.d, na, o));
+    return ss_big_mk(an, o, ss_msub(a.d, na, b.d, nb, o));
+}
+static SBig ss_big_sub(SBig a, SBig b) { return ss_big_add(a, ss_big_neg(b)); }
+static SBig ss_big_mul(SBig a, SBig b, Status* st) {
+    int64_t na = ss_bl(a), nb = ss_bl(b);
+    if (na + nb > SS_MAXL) sspur_trap(st, 15, 0, 0, 0);
+    uint32_t* o = ss_limbs(na + nb);
+    return ss_big_mk((a.n < 0) != (b.n < 0), o, ss_mmul(a.d, na, b.d, nb, o));
+}
+static void ss_big_divmod(SBig a, SBig b, SBig* q, SBig* r, Status* st) {
+    if (!b.n) sspur_trap(st, 2, 0, 0, 0);
+    uint32_t *qd, *rd; int64_t nq, nr;
+    ss_mdivmod(a.d, ss_bl(a), b.d, ss_bl(b), &qd, &nq, &rd, &nr);
+    *q = ss_big_mk((a.n < 0) != (b.n < 0), qd, nq); *r = ss_big_mk(a.n < 0, rd, nr);
+}
+static SBig ss_big_div(SBig a, SBig b, Status* st) { SBig q, r; ss_big_divmod(a, b, &q, &r, st); return q; }
+static SBig ss_big_rem(SBig a, SBig b, Status* st) { SBig q, r; ss_big_divmod(a, b, &q, &r, st); return r; }
+static int ss_big_cmp(SBig a, SBig b) {
+    int an = a.n < 0, bn = b.n < 0;
+    if (an != bn) return an ? -1 : 1;
+    int c = ss_mcmp(a.d, ss_bl(a), b.d, ss_bl(b));
+    return an ? -c : c;
+}
+static SBig ss_big_pow(SBig a, int64_t e, Status* st) {
+    if (e < 0) sspur_trap(st, 6, 0, 0, 0);
+    if (e == 0) return ss_big_from(1);
+    int64_t n = ss_bl(a);
+    if ((n == 1 && a.d[0] == 1) || n == 0) { SBig r = a; if (a.n < 0 && e % 2 == 0) r.n = -r.n; return r; }
+    unsigned __int128 bits = (unsigned __int128)(32 * (n - 1) + (32 - __builtin_clz(a.d[n - 1])));
+    if (bits * (unsigned __int128)e > (unsigned __int128)SS_MAXL * 32) sspur_trap(st, 15, 0, 0, 0);
+    SBig result = ss_big_from(1), base = a; uint64_t k = (uint64_t)e;
+    while (k) { if (k & 1) result = ss_big_mul(result, base, st); k >>= 1; if (k) base = ss_big_mul(base, base, st); }
+    return result;
+}
+static SBig ss_big_pow10(int64_t k) {
+    SBig r = ss_big_from(1);
+    while (k > 0) { int64_t step = k < 9 ? k : 9; uint32_t p = 1; for (int64_t i = 0; i < step; i++) p *= 10; int64_t n = ss_bl(r); uint32_t* o = ss_limbs(n + 1); r = ss_big_mk(0, o, ss_mmul(r.d, n, &p, 1, o)); k -= step; }
+    return r;
+}
+static SBig ss_big_digits(int neg, const char* p, int64_t n) {
+    int64_t cap = n / 9 + 2, len = 0; uint32_t* d = ss_limbs(cap); uint32_t* t = ss_limbs(cap);
+    int64_t first = n % 9, i = 0;
+    while (i < n) {
+        int64_t w = (i == 0 && first) ? first : 9; uint32_t chunk = 0, pw = 1;
+        for (int64_t k = 0; k < w; k++) { chunk = chunk * 10 + (uint32_t)(p[i + k] - '0'); pw *= 10; }
+        int64_t l = ss_mmul(d, len, &pw, 1, t); uint32_t c1 = chunk; len = ss_madd(t, l, &c1, 1, d);
+        i += w;
+    }
+    return ss_big_mk(neg, d, len);
+}
+static int ss_big_parse(Str s, SBig* out) {
+    s = str_trim(s);
+    int neg = 0; int64_t i = 0;
+    if (s.len && (s.p[0] == '-' || s.p[0] == '+')) { neg = s.p[0] == '-'; i = 1; }
+    if (i >= s.len) return 0;
+    for (int64_t k = i; k < s.len; k++) if (s.p[k] < '0' || s.p[k] > '9') return 0;
+    *out = ss_big_digits(neg, s.p + i, s.len - i); return 1;
+}
+static void ss_big_put(SB* b, SBig a) {
+    int64_t n = ss_bl(a);
+    if (!n) { sb_put(b, "0", 1); return; }
+    uint32_t* cur = ss_limbs(n); memcpy(cur, a.d, (size_t)n * 4);
+    uint32_t* parts = ss_limbs(n * 2 + 1); int64_t np = 0;
+    while (n) { uint32_t r; n = ss_mdivs(cur, n, 1000000000u, cur, &r); parts[np++] = r; }
+    if (a.n < 0) sb_put(b, "-", 1);
+    char t[16]; int k = snprintf(t, sizeof t, "%u", parts[np - 1]); sb_put(b, t, k);
+    for (int64_t i = np - 2; i >= 0; i--) { k = snprintf(t, sizeof t, "%09u", parts[i]); sb_put(b, t, k); }
+}
+static Str ss_big_str(SBig a) { SB_INIT(b); ss_big_put(&b, a); return sb_done(&b); }
+static double ss_big_f64(SBig a) { Str s = ss_big_str(a); char* c = (char*)sspur_alloc_atomic((size_t)s.len + 1); memcpy(c, s.p, (size_t)s.len); c[s.len] = 0; return strtod(c, 0); }
+//@ dec big failstr
+static void __attribute__((noreturn)) ss_dec_bad(Status* st) { ss_failstr(st, str_lit("decimal scale must be in 0..=10000", 34)); }
+static SBig ss_dec_scale_up(SBig m, int64_t k) { if (!k) return m; SBig p = ss_big_pow10(k); int64_t na = ss_bl(m), nb = ss_bl(p); uint32_t* o = ss_limbs(na + nb); return ss_big_mk(m.n < 0, o, ss_mmul(m.d, na, p.d, nb, o)); }
+static SBig ss_round_he(int neg, uint32_t* q, int64_t nq, const uint32_t* r, int64_t nr, const uint32_t* d, int64_t nd) {
+    uint32_t* tw = ss_limbs(nr + 1); int64_t nt = ss_madd(r, nr, r, nr, tw);
+    int c = ss_mcmp(tw, nt, d, nd);
+    int up = c > 0 || (c == 0 && nq > 0 && (q[0] & 1));
+    if (up) { uint32_t one = 1; uint32_t* o = ss_limbs(nq + 1); nq = ss_madd(q, nq, &one, 1, o); q = o; }
+    return ss_big_mk(neg, q, nq);
+}
+static SBig ss_rescale(SBig m, int64_t from, int64_t to) {
+    if (to >= from) return ss_dec_scale_up(m, to - from);
+    SBig d = ss_big_pow10(from - to); uint32_t *q, *r; int64_t nq, nr;
+    ss_mdivmod(m.d, ss_bl(m), d.d, ss_bl(d), &q, &nq, &r, &nr);
+    return ss_round_he(m.n < 0, q, nq, r, nr, d.d, ss_bl(d));
+}
+static SDec ss_dec_mk(SBig m, int64_t s) { SDec r; r.m = m; r.s = s; return r; }
+static SDec ss_dec_add(SDec a, SDec b, int sub) { int64_t s = a.s > b.s ? a.s : b.s; SBig x = ss_dec_scale_up(a.m, s - a.s), y = ss_dec_scale_up(b.m, s - b.s); return ss_dec_mk(sub ? ss_big_sub(x, y) : ss_big_add(x, y), s); }
+static SDec ss_dec_mul(SDec a, SDec b, Status* st) { if (a.s + b.s > 10000) ss_dec_bad(st); return ss_dec_mk(ss_big_mul(a.m, b.m, st), a.s + b.s); }
+static SDec ss_dec_div(SDec a, SDec b, int64_t scale, Status* st) {
+    if (scale < 0 || scale > 10000) ss_dec_bad(st);
+    if (!b.m.n) sspur_trap(st, 2, 0, 0, 0);
+    SBig num = ss_dec_scale_up(ss_big_abs(a.m), scale + b.s), den = ss_dec_scale_up(ss_big_abs(b.m), a.s);
+    uint32_t *q, *r; int64_t nq, nr;
+    ss_mdivmod(num.d, ss_bl(num), den.d, ss_bl(den), &q, &nq, &r, &nr);
+    return ss_dec_mk(ss_round_he((a.m.n < 0) != (b.m.n < 0), q, nq, r, nr, den.d, ss_bl(den)), scale);
+}
+static SDec ss_dec_round(SDec a, int64_t scale, Status* st) { if (scale < 0 || scale > 10000) ss_dec_bad(st); return ss_dec_mk(ss_rescale(a.m, a.s, scale), scale); }
+static int ss_dec_cmp(SDec a, SDec b) {
+    int64_t s = a.s > b.s ? a.s : b.s;
+    int c = ss_big_cmp(ss_dec_scale_up(a.m, s - a.s), ss_dec_scale_up(b.m, s - b.s));
+    return c ? c : (a.s > b.s) - (a.s < b.s);
+}
+static void ss_dec_put(SB* b, SDec a) {
+    Str d = ss_big_str(ss_big_abs(a.m));
+    if (a.m.n < 0) sb_put(b, "-", 1);
+    if (!a.s) { sb_put(b, d.p, d.len); return; }
+    if (d.len > a.s) { sb_put(b, d.p, d.len - a.s); sb_put(b, ".", 1); sb_put(b, d.p + d.len - a.s, a.s); return; }
+    sb_put(b, "0.", 2); for (int64_t i = 0; i < a.s - d.len; i++) sb_put(b, "0", 1); sb_put(b, d.p, d.len);
+}
+static Str ss_dec_str(SDec a) { SB_INIT(b); ss_dec_put(&b, a); return sb_done(&b); }
+static int ss_dec_parse(Str s, SDec* out) {
+    s = str_trim(s);
+    int neg = 0; int64_t i = 0;
+    if (s.len && (s.p[0] == '-' || s.p[0] == '+')) { neg = s.p[0] == '-'; i = 1; }
+    int64_t dot = -1;
+    for (int64_t k = i; k < s.len; k++) { if (s.p[k] == '.' && dot < 0) { dot = k; continue; } if (s.p[k] < '0' || s.p[k] > '9') return 0; }
+    int64_t ni = (dot < 0 ? s.len : dot) - i, nf = dot < 0 ? 0 : s.len - dot - 1;
+    if (ni <= 0 || (dot >= 0 && nf == 0) || nf > 10000) return 0;
+    char* buf = (char*)sspur_alloc_atomic((size_t)(ni + nf) + 1);
+    memcpy(buf, s.p + i, (size_t)ni); if (nf) memcpy(buf + ni, s.p + dot + 1, (size_t)nf);
+    *out = ss_dec_mk(ss_big_digits(neg, buf, ni + nf), nf); return 1;
+}
+static double ss_dec_f64(SDec a) { Str s = ss_dec_str(a); char* c = (char*)sspur_alloc_atomic((size_t)s.len + 1); memcpy(c, s.p, (size_t)s.len); c[s.len] = 0; return strtod(c, 0); }

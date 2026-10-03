@@ -271,6 +271,19 @@ impl Interp {
                 Value::Int(n) => Value::Dur(n),
                 _ => return None,
             },
+            "BigInt" | "Dec" if !self.types.contains_key(name) => {
+                let int_ty = Ty::Named { name: "Int".into(), args: vec![], span: Span::default() };
+                let mut x = sspur_native::bigint::Big::from_i64(0);
+                for _ in 0..1 + rng.below(3) {
+                    let Value::Int(k) = self.generate(&int_ty, rng, opts, depth)? else { return None };
+                    x = x.mul(&sspur_native::bigint::Big::from_i64(1 << 32)).ok()?.add(&sspur_native::bigint::Big::from_i64(k));
+                }
+                if name == "Dec" {
+                    Value::Dec(Rc::new(x), rng.below(6) as i64)
+                } else {
+                    Value::Big(Rc::new(x))
+                }
+            }
             "Bits" if !self.types.contains_key(name) => {
                 let n = if rng.chance(10) { 0 } else { rng.below(140) as i64 };
                 let xs: Vec<Value> = (0..n).filter(|_| rng.chance(40)).map(Value::Int).collect();

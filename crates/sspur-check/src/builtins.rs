@@ -140,6 +140,10 @@ pub const STD_GLOBALS: &[&str] = &[
     "sleep_ms(ms: Int) -> Unit ! time",
     "env_var(name: Str) -> Opt[Str] ! env",
     "args() -> List[Str] ! env",
+    "pi() -> F64",
+    "euler() -> F64",
+    "inf() -> F64",
+    "nan() -> F64",
 ];
 
 pub const STD_METHODS: &[(&str, &str)] = &[
@@ -220,10 +224,37 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("Int", "popcount(a: Int) -> Int"),
     ("Int", "clz(a: Int) -> Int"),
     ("Int", "ctz(a: Int) -> Int"),
+    ("Int", "rotl(a: Int, n: Int) -> Int"),
+    ("Int", "rotr(a: Int, n: Int) -> Int"),
+    ("Int", "byteswap(a: Int) -> Int"),
+    ("Int", "saturating_add(a: Int, b: Int) -> Int"),
+    ("Int", "saturating_sub(a: Int, b: Int) -> Int"),
+    ("Int", "saturating_mul(a: Int, b: Int) -> Int"),
+    ("F64", "sinh(x: F64) -> F64"),
+    ("F64", "cosh(x: F64) -> F64"),
+    ("F64", "tanh(x: F64) -> F64"),
+    ("F64", "asinh(x: F64) -> F64"),
+    ("F64", "acosh(x: F64) -> F64"),
+    ("F64", "atanh(x: F64) -> F64"),
+    ("F64", "cbrt(x: F64) -> F64"),
+    ("F64", "exp2(x: F64) -> F64"),
+    ("F64", "expm1(x: F64) -> F64"),
+    ("F64", "log1p(x: F64) -> F64"),
+    ("F64", "erf(x: F64) -> F64"),
+    ("F64", "erfc(x: F64) -> F64"),
+    ("F64", "gamma(x: F64) -> F64"),
+    ("F64", "lgamma(x: F64) -> F64"),
+    ("F64", "fmod(x: F64, y: F64) -> F64"),
+    ("F64", "remainder(x: F64, y: F64) -> F64"),
+    ("F64", "copysign(x: F64, y: F64) -> F64"),
+    ("F64", "nextafter(x: F64, y: F64) -> F64"),
+    ("F64", "fdim(x: F64, y: F64) -> F64"),
+    ("F64", "fma(x: F64, y: F64, z: F64) -> F64"),
+    ("F64", "is_inf(x: F64) -> Bool"),
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

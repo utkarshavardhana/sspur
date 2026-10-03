@@ -303,6 +303,10 @@ impl Interp {
                 }
             }
             "args" => Value::list(sspur_native::program_args().iter().map(|x| Value::str(x)).collect()),
+            "pi" => Value::Float(std::f64::consts::PI),
+            "euler" => Value::Float(std::f64::consts::E),
+            "inf" => Value::Float(f64::INFINITY),
+            "nan" => Value::Float(f64::NAN),
             _ => return trap(format!("unknown builtin '{n}'")),
         })
     }
@@ -555,8 +559,76 @@ pub(crate) fn std_float(name: &str, x: f64, a: Vec<Value>) -> R {
         "trunc" => to_int(x.trunc()),
         "is_nan" => Value::Bool(x.is_nan()),
         "is_finite" => Value::Bool(x.is_finite()),
-        _ => return trap(format!("no method '{name}' on F64")),
+        "is_inf" => Value::Bool(x.is_infinite()),
+        "fma" => match a.get(1) {
+            Some(Value::Float(z)) => Value::Float(unsafe { cm::fma(x, y()?, *z) }),
+            _ => return trap("expected F64"),
+        },
+        _ => match (cm::unary(name), cm::binary(name)) {
+            (Some(f), _) => Value::Float(unsafe { f(x) }),
+            (_, Some(f)) => Value::Float(unsafe { f(x, y()?) }),
+            _ => return trap(format!("no method '{name}' on F64")),
+        },
     })
+}
+
+mod cm {
+    unsafe extern "C" {
+        fn sinh(x: f64) -> f64;
+        fn cosh(x: f64) -> f64;
+        fn tanh(x: f64) -> f64;
+        fn asinh(x: f64) -> f64;
+        fn acosh(x: f64) -> f64;
+        fn atanh(x: f64) -> f64;
+        fn cbrt(x: f64) -> f64;
+        fn exp2(x: f64) -> f64;
+        fn expm1(x: f64) -> f64;
+        fn log1p(x: f64) -> f64;
+        fn erf(x: f64) -> f64;
+        fn erfc(x: f64) -> f64;
+        fn tgamma(x: f64) -> f64;
+        fn lgamma(x: f64) -> f64;
+        fn fmod(x: f64, y: f64) -> f64;
+        fn remainder(x: f64, y: f64) -> f64;
+        fn copysign(x: f64, y: f64) -> f64;
+        fn nextafter(x: f64, y: f64) -> f64;
+        fn fdim(x: f64, y: f64) -> f64;
+        pub fn fma(x: f64, y: f64, z: f64) -> f64;
+    }
+
+    type U = unsafe extern "C" fn(f64) -> f64;
+    type B = unsafe extern "C" fn(f64, f64) -> f64;
+
+    pub fn unary(n: &str) -> Option<U> {
+        Some(match n {
+            "sinh" => sinh,
+            "cosh" => cosh,
+            "tanh" => tanh,
+            "asinh" => asinh,
+            "acosh" => acosh,
+            "atanh" => atanh,
+            "cbrt" => cbrt,
+            "exp2" => exp2,
+            "expm1" => expm1,
+            "log1p" => log1p,
+            "erf" => erf,
+            "erfc" => erfc,
+            "gamma" => tgamma,
+            "lgamma" => lgamma,
+            _ => return None,
+        })
+    }
+
+    pub fn binary(n: &str) -> Option<B> {
+        Some(match n {
+            "fmod" => fmod,
+            "remainder" => remainder,
+            "copysign" => copysign,
+            "nextafter" => nextafter,
+            "fdim" => fdim,
+            _ => return None,
+        })
+    }
 }
 
 fn gcd_u(mut a: u64, mut b: u64) -> u64 {
@@ -599,6 +671,12 @@ pub(crate) fn std_int(name: &str, n: i64, a: Vec<Value>) -> R {
         "popcount" => Value::Int(i64::from(n.count_ones())),
         "clz" => Value::Int(i64::from(n.leading_zeros())),
         "ctz" => Value::Int(i64::from(n.trailing_zeros())),
+        "rotl" => Value::Int((n as u64).rotate_left((b()? & 63) as u32) as i64),
+        "rotr" => Value::Int((n as u64).rotate_right((b()? & 63) as u32) as i64),
+        "byteswap" => Value::Int(n.swap_bytes()),
+        "saturating_add" => Value::Int(n.saturating_add(b()?)),
+        "saturating_sub" => Value::Int(n.saturating_sub(b()?)),
+        "saturating_mul" => Value::Int(n.saturating_mul(b()?)),
         _ => return trap(format!("no method '{name}' on Int")),
     })
 }

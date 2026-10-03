@@ -333,6 +333,10 @@ impl Cx<'_> {
                 self.std("env");
                 format!("({{ RawL r_ = raw_alloc(ss_argc, sizeof(Str)); for (int64_t i_ = 0; i_ < ss_argc; i_++) ((Str*)r_.data)[i_] = ss_argv[i_]; r_.len = ss_argc; r_.hdr[1] = ss_argc; ({c}){{r_.len, (Str*)r_.data, r_.hdr}}; }})")
             }
+            "pi" => "3.141592653589793".into(),
+            "euler" => "2.718281828459045".into(),
+            "inf" => "__builtin_inf()".into(),
+            "nan" => "bitsd(0x7ff8000000000000LL)".into(),
             _ => return Err(format!("uses {n}")),
         }))
     }
@@ -464,6 +468,11 @@ impl Cx<'_> {
             "ceil" | "trunc" => format!("f2i({name}({r}))"),
             "is_nan" => format!("({{ double x_ = {r}; (int64_t)(x_ != x_); }})"),
             "is_finite" => format!("((int64_t)isfinite({r}))"),
+            "is_inf" => format!("((int64_t)isinf({r}))"),
+            "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" | "cbrt" | "exp2" | "expm1" | "log1p" | "erf" | "erfc" | "lgamma" => one(name),
+            "gamma" => one("tgamma"),
+            "fmod" | "remainder" | "copysign" | "nextafter" | "fdim" => format!("({{ double x_ = {r}; double y_ = {}; {name}(x_, y_); }})", vals[0]),
+            "fma" => format!("({{ double x_ = {r}; double y_ = {}; double z_ = {}; fma(x_, y_, z_); }})", vals[0], vals[1]),
             _ => return Err(format!("uses F64.{name}")),
         })
     }
@@ -491,6 +500,12 @@ impl Cx<'_> {
             "bnot" => format!("(~({r}))"),
             "popcount" => format!("((int64_t)__builtin_popcountll((uint64_t)({r})))"),
             "clz" | "ctz" => format!("({{ uint64_t u_ = (uint64_t)({r}); u_ ? (int64_t)__builtin_{name}ll(u_) : 64LL; }})"),
+            "rotl" => two("uint64_t u_ = (uint64_t)a_; int k_ = (int)(b_ & 63); (int64_t)(k_ ? (u_ << k_) | (u_ >> (64 - k_)) : u_);"),
+            "rotr" => two("uint64_t u_ = (uint64_t)a_; int k_ = (int)(b_ & 63); (int64_t)(k_ ? (u_ >> k_) | (u_ << (64 - k_)) : u_);"),
+            "byteswap" => format!("((int64_t)__builtin_bswap64((uint64_t)({r})))"),
+            "saturating_add" => two("int64_t r_; __builtin_add_overflow(a_, b_, &r_) ? (a_ < 0 ? INT64_MIN : INT64_MAX) : r_;"),
+            "saturating_sub" => two("int64_t r_; __builtin_sub_overflow(a_, b_, &r_) ? (a_ < 0 ? INT64_MIN : INT64_MAX) : r_;"),
+            "saturating_mul" => two("int64_t r_; __builtin_mul_overflow(a_, b_, &r_) ? ((a_ < 0) != (b_ < 0) ? INT64_MIN : INT64_MAX) : r_;"),
             _ => return Err(format!("uses Int.{name}")),
         })
     }

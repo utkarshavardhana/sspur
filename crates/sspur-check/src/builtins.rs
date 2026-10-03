@@ -140,6 +140,10 @@ pub const STD_GLOBALS: &[&str] = &[
     "sleep_ms(ms: Int) -> Unit ! time",
     "env_var(name: Str) -> Opt[Str] ! env",
     "args() -> List[Str] ! env",
+    "rand_normal(seed: Int, mean: F64, sd: F64) -> (F64, Int)",
+    "rand_uniform(seed: Int, lo: F64, hi: F64) -> (F64, Int)",
+    "rand_exp(seed: Int, rate: F64) -> (F64, Int)",
+    "rand_bool(seed: Int, p: F64) -> (Bool, Int)",
     "pi() -> F64",
     "euler() -> F64",
     "inf() -> F64",
@@ -164,6 +168,8 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("List", "pop_back[A](xs: List[A]) -> Opt[(A, List[A])]"),
     ("List", "to_set[A](xs: List[A]) -> Set[A]"),
     ("List", "to_heap[A](xs: List[A]) -> Heap[A]"),
+    ("List", "shuffle[A](xs: List[A], seed: Int) -> List[A]"),
+    ("List", "choice[A](xs: List[A], seed: Int) -> Opt[A]"),
     ("Res", "is_err[A, E](r: Res[A, E]) -> Bool"),
     ("Res", "or_[A, E](r: Res[A, E], d: A) -> A"),
     ("Res", "map[A, B, E, e](r: Res[A, E], f: A -> B ! e) -> Res[B, E] ! e"),
@@ -257,7 +263,7 @@ pub const STD_METHODS: &[(&str, &str)] = &[
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

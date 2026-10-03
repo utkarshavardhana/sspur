@@ -449,3 +449,8 @@ static Str ss_format_str(Str s, Str spec, Status* st) {
     if (f.prec >= 0) s = str_take(s, f.prec);
     return ss_fs_pad(&f, "", "", s, 0);
 }
+//@ rng
+static inline uint64_t ss_rng(uint64_t* s) { uint64_t m = *s + 0x9E3779B97F4A7C15ULL; *s = m; m = (m ^ (m >> 30)) * 0xBF58476D1CE4E5B9ULL; m = (m ^ (m >> 27)) * 0x94D049BB133111EBULL; return m ^ (m >> 31); }
+static inline double ss_rng_f64(uint64_t* s) { return (double)(ss_rng(s) >> 11) * (1.0 / 9007199254740992.0); }
+static inline int64_t ss_rng_below(uint64_t* s, int64_t n) { return (int64_t)(((unsigned __int128)ss_rng(s) * (unsigned __int128)(uint64_t)n) >> 64); }
+static double ss_rng_normal(uint64_t* s, double mean, double sd) { double u1 = ss_rng_f64(s); double u2 = ss_rng_f64(s); double r = sqrt(-2.0 * log(1.0 - u1)); double c = cos(6.283185307179586 * u2); double z = r * c; double t = sd * z; return mean + t; }

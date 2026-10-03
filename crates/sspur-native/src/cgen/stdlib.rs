@@ -287,6 +287,16 @@ impl Cx<'_> {
                     }
                 }
             }
+            "rand_normal" | "rand_uniform" | "rand_exp" | "rand_bool" => {
+                self.std("rng");
+                let call = match n {
+                    "rand_normal" => format!("double a_ = {}; double b_ = {}; double v_ = ss_rng_normal(&s_, a_, b_);", v(1), v(2)),
+                    "rand_uniform" => format!("double a_ = {}; double b_ = {}; double u_ = ss_rng_f64(&s_); double w_ = b_ - a_; double t_ = w_ * u_; double v_ = a_ + t_;", v(1), v(2)),
+                    "rand_exp" => format!("double a_ = {}; double v_ = -log(1.0 - ss_rng_f64(&s_)) / a_;", v(1)),
+                    _ => format!("double a_ = {}; int64_t v_ = ss_rng_f64(&s_) < a_;", v(1)),
+                };
+                format!("({{ uint64_t s_ = (uint64_t)({}); {call} ({c}){{v_, (int64_t)s_}}; }})", v(0))
+            }
             "from_bytes" | "from_codes" => {
                 self.std("strx");
                 format!("({{ __auto_type b_ = {}; Str o_; {c} r_ = {{0}}; if (ss_{n}(b_.data, b_.len, &o_)) {{ r_.some = 1; r_.v = o_; }} r_; }})", v(0))
@@ -620,6 +630,17 @@ impl Cx<'_> {
             "to_set" => {
                 let (mm, _, sc) = self.set_parts(t)?;
                 wrap(format!("{sc} s_ = {{0}}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) s_.root = mput_{mm}(s_.root, {l}.data[{i}], 0, sspur_prio()); s_;"))
+            }
+            "shuffle" => {
+                self.std("rng");
+                let seed = self.expr(&args[0])?;
+                wrap(format!("int64_t n_ = {l}.len; RawL r_ = raw_alloc(n_, sizeof({ec})); {ec}* a_ = ({ec}*)r_.data; if (n_) memcpy(a_, {l}.data, (size_t)n_ * sizeof({ec})); r_.hdr[1] = n_; uint64_t s_ = (uint64_t)({seed}); for (int64_t {i} = n_ - 1; {i} > 0; {i}--) {{ int64_t j_ = ss_rng_below(&s_, {i} + 1); {ec} t_ = a_[{i}]; a_[{i}] = a_[j_]; a_[j_] = t_; }} ({lc}){{n_, a_, r_.hdr}};"))
+            }
+            "choice" => {
+                self.std("rng");
+                let seed = self.expr(&args[0])?;
+                let oc = self.cty(t)?;
+                wrap(format!("uint64_t s_ = (uint64_t)({seed}); {oc} o_ = {{0}}; if ({l}.len) {{ o_.some = 1; o_.v = {l}.data[ss_rng_below(&s_, {l}.len)]; }} o_;"))
             }
             "to_heap" => {
                 let (hm, _) = self.heap_helpers(t)?;

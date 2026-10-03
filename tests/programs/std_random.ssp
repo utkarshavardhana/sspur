@@ -1,0 +1,49 @@
+fn normals(seed: Int, n: Int, mean: F64, sd: F64) -> List[F64]
+= (0..n).fold(([], seed), (acc, k) => do
+    (v, s) = rand_normal(acc.1, mean, sd)
+    (acc.0.push(v), s)).0
+
+fn uniforms(seed: Int, n: Int, lo: F64, hi: F64) -> List[F64]
+= (0..n).fold(([], seed), (acc, k) => do
+    (v, s) = rand_uniform(acc.1, lo, hi)
+    (acc.0.push(v), s)).0
+
+fn waits(seed: Int, n: Int, rate: F64) -> List[F64]
+= (0..n).fold(([], seed), (acc, k) => do
+    (v, s) = rand_exp(acc.1, rate)
+    (acc.0.push(v), s)).0
+
+fn coins(seed: Int, n: Int, p: F64) -> Int
+= (0..n).fold((0, seed), (acc, k) => do
+    (v, s) = rand_bool(acc.1, p)
+    (acc.0 + (if v then 1 else 0), s)).0
+
+fn mean(xs: List[F64]) -> F64
+= xs.sum / xs.len.to_f64
+
+fn variance(xs: List[F64]) -> F64
+= do
+  m = mean(xs)
+  xs.map(x => (x - m) * (x - m)).sum / xs.len.to_f64
+
+fn deal(seed: Int) -> List[Int]
+= (1..53).shuffle(seed).take(5)
+
+fn pick(xs: List[Str], seed: Int) -> Opt[Str]
+= xs.choice(seed)
+
+fn shuffled(xs: List[Int], seed: Int) -> List[Int]
+= xs.shuffle(seed)
+
+test normal_moments = do
+  xs = normals(11, 4000, 10.0, 2.0)
+  (mean(xs) - 10.0).abs < 0.1 and (variance(xs).sqrt - 2.0).abs < 0.1
+test uniform_range = do
+  xs = uniforms(3, 2000, -5.0, 5.0)
+  xs.all(x => x >= -5.0 and x < 5.0) and mean(xs).abs < 0.3
+test exp_mean = (mean(waits(9, 4000, 2.0)) - 0.5).abs < 0.03 and waits(9, 100, 2.0).all(_ >= 0.0)
+test coin_rate = (coins(5, 4000, 0.3) - 1200).abs < 100 and coins(5, 50, 0.0) == 0 and coins(5, 50, 1.0) == 50
+test shuffle_perm = deal(42).len == 5 and (1..53).shuffle(42).sort == (1..53) and deal(42) == deal(42) and deal(42) != deal(43)
+test shuffle_small = shuffled([], 1) == [] and shuffled([7], 1) == [7]
+test choices = pick([], 3) == none and pick(["a", "b", "c"], 3).is_some and (0..60).map(s => pick(["a", "b", "c"], s).get).to_set.len == 3
+test pure_seeds = rand_normal(1, 0.0, 1.0) == rand_normal(1, 0.0, 1.0) and rand_normal(1, 0.0, 1.0).1 == rand_f64(rand_f64(1).1).1

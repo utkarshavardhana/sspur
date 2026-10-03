@@ -53,6 +53,29 @@ fn mix(mut z: u64) -> u64 {
     z ^ (z >> 31)
 }
 
+fn rng(s: &mut u64) -> u64 {
+    *s = s.wrapping_add(GOLDEN);
+    mix(*s)
+}
+
+fn rng_f64(s: &mut u64) -> f64 {
+    (rng(s) >> 11) as f64 * (1.0 / 9007199254740992.0)
+}
+
+fn rng_below(s: &mut u64, n: usize) -> usize {
+    ((rng(s) as u128 * n as u128) >> 64) as usize
+}
+
+fn rng_normal(s: &mut u64, mean: f64, sd: f64) -> f64 {
+    let u1 = rng_f64(s);
+    let u2 = rng_f64(s);
+    let r = (-2.0 * (1.0 - u1).ln()).sqrt();
+    let c = (std::f64::consts::TAU * u2).cos();
+    let z = r * c;
+    let t = sd * z;
+    mean + t
+}
+
 pub fn os_reason(e: &std::io::Error) -> String {
     match e.raw_os_error() {
         Some(2) => "not found".into(),
@@ -230,6 +253,32 @@ impl Interp {
                     }
                 };
                 pair(v, Value::Int(z as i64))
+            }
+            "rand_normal" | "rand_uniform" | "rand_exp" | "rand_bool" => {
+                let mut st = int(&a[0])? as u64;
+                let f = |i: usize| match a.get(i) {
+                    Some(Value::Float(x)) => Ok(*x),
+                    _ => trap("expected F64"),
+                };
+                let v = match n {
+                    "rand_normal" => Value::Float(rng_normal(&mut st, f(1)?, f(2)?)),
+                    "rand_uniform" => {
+                        let (lo, hi) = (f(1)?, f(2)?);
+                        let u = rng_f64(&mut st);
+                        let w = hi - lo;
+                        let t = w * u;
+                        Value::Float(lo + t)
+                    }
+                    "rand_exp" => {
+                        let rate = f(1)?;
+                        Value::Float(-(1.0 - rng_f64(&mut st)).ln() / rate)
+                    }
+                    _ => {
+                        let p = f(1)?;
+                        Value::Bool(rng_f64(&mut st) < p)
+                    }
+                };
+                pair(v, Value::Int(st as i64))
             }
             "from_bytes" => {
                 let xs = list(&a[0])?;
@@ -438,6 +487,19 @@ impl Interp {
             "pop_front" => opt(xs.first().map(|x| pair(x.clone(), Value::list(xs[1..].to_vec())))),
             "pop_back" => opt(xs.last().map(|x| pair(x.clone(), Value::list(xs[..xs.len() - 1].to_vec())))),
             "to_set" => Value::Set(Rc::new(xs.iter().cloned().collect())),
+            "shuffle" => {
+                let mut v = (**xs).clone();
+                let mut st = int(&a[0])? as u64;
+                for i in (1..v.len()).rev() {
+                    let j = rng_below(&mut st, i + 1);
+                    v.swap(i, j);
+                }
+                Value::list(v)
+            }
+            "choice" => {
+                let mut st = int(&a[0])? as u64;
+                opt((!xs.is_empty()).then(|| xs[rng_below(&mut st, xs.len())].clone()))
+            }
             "to_heap" => {
                 let mut v = (**xs).clone();
                 v.sort();

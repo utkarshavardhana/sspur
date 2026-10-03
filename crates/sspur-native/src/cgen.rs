@@ -132,7 +132,7 @@ static inline void par_release(void) { __atomic_store_n(&par_busy, 0, __ATOMIC_R
 #include <time.h>
 #define GC_SHIFT 16
 #define GC_PAGE ((size_t)1 << GC_SHIFT)
-#define GC_REGION ((size_t)16 << 30)
+#define GC_REGION ((size_t)8 << 30)
 #define GC_NCLS 35
 static const uint32_t gc_sizes[GC_NCLS] = {16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 1024, 1280, 1536, 2048, 2560, 3072, 4096, 5120, 6144, 8192, 10240, 12288, 16384, 32768};
 typedef struct GcPage { uint8_t kind, atomic, cls, swept; uint32_t obj, nobj, bump, live; size_t head, npages; void* free; uint64_t freebits[64], mark[64]; } GcPage;
@@ -367,7 +367,7 @@ static inline void* sspur_alloc(size_t n) { return gc_alloc(n, 0); }
 static inline void* sspur_alloc_atomic(size_t n) { return gc_alloc(n, 1); }
 typedef struct { int64_t len; void* data; int64_t* hdr; } RawL;
 static RawL raw_alloc_a(int64_t cap, size_t es, int atomic) {
-    if (UNLIKELY(cap > ((int64_t)1 << 32))) sspur_trap((Status*)gc_root_ptr, 15, 0, 0, 0);
+    if (UNLIKELY(cap > (((int64_t)1 << 31) / (int64_t)es))) sspur_trap((Status*)gc_root_ptr, 15, 0, 0, 0);
     if (cap < 4) cap = 4;
     int64_t* h = (int64_t*)gc_alloc(32 + (size_t)cap * es, atomic);
     h[0] = cap; h[1] = 0; h[2] = atomic; h[3] = 0;
@@ -2528,7 +2528,7 @@ impl<'a> Cx<'a> {
             }
             "repeat" => {
                 let n = arg(self, 0)?;
-                format!("({{ Str s_ = {r}; int64_t n_ = {n}; if (UNLIKELY(n_ < 0)) TRAPV({T_REPEAT}, 0, 0); if (UNLIKELY(s_.len && n_ > (((int64_t)1 << 32) / s_.len))) TRAPV(15, 0, 0); str_repeat(s_, n_); }})")
+                format!("({{ Str s_ = {r}; int64_t n_ = {n}; if (UNLIKELY(n_ < 0)) TRAPV({T_REPEAT}, 0, 0); if (UNLIKELY(s_.len && n_ > (((int64_t)1 << 28) / s_.len))) TRAPV(15, 0, 0); str_repeat(s_, n_); }})")
             }
             "is_alpha" => format!("({{ Str s_ = {r}; host_.str_class(1, s_.p, s_.len); }})"),
             "split" | "chars" | "words" => {

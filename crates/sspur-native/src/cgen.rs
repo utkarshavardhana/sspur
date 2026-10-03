@@ -206,7 +206,6 @@ static void gc_new_page(int atomic, int cls) {
 static void* gc_alloc_large(size_t n, int atomic) {
     size_t np = (n + GC_PAGE - 1) >> GC_SHIFT;
     size_t i = gc_take_pages(np);
-    if (gc_reused) memset(gc_lo + (i << GC_SHIFT), 0, np << GC_SHIFT);
     GcPage* m = (GcPage*)calloc(1, sizeof(GcPage));
     m->kind = 2; m->atomic = (uint8_t)atomic; m->npages = np; m->bump = 1;
     gc_meta[i] = m;
@@ -280,6 +279,13 @@ static inline int64_t raw_offset(RawL l, size_t es) { return ((char*)l.data - (c
 static inline __attribute__((always_inline)) RawL raw_reserve(RawL l, int64_t extra, size_t es) {
     if (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0]) return l;
     RawL n = raw_alloc_a((l.len + extra) * 2, es, l.hdr ? (int)l.hdr[2] : 0);
+    if (l.len) memcpy(n.data, l.data, (size_t)l.len * es);
+    n.len = l.len; n.hdr[1] = l.len;
+    return n;
+}
+static RawL raw_reserve_exact(RawL l, int64_t extra, size_t es) {
+    if (extra <= 0 || (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0])) return l;
+    RawL n = raw_alloc_a(l.len + extra, es, l.hdr ? (int)l.hdr[2] : 0);
     if (l.len) memcpy(n.data, l.data, (size_t)l.len * es);
     n.len = l.len; n.hdr[1] = l.len;
     return n;
@@ -388,7 +394,13 @@ static void sb_f64(SB* b, double v) { char t[64]; int64_t n = host_.fmt_f64(v, t
 static void sb_f64d(SB* b, double v) { char t[400]; int64_t n = host_.fmt_f64_display(v, t); sb_put(b, t, n); }
 static void sb_strq(SB* b, Str s) { int64_t cap = s.len * 10 + 8; char* o = (char*)sspur_alloc_atomic((size_t)cap); int64_t n = host_.str_op(3, s.p, s.len, o, cap); sb_put(b, o, n); }
 static inline Str str_lit(const char* p, int64_t n) { return (Str){n, p}; }
-static inline uint64_t hash_S(Str s) { uint64_t h = 1469598103934665603ULL; for (int64_t i = 0; i < s.len; i++) { h ^= (unsigned char)s.p[i]; h *= 1099511628211ULL; } return hmix(h ^ (uint64_t)s.len); }
+static inline uint64_t hash_S(Str s) {
+    uint64_t h = (uint64_t)s.len * 0x9E3779B97F4A7C15ULL; const unsigned char* p = (const unsigned char*)s.p; int64_t n = s.len;
+    while (n >= 8) { uint64_t w; memcpy(&w, p, 8); h = (h ^ w) * 0xbf58476d1ce4e5b9ULL; h ^= h >> 31; p += 8; n -= 8; }
+    uint64_t w = 0; for (int64_t i = 0; i < n; i++) w |= (uint64_t)p[i] << (8 * i);
+    return hmix((h ^ w) * 0x94d049bb133111ebULL);
+}
+static inline int str_eq(Str a, Str b) { return a.len == b.len && (a.p == b.p || memcmp(a.p, b.p, (size_t)a.len) == 0); }
 static inline uint64_t hash_D(double v) { return hmix((uint64_t)dkey(v)); }
 static inline int cmp_S(Str a, Str b) { int64_t n = a.len < b.len ? a.len : b.len; int c = n ? memcmp(a.p, b.p, (size_t)n) : 0; if (c) return c < 0 ? -1 : 1; return cmp_I(a.len, b.len); }
 static Str str_cat(Str a, Str b) { if (!b.len) return a; if (!a.len) return b; char* p = (char*)sspur_alloc_atomic((size_t)(a.len + b.len)); memcpy(p, a.p, (size_t)a.len); memcpy(p + a.len, b.p, (size_t)b.len); return (Str){a.len + b.len, p}; }
@@ -457,19 +469,43 @@ static RawL str_split(Str s, Str sep) {
     Str last = {s.len - i, s.p + i};
     return raw_push(r, &last, sizeof(Str));
 }
+static inline void copy_short(char* w, const char* p, int64_t n) { if (n <= 16) { for (int64_t k = 0; k < n; k++) w[k] = p[k]; } else memcpy(w, p, (size_t)n); }
+static Str str_join(const Str* d, int64_t n, Str sep) {
+    int64_t tot = n > 0 ? (n - 1) * sep.len : 0;
+    for (int64_t i = 0; i < n; i++) tot += d[i].len;
+    char* o = (char*)sspur_alloc_atomic((size_t)tot + 1); char* w = o;
+    if (sep.len == 1) {
+        char c = sep.p[0];
+        for (int64_t i = 0; i < n; i++) { if (i) *w++ = c; copy_short(w, d[i].p, d[i].len); w += d[i].len; }
+    } else {
+        for (int64_t i = 0; i < n; i++) { if (i) { copy_short(w, sep.p, sep.len); w += sep.len; } copy_short(w, d[i].p, d[i].len); w += d[i].len; }
+    }
+    return (Str){tot, o};
+}
 static RawL str_chars(Str s) { RawL r = raw_alloc(s.len, sizeof(Str)); for (int64_t i = 0; i < s.len;) { int64_t j = utf8_next(s, i); Str c = {j - i, s.p + i}; r = raw_push(r, &c, sizeof(Str)); i = j; } return r; }
 static inline int ascii_alnum(unsigned char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+static const uint8_t word_class[256] = {
+    ['0'] = 1, ['1'] = 1, ['2'] = 1, ['3'] = 1, ['4'] = 1, ['5'] = 1, ['6'] = 1, ['7'] = 1, ['8'] = 1, ['9'] = 1,
+    ['a'] = 1, ['b'] = 1, ['c'] = 1, ['d'] = 1, ['e'] = 1, ['f'] = 1, ['g'] = 1, ['h'] = 1, ['i'] = 1, ['j'] = 1, ['k'] = 1, ['l'] = 1, ['m'] = 1,
+    ['n'] = 1, ['o'] = 1, ['p'] = 1, ['q'] = 1, ['r'] = 1, ['s'] = 1, ['t'] = 1, ['u'] = 1, ['v'] = 1, ['w'] = 1, ['x'] = 1, ['y'] = 1, ['z'] = 1,
+    ['A'] = 1, ['B'] = 1, ['C'] = 1, ['D'] = 1, ['E'] = 1, ['F'] = 1, ['G'] = 1, ['H'] = 1, ['I'] = 1, ['J'] = 1, ['K'] = 1, ['L'] = 1, ['M'] = 1,
+    ['N'] = 1, ['O'] = 1, ['P'] = 1, ['Q'] = 1, ['R'] = 1, ['S'] = 1, ['T'] = 1, ['U'] = 1, ['V'] = 1, ['W'] = 1, ['X'] = 1, ['Y'] = 1, ['Z'] = 1,
+    [128 ... 255] = 2,
+};
 static RawL str_words(Str s) {
-    if (str_ascii(s)) {
-        RawL r = raw_alloc(s.len / 4 + 4, sizeof(Str));
-        int64_t i = 0;
+    {
+        int64_t cap = s.len / 2 + 4;
+        RawL r = raw_alloc(cap, sizeof(Str));
+        Str* d = (Str*)r.data; int64_t k = 0, i = 0; int ascii = 1;
+        const unsigned char* p = (const unsigned char*)s.p;
         while (i < s.len) {
-            while (i < s.len && !ascii_alnum((unsigned char)s.p[i])) i++;
+            while (i < s.len && word_class[p[i]] == 0) i++;
             int64_t st = i;
-            while (i < s.len && ascii_alnum((unsigned char)s.p[i])) i++;
-            if (i > st) { Str w = {i - st, s.p + st}; r = raw_push(r, &w, sizeof(Str)); }
+            while (i < s.len && word_class[p[i]] == 1) i++;
+            if (i < s.len && word_class[p[i]] == 2) { ascii = 0; break; }
+            if (i > st) d[k++] = (Str){i - st, s.p + st};
         }
-        return r;
+        if (ascii) { r.len = k; r.hdr[1] = k; return r; }
     }
     int64_t cap = s.len * 2 + 2; int64_t* sp = (int64_t*)sspur_alloc_atomic((size_t)cap * 8);
     int64_t n = host_.str_spans(1, s.p, s.len, sp, cap);
@@ -2501,8 +2537,17 @@ impl<'a> Cx<'a> {
         if self.helpers_done.insert(name.clone()) {
             let c = self.helper_cmp(et)?;
             let h = self.helper_hash(et)?;
+            let same = |a: &str, b: &str| if is(et, "Str") { format!("str_eq({a}, {b})") } else { format!("{c}({a}, {b}) == 0") };
+            let eq = same("d[g - 1].f0", "ELEM");
             writeln!(self.protos, "static {out} {name}({lc} l);").unwrap();
-            writeln!(self.helpers, "static {out} {name}({lc} l) {{ int64_t n = l.len; int64_t cap = 16; while (cap < n * 2) cap *= 2; int64_t* slot = (int64_t*)sspur_alloc((size_t)cap * 8); memset(slot, 0, (size_t)cap * 8); RawL r = raw_alloc(n, sizeof({pc})); {pc}* d = ({pc}*)r.data; int64_t k = 0; for (int64_t i = 0; i < n; i++) {{ uint64_t hv = {h}(l.data[i]); int64_t j = (int64_t)(hv & (uint64_t)(cap - 1)); for (;;) {{ int64_t g = slot[j]; if (!g) {{ slot[j] = k + 1; d[k].f0 = l.data[i]; d[k].f1 = 1; k++; break; }} if ({c}(d[g - 1].f0, l.data[i]) == 0) {{ d[g - 1].f1++; break; }} j = (j + 1) & (cap - 1); }} }} r.hdr[1] = k; return ({out}){{k, d, r.hdr}}; }}").unwrap();
+            let body = format!("uint64_t hv = {h}(ELEM); int64_t j = (int64_t)(hv & (uint64_t)(cap - 1)); for (;;) {{ int64_t g = slot[j]; if (!g) {{ if (k == dcap) {{ RawL nr = raw_alloc(dcap * 2, sizeof({pc})); memcpy(nr.data, d, (size_t)k * sizeof({pc})); r = nr; d = ({pc}*)r.data; dcap *= 2; }} slot[j] = k + 1; d[k].f0 = ELEM; d[k].f1 = 1; k++; if (k * 2 > cap) {{ cap *= 2; slot = (int64_t*)sspur_alloc_atomic((size_t)cap * 8); memset(slot, 0, (size_t)cap * 8); for (int64_t q = 0; q < k; q++) {{ int64_t z = (int64_t)({h}(d[q].f0) & (uint64_t)(cap - 1)); while (slot[z]) z = (z + 1) & (cap - 1); slot[z] = q + 1; }} }} break; }} if ({eq}) {{ d[g - 1].f1++; break; }} j = (j + 1) & (cap - 1); }}").replace("{eq}", &eq);
+            let init = format!("int64_t cap = 16, dcap = 16, k = 0; int64_t* slot = (int64_t*)sspur_alloc_atomic((size_t)cap * 8); memset(slot, 0, (size_t)cap * 8); RawL r = raw_alloc(dcap, sizeof({pc})); {pc}* d = ({pc}*)r.data; ");
+            let fin = format!("r.hdr[1] = k; return ({out}){{k, d, r.hdr}};");
+            writeln!(self.helpers, "static {out} {name}({lc} l) {{ int64_t n = l.len; {init}for (int64_t i = 0; i < n; i++) {{ {} }} {fin} }}", body.replace("ELEM", "l.data[i]")).unwrap();
+            if is(et, "Str") {
+                writeln!(self.protos, "static {out} {name}_w(Str s);").unwrap();
+                writeln!(self.helpers, "static {out} {name}_w(Str s) {{ const unsigned char* p = (const unsigned char*)s.p; for (int64_t q = 0; q < s.len; q++) if (p[q] >= 0x80) {{ RawL wl = str_words(s); return {name}(({lc}){{wl.len, (Str*)wl.data, wl.hdr}}); }} {init}int64_t i = 0; while (i < s.len) {{ while (i < s.len && !word_class[p[i]]) i++; int64_t st = i; while (i < s.len && word_class[p[i]]) i++; if (i == st) continue; Str w_ = {{i - st, s.p + st}}; {} }} {fin} }}", body.replace("ELEM", "w_")).unwrap();
+            }
         }
         Ok(format!("{name}({r})"))
     }
@@ -2579,6 +2624,19 @@ impl<'a> Cx<'a> {
         if let Some(r) = self.fused(e, name, recv, args, t) {
             return r;
         }
+        if name == "counts"
+            && args.is_empty()
+            && let ExprKind::Method { recv: inner, name: wn, args: wa, .. } = &recv.kind
+            && wn == "words"
+            && wa.is_empty()
+            && !self.check.user_methods.contains(&(recv.span.start, recv.span.end))
+            && self.ty(inner).is_ok_and(|t| is(&t, "Str")) {
+                let lt = self.ty(recv)?;
+                let et = elem(&lt, "List").ok_or("bad words type")?;
+                let call = self.counts("X_", &lt, &et, t)?;
+                let sv = self.expr(inner)?;
+                return Ok(call.replace("(X_)", &format!("_w({sv})")));
+            }
         if name == "map"
             && let ExprKind::Range(a, b) = &recv.kind {
                 return self.range_map(a, b, &args[0], t);
@@ -2838,7 +2896,7 @@ impl<'a> Cx<'a> {
             "counts" => self.counts(r, lt, et, t)?,
             "join" if is(et, "Str") => {
                 let sep = self.expr(&args[0])?;
-                wrap(format!("Str sep_ = {sep}; int64_t n_ = {l}.len > 0 ? ({l}.len - 1) * sep_.len : 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) n_ += {l}.data[{i}].len; char* o_ = (char*)sspur_alloc_atomic((size_t)n_ + 1); int64_t w_ = 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ if ({i} && sep_.len) {{ memcpy(o_ + w_, sep_.p, (size_t)sep_.len); w_ += sep_.len; }} if ({l}.data[{i}].len) {{ memcpy(o_ + w_, {l}.data[{i}].p, (size_t){l}.data[{i}].len); w_ += {l}.data[{i}].len; }} }} (Str){{n_, o_}};"))
+                wrap(format!("str_join({l}.data, {l}.len, {sep});"))
             }
             _ => return Err(format!("uses List.{name}")),
         })
@@ -3170,13 +3228,14 @@ impl<'a> Cx<'a> {
                     let (av, bv) = (self.expr(a)?, self.expr(b)?);
                     let (s_, e_) = (self.fresh("fs"), self.fresh("fe"));
                     self.scopes.push(HashMap::new());
+                    let reserve = self.push_reserve(body, &s_, &e_)?;
                     let iv = self.bind(i, Type::int());
                     let m = self.know.facts.len();
                     self.for_range_facts(&iv, a, b);
                     let body = self.expr(body);
                     self.know.facts.truncate(m);
                     self.scopes.pop();
-                    return Ok(format!("{{ int64_t {s_} = {av}; int64_t {e_} = {bv}; for (int64_t {iv} = {s_}; {iv} < {e_}; {iv}++) {{ (void)({}); }} }} ", body?));
+                    return Ok(format!("{{ int64_t {s_} = {av}; int64_t {e_} = {bv}; {reserve}for (int64_t {iv} = {s_}; {iv} < {e_}; {iv}++) {{ (void)({}); }} }} ", body?));
                 }
                 let lt = self.ty(it)?;
                 let et = elem(&lt, "List").ok_or("for loop over a non-list")?;

@@ -9,6 +9,7 @@ pub(super) enum Fact {
     Range(String, Iv),
     Below(String, String),
     LenOf(String, String),
+    ConstLen(String, i128),
 }
 
 #[derive(Default)]
@@ -257,6 +258,9 @@ impl Cx<'_> {
     }
 
     fn len_iv(&self, r: &Expr) -> Iv {
+        if let Some(n) = self.const_len(r) {
+            return (n, n);
+        }
         match self.ty(r) {
             Ok(Type::Con(n, _)) if matches!(n.as_str(), "List" | "Str" | "Map") => (0, LEN_MAX),
             _ => FULL,
@@ -372,6 +376,12 @@ impl Cx<'_> {
     }
 
     pub(super) fn index_safe(&mut self, a: &Expr, i: &Expr) -> bool {
+        if let Some(n) = self.const_len(a) {
+            let r = self.range(i);
+            if r.0 >= 0 && r.1 < n {
+                return true;
+            }
+        }
         let (Some(l), Some(c)) = (self.fixed_var(a), self.fixed_var(i)) else { return false };
         self.var_iv(&c).0 >= 0 && self.below_var(&c, &l)
     }
@@ -382,6 +392,9 @@ impl Cx<'_> {
         }
         if let Some(l) = self.list_of_len(e) {
             self.know.facts.push(Fact::LenOf(c.to_string(), l));
+        }
+        if let ExprKind::List(xs) = &e.kind {
+            self.know.facts.push(Fact::ConstLen(c.to_string(), xs.len() as i128));
         }
         let iv = self.range(e);
         if iv != FULL {
@@ -609,4 +622,14 @@ fn is_increment(e: &Expr, name: &str) -> bool {
     let is_v = |x: &Expr| matches!(&x.kind, ExprKind::Name(n) if n == name);
     let one = |x: &Expr| matches!(x.kind, ExprKind::Int(1));
     matches!(&e.kind, ExprKind::Binary(BinOp::Add, a, b) if (is_v(a) && one(b)) || (one(a) && is_v(b)))
+}
+
+impl Cx<'_> {
+    pub(super) fn const_len(&self, a: &Expr) -> Option<i128> {
+        let c = self.fixed_var(a)?;
+        self.know.facts.iter().rev().find_map(|f| match f {
+            Fact::ConstLen(v, n) if *v == c => Some(*n),
+            _ => None,
+        })
+    }
 }

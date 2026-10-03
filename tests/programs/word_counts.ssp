@@ -1,0 +1,8 @@
+fn f(s: Str) -> List[(Str, Int)] = s.words.counts
+
+test t1 = f("a b a c b a") == [("a", 3), ("b", 2), ("c", 1)]
+test t2 = f("") == []
+test t3 = f("héllo wörld héllo, x-y z") == "héllo wörld héllo, x-y z".words.counts
+test t4 = f("  lead  trail  ") == [("lead", 1), ("trail", 1)]
+test t5 = f("Ab ab AB") == [("Ab", 1), ("ab", 1), ("AB", 1)]
+test t6 = f("x1 x2 x1 9 9 9") == [("x1", 2), ("x2", 1), ("9", 3)]

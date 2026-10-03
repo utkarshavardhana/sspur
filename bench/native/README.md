@@ -8,8 +8,8 @@
 |---|---|---|---|---|---|
 | Compute-heavy: recursion, loops, primes, gcd | `compute_big` | 1.01s | 0.89s | **0.88x** | 1 MB / 4 MB |
 | Records, lists, persistent trees, float simulation | `typical` | 0.75s idiomatic, 0.21s hand-tuned (arena, never frees) | 0.12s | **0.16x** idiomatic, **0.58x** tuned | 90 MB / 83 MB (tuned: 282 MB) |
-| Strings: build 2M words, lowercase, split, count, sort | `strings_big` | 0.10s | 0.08s | **0.80x** | 34 MB / 171 MB |
-| App: generate CSV, parse with errors, aggregate in a map, report | `app` | 0.15s | 0.11s | **0.72x** | 33 MB / 147 MB |
+| Strings: build 2M words, lowercase, split, count, sort | `strings_big` | 0.09s | 0.06s | **0.65x** | 34 MB / 88 MB |
+| App: generate CSV, parse with errors, aggregate in a map, report | `app` | 0.15s | 0.11s | **0.71x** | 33 MB / 134 MB |
 | Long-running loop: 2M iterations, about 700 MB of short-lived garbage | `churn` | | 0.06s | | 265 MB |
 
 SSPUR times include about 10 ms of fixed startup (parse, typecheck, load the cached library). When speed and memory trade off, SSPUR picks speed (ADR 0008).
@@ -50,9 +50,9 @@ Stress mode is `SSPUR_GC_STRESS=<bytes>`, which collects every N bytes. The suit
 | **Pipeline fusion**: `filter`/`map` chains ending in `sum`, `len`, `map`, or `filter`, and `(a..b).map(f)` | One loop, no intermediate lists |
 | **Linearity analysis**: a map built from `empty_map()` and consumed exactly once per step (`fold`, or `var m` with `m := m.put(..)`) is mutated in place | Persistent semantics, with in-place speed when the compiler proves no one else can observe the old version |
 | `Map` is a persistent treap with key-ordered iteration | O(log n) `put`, versus the interpreter's O(n) copy |
-| `counts` uses a hash table consistent with SSPUR equality | O(n), first-seen order preserved |
+| `counts` uses a hash table consistent with SSPUR equality, sized to the distinct keys; `s.words.counts` counts while scanning | O(n), first-seen order preserved, no intermediate word list |
 | ASCII fast paths for case mapping, `words`, and `trim` | Unicode-exact host fallback only for non-ASCII text |
-| Single-allocation `join`, hand-written integer formatting | No `snprintf`, no reallocation chains |
+| Single-allocation `join` with inline short copies; `for` loops that push once per iteration reserve capacity up front; hand-written integer formatting | No `snprintf`, no reallocation chains |
 | Traps `longjmp` from a cold function to the entry; calls to functions that can't `raise` carry no result check; self tail calls are loops | Safety checks stay off the hot path; recursion costs what it does in C |
 | Generic functions monomorphized; closures are a function pointer plus an arena environment | Template-like specialization; no boxing |
 

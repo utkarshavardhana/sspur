@@ -29,6 +29,12 @@ Deep uniqueness is the invariant behind in-place reuse. An owned variable starts
 - A self tail call in a function without `post` becomes a jump to the top of the function. The depth counter still increments on every jump, so the recursion limit traps exactly where it did before. When the function has entry checks, the jump is taken only if the call-site proof (ADR 0007) covers them.
 - Counters updated only by `v := v + 1` from a start below 2^61 are bounded by 2^62. Reaching the overflow would take more than 140 years at one increment per nanosecond, so their increment is unchecked. This is the one place a time bound stands in for a proof.
 
+## Coverage and string paths
+
+- Closures and local functions that capture a `var` share a heap cell, which matches the interpreter's by-reference semantics. A function first compiles without boxing and retries, boxing only the variables a capture actually needs. Local function groups are emitted where their first `fn` appears.
+- `counts` starts with a 16-slot table and grows it; it used to allocate 2x the input length, 32 MB of mostly empty slots for six distinct words. `s.words.counts` scans and counts in one pass (ASCII; otherwise it falls back to `words`). The string hash consumes 8 bytes per step.
+- `let xs = [..]` records the list's length, so constant-table indexing such as `words[(i * 7) % 8]` needs no bounds check.
+
 ## Speed over memory
 
 When speed and memory trade off, speed wins. The collector now waits for max(256 MB, 4x live) of allocation (it was max(64 MB, 2x live)).

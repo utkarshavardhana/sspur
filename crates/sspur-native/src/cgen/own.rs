@@ -332,3 +332,24 @@ impl Cx<'_> {
         }
     }
 }
+
+impl Cx<'_> {
+    pub(super) fn push_reserve(&mut self, body: &Expr, s: &str, e: &str) -> G {
+        let ExprKind::Block(stmts) = &body.kind else { return Ok(String::new()) };
+        let mut out = String::new();
+        let mut seen = HashSet::new();
+        for st in stmts {
+            let Stmt::Assign(v, x, _) = st else { continue };
+            let ExprKind::Method { recv, name, args, .. } = &x.kind else { continue };
+            if name != "push" || args.len() != 1 || !is_name(recv, v) || !seen.insert(v.clone()) {
+                continue;
+            }
+            let Some((var, lt)) = self.lookup(v) else { continue };
+            let Some(et) = elem(&lt, "List") else { continue };
+            let ec = self.decl(&et)?;
+            let lc = self.cty(&lt)?;
+            write!(out, "{{ RawL r_ = raw_reserve_exact(TO_RAW({var}), {e} - {s}, sizeof({ec})); {var} = ({lc}){{r_.len, ({ec}*)r_.data, r_.hdr}}; }} ").unwrap();
+        }
+        Ok(out)
+    }
+}

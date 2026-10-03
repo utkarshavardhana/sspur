@@ -1,0 +1,36 @@
+type Tree = Leaf | Node{left: Tree, value: Int, right: Tree}
+type Q = E | N{l: Tree, k: Int}
+
+fn insert(t: Tree, x: Int) -> Tree
+= match t
+  | Leaf => Node{left: Leaf, value: x, right: Leaf}
+  | Node{left, value, right} => if x < value then Node{left: insert(left, x), value, right} else if x > value then Node{left, value, right: insert(right, x)} else t
+
+fn bump(t: Tree, d: Int) -> Tree
+= match t
+  | Leaf => Leaf
+  | Node{left, value, right} => Node{left: bump(left, d), value: value + d, right: bump(right, d)}
+
+fn total(t: Tree) -> Int
+= match t
+  | Leaf => 0
+  | Node{left, value, right} => (total(left) * 3 + value + total(right) * 7) % 1000003
+
+fn build(n: Int) -> Int
+= do
+  var t = Leaf
+  for i in 0..n
+    if i % 3 == 0 then t := insert(t, (i * 37) % 101) else t := insert(t, (i * 11) % 53)
+    if i % 10 == 0 then t := bump(t, 1)
+  total(t)
+
+fn deep(n: Int) -> Int
+= do
+  var t = Leaf
+  for i in 0..n
+    t := insert(t, i)
+  total(t)
+
+test b1 = build(200) == build(200)
+test b2 = build(300) > 0
+test b3 = deep(500) > 0

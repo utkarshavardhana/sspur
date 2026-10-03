@@ -7,6 +7,8 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod fuse;
+mod own;
 mod prove;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
@@ -42,7 +44,7 @@ static size_t gc_marked_bytes;
 static GcCursor gc_cur[2][GC_NCLS];
 static void* gc_flist[2][GC_NCLS];
 static size_t gc_flist_page[2][GC_NCLS];
-static size_t gc_since, gc_threshold = (size_t)64 << 20, gc_live_bytes, gc_stress;
+static size_t gc_since, gc_threshold = (size_t)256 << 20, gc_live_bytes, gc_stress;
 static char* gc_stack_base; static int gc_depth; static void* gc_root_ptr; static size_t gc_root_len;
 static const uint8_t gc_class_of[(32768 >> 3) + 1] = {0,0,0,1,2,3,4,5,6,7,7,8,8,9,9,10,10,11,11,11,11,12,12,12,12,13,13,13,13,14,14,14,14,15,15,15,15,15,15,15,15,16,16,16,16,16,16,16,16,17,17,17,17,17,17,17,17,18,18,18,18,18,18,18,18,19,19,19,19,19,19,19,19,19,19,19,19,19,19,19,19,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,21,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,22,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,23,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,24,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,25,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,26,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,27,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,28,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,29,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,30,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,31,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,32,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,33,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34,34};
 static int gc_ready, gc_stats;
@@ -185,7 +187,7 @@ static void __attribute__((noinline)) gc_collect(void) {
     }
     gc_active_n = keep;
     gc_since = 0;
-    if (!gc_stress) { gc_threshold = gc_live_bytes * 2; if (gc_threshold < ((size_t)64 << 20)) gc_threshold = (size_t)64 << 20; }
+    if (!gc_stress) { gc_threshold = gc_live_bytes * 4; if (gc_threshold < ((size_t)256 << 20)) gc_threshold = (size_t)256 << 20; }
     gc_collections++;
     if (gc_stats) fprintf(stderr, "sspur gc: collection %lld, live %zu KB, active pages %zu\n", (long long)gc_collections, gc_live_bytes >> 10, gc_active_n);
 }
@@ -362,13 +364,17 @@ typedef struct {
 } HostApi;
 static HostApi host_;
 void sspur_set_host(const HostApi* h) { host_ = *h; }
-typedef struct { char* p; int64_t len, cap; } SB;
+typedef struct { char* p; int64_t len, cap; char buf[112]; } SB;
+#define SB_INIT(b) SB b; b.p = 0; b.len = 0; b.cap = 0
 static void sb_put(SB* b, const char* s, int64_t n) {
     if (n <= 0) return;
-    if (b->len + n > b->cap) { int64_t nc = (b->cap + n) * 2 + 16; char* np = (char*)sspur_alloc_atomic((size_t)nc); if (b->len) memcpy(np, b->p, (size_t)b->len); b->p = np; b->cap = nc; }
+    if (b->len + n > b->cap) {
+        if (!b->p && n <= (int64_t)sizeof(b->buf)) { b->p = b->buf; b->cap = (int64_t)sizeof(b->buf); }
+        else { int64_t nc = (b->cap + n) * 2 + 16; char* np = (char*)sspur_alloc_atomic((size_t)nc); if (b->len) memcpy(np, b->p, (size_t)b->len); b->p = np; b->cap = nc; }
+    }
     memcpy(b->p + b->len, s, (size_t)n); b->len += n;
 }
-static Str sb_done(SB* b) { return (Str){b->len, b->p}; }
+static Str sb_done(SB* b) { if (b->p == b->buf) { char* o = (char*)sspur_alloc_atomic((size_t)b->len); memcpy(o, b->buf, (size_t)b->len); return (Str){b->len, o}; } return (Str){b->len, b->p}; }
 static void sb_int(SB* b, int64_t v) {
     char t[24]; int n = 0; uint64_t u = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
     do { t[23 - n++] = (char)('0' + u % 10); u /= 10; } while (u);
@@ -388,7 +394,17 @@ static int64_t utf8_next(Str s, int64_t i) { i++; while (i < s.len && ((unsigned
 static int64_t utf8_byte_at(Str s, int64_t k) { int64_t i = 0, c = 0; while (i < s.len && c < k) { i = utf8_next(s, i); c++; } return i; }
 static Str str_take(Str s, int64_t n) { if (n < 0) n = 0; return (Str){utf8_byte_at(s, n), s.p}; }
 static Str str_drop(Str s, int64_t n) { if (n < 0) n = 0; int64_t b = utf8_byte_at(s, n); return (Str){s.len - b, s.p + b}; }
-static int64_t str_find(Str h, Str n, int64_t from) { if (n.len == 0) return from; for (int64_t i = from; i + n.len <= h.len; i++) if (memcmp(h.p + i, n.p, (size_t)n.len) == 0) return i; return -1; }
+static int64_t str_find(Str h, Str n, int64_t from) {
+    if (n.len == 0) return from;
+    const char* e = h.p + h.len - n.len + 1;
+    for (const char* p = h.p + from; p < e;) {
+        p = (const char*)memchr(p, n.p[0], (size_t)(e - p));
+        if (!p) return -1;
+        if (memcmp(p, n.p, (size_t)n.len) == 0) return p - h.p;
+        p++;
+    }
+    return -1;
+}
 static int64_t str_starts(Str s, Str p) { return p.len <= s.len && (p.len == 0 || memcmp(s.p, p.p, (size_t)p.len) == 0); }
 static int64_t str_ends(Str s, Str p) { return p.len <= s.len && (p.len == 0 || memcmp(s.p + s.len - p.len, p.p, (size_t)p.len) == 0); }
 static int str_ascii(Str s) { for (int64_t i = 0; i < s.len; i++) if ((unsigned char)s.p[i] >= 0x80) return 0; return 1; }
@@ -424,6 +440,14 @@ static RawL str_split(Str s, Str sep) {
         Str e = {0, s.p}; r = raw_push(r, &e, sizeof(Str));
         for (int64_t i = 0; i < s.len;) { int64_t j = utf8_next(s, i); Str c = {j - i, s.p + i}; r = raw_push(r, &c, sizeof(Str)); i = j; }
         Str e2 = {0, s.p + s.len}; return raw_push(r, &e2, sizeof(Str));
+    }
+    if (sep.len == 1 && s.len > 0) {
+        char c = sep.p[0]; const char* e = s.p + s.len; int64_t n = 1;
+        for (const char* p = s.p; (p = (const char*)memchr(p, c, (size_t)(e - p))); p++) n++;
+        r = raw_alloc(n, sizeof(Str)); Str* d = (Str*)r.data; int64_t k = 0; const char* st = s.p;
+        for (const char* p = s.p; (p = (const char*)memchr(p, c, (size_t)(e - p))); st = ++p) d[k++] = (Str){p - st, st};
+        d[k++] = (Str){e - st, st}; r.len = k; r.hdr[1] = k;
+        return r;
     }
     int64_t i = 0;
     for (;;) { int64_t k = str_find(s, sep, i); if (k < 0) break; Str part = {k - i, s.p + i}; r = raw_push(r, &part, sizeof(Str)); i = k + sep.len; }
@@ -751,6 +775,15 @@ struct Cx<'a> {
     pending_linear: HashSet<String>,
     all_fns: HashMap<String, FnDef>,
     know: Know,
+    owned: HashSet<String>,
+    own_fn: Option<String>,
+    own_spans: own::Spans,
+    reuse_next: Option<String>,
+    call_suffix: Option<String>,
+    fn_has_catch: bool,
+    fn_decls: String,
+    hits: HashSet<String>,
+    hit_ok: bool,
 }
 
 impl<'a> Cx<'a> {
@@ -790,6 +823,15 @@ impl<'a> Cx<'a> {
             pending_linear: HashSet::new(),
             all_fns: HashMap::new(),
             know: Know::default(),
+            owned: HashSet::new(),
+            own_fn: None,
+            own_spans: own::Spans::new(),
+            reuse_next: None,
+            call_suffix: None,
+            fn_has_catch: false,
+            fn_decls: String::new(),
+            hits: HashSet::new(),
+            hit_ok: false,
         }
     }
 
@@ -1377,7 +1419,12 @@ impl<'a> Cx<'a> {
     }
 
     fn record_checks(&mut self, owner: &str, var: &str, access: &str, fields: &[(String, Type)]) -> G {
+        self.record_checks_except(owner, var, access, fields, &HashSet::new())
+    }
+
+    fn record_checks_except(&mut self, owner: &str, var: &str, access: &str, fields: &[(String, Type)], proven: &HashSet<String>) -> G {
         let Some(decl) = self.field_refines.get(owner).cloned() else { return Ok(String::new()) };
+        let decl: Vec<_> = decl.into_iter().filter(|(f, _, _)| !proven.contains(f)).collect();
         let mut s = String::new();
         for (fname, refine, _) in &decl {
             if let Some(r) = refine {
@@ -1420,6 +1467,16 @@ impl<'a> Cx<'a> {
             writeln!(self.protos, "static {rr} {fname_c}({env_pre}{});", sig.join(", ")).unwrap();
         }
         self.know = Know::default();
+        self.fn_has_catch = own::has_catch(&f.body);
+        self.fn_decls.clear();
+        self.hits.clear();
+        self.hit_ok = !mentions_method(&f.body, "remove");
+        if cname.ends_with("__own") {
+            self.own_spans = self.own_plan(&f.name).ok_or("ownership plan vanished")?;
+            self.own_fn = Some(f.name.clone());
+        } else {
+            self.own_fn = None;
+        }
         let split = env.is_none() && self.entry_checks(f);
         let mut s = format!("#define RRT {rr}\n#define FIDX {fidx}\nstatic {rr} {fname_c}({env_pre}{}) {{\n{env_line}", sig.join(", "));
         if split {
@@ -1457,7 +1514,7 @@ impl<'a> Cx<'a> {
             ExprKind::Table(rows) => self.table(f, rows, params, ret)?,
             _ => self.expr(&f.body)?,
         };
-        writeln!(s, "  {rc} ret_;\n  ret_ = {body};\n  goto done_;\ndone_: ;").unwrap();
+        writeln!(s, "  {}{rc} ret_;\n  ret_ = {body};\n  goto done_;\ndone_: ;", self.fn_decls).unwrap();
         if let Some(rt) = &f.ret {
             let c = self.alias_check(rt, &format!("result of {}", f.name), "ret_", ret)?;
             writeln!(s, "  {c}").unwrap();
@@ -1513,6 +1570,17 @@ impl<'a> Cx<'a> {
     fn call_user(&mut self, name: &str, args: Vec<(String, Type)>, ret: Option<&Type>, src: Option<&[Expr]>) -> G {
         let tys: Vec<Type> = args.iter().map(|(_, t)| t.clone()).collect();
         let (cname, rt) = self.resolve_callee(name, &tys, ret)?;
+        let suffix = self.call_suffix.take().or_else(|| (self.own_fn.as_deref() == Some(name)).then(|| "__own".to_string()));
+        let cname = match suffix {
+            Some(sfx) => {
+                let c = format!("{cname}{sfx}");
+                if self.spec_done.insert(c.clone()) {
+                    self.spec_queue.push((name.to_string(), HashMap::new(), c.clone()));
+                }
+                c
+            }
+            None => cname,
+        };
         let cname = if src.is_some_and(|a| self.callee_safe(name, a)) { format!("{cname}__np") } else { cname };
         let rr = self.rr(&rt)?;
         let mut s = String::from("({ ");
@@ -1602,6 +1670,7 @@ impl<'a> Cx<'a> {
         let saved_scopes = std::mem::take(&mut self.scopes);
         let saved_catch = std::mem::take(&mut self.catch_stack);
         let saved_know = std::mem::take(&mut self.know);
+        let saved_hit = std::mem::replace(&mut self.hit_ok, false);
         let mut scope = HashMap::new();
         for (i, (n, _, t)) in captures.iter().enumerate() {
             scope.insert(n.clone(), (format!("e_->c{i}"), t.clone()));
@@ -1614,6 +1683,7 @@ impl<'a> Cx<'a> {
         self.scopes = saved_scopes;
         self.catch_stack = saved_catch;
         self.know = saved_know;
+        self.hit_ok = saved_hit;
         let b = b?;
         writeln!(self.protos, "static {rr} {id}(void* env, {sig}Status* st, int64_t depth);").unwrap();
         writeln!(self.lambdas, "#define RRT {rr}\n#define FIDX {}\nstatic {rr} {id}(void* env, {sig}Status* st, int64_t depth) {{ struct {env}* e_ = (struct {env}*)env; (void)e_; return ({rr}){{{b}, 0}}; }}\n#undef RRT\n#undef FIDX", self.fidx).unwrap();
@@ -1686,7 +1756,7 @@ impl<'a> Cx<'a> {
                 if let [StrPart::Lit(l)] = parts.as_slice() {
                     return Ok(format!("str_lit({}, {})", c_lit(l), l.len()));
                 }
-                let mut s = String::from("({ SB sb_ = {0}; ");
+                let mut s = String::from("({ SB_INIT(sb_); ");
                 for p in parts {
                     match p {
                         StrPart::Lit(l) => write!(s, "sb_put(&sb_, {}, {}); ", c_lit(l), l.len()).unwrap(),
@@ -1863,11 +1933,15 @@ impl<'a> Cx<'a> {
                     let rv = self.fresh("rv");
                     let inits: Vec<String> = decl.iter().map(|(f, _)| format!(".{f} = {}", temps[f])).collect();
                     write!(s, "{rc} {rv} = ({rc}){{{}}}; ", inits.join(", ")).unwrap();
-                    s.push_str(&self.record_checks(&owner, &rv, ".", &decl)?);
+                    let proven = self.proven_fields(&owner, fields);
+                    s.push_str(&self.record_checks_except(&owner, &rv, ".", &decl, &proven)?);
                     write!(s, "{rv}; }})").unwrap();
                     Ok(s)
                 } else {
                     let vals: Vec<(String, &Expr)> = fields.iter().map(|(n, x)| (n.clone(), x)).collect();
+                    if self.own_fn.is_some() && self.own_spans.contains(&(e.span.start, e.span.end)) {
+                        self.reuse_next = Some("a0".into());
+                    }
                     self.variant(&owner, &vals, &t)
                 }
             }
@@ -2046,7 +2120,7 @@ impl<'a> Cx<'a> {
             return Ok(v.to_string());
         }
         let sh = self.helper_show(t)?;
-        Ok(format!("({{ SB sb_ = {{0}}; {sh}(&sb_, {v}, 0); sb_done(&sb_); }})"))
+        Ok(format!("({{ SB_INIT(sb_); {sh}(&sb_, {v}, 0); sb_done(&sb_); }})"))
     }
 
     fn catch_expr(&mut self, e: &Expr, body: &Expr, arms: &[Arm], t: &Type) -> G {
@@ -2242,7 +2316,17 @@ impl<'a> Cx<'a> {
             "get" => {
                 let k = self.expr(&args[0])?;
                 let oc = self.cty(t)?;
-                format!("({{ {head}{node}* f_ = find_{m}({mv}.root, {k}); {oc} o_ = {{0}}; if (f_) {{ o_.some = 1; o_.v = f_->v; }} o_; }})")
+                let save = match self.hit_var(r, &args[0]) {
+                    Some(h) => {
+                        if self.hits.insert(h.clone()) {
+                            let kc = self.cty(&kt)?;
+                            write!(self.fn_decls, "{node}* {h} = 0; {kc} {h}k; ").unwrap();
+                        }
+                        format!("{h} = f_; {h}k = k_; ")
+                    }
+                    None => String::new(),
+                };
+                format!("({{ {head}__auto_type k_ = {k}; {node}* f_ = find_{m}({mv}.root, k_); {save}{oc} o_ = {{0}}; if (f_) {{ o_.some = 1; o_.v = f_->v; }} o_; }})")
             }
             "has" => {
                 let k = self.expr(&args[0])?;
@@ -2250,7 +2334,10 @@ impl<'a> Cx<'a> {
             }
             "put" if self.inplace.contains(r) => {
                 let (k, v) = (self.expr(&args[0])?, self.expr(&args[1])?);
-                format!("({{ __auto_type k_ = {k}; __auto_type v_ = {v}; {r}.root = mput_{m}({r}.root, k_, v_, sspur_prio()); {r}; }})")
+                match self.hit_var(r, &args[0]).filter(|h| self.hits.contains(h)) {
+                    Some(h) => format!("({{ __auto_type k_ = {k}; __auto_type v_ = {v}; if ({h} && memcmp(&{h}k, &k_, sizeof(k_)) == 0) {h}->v = v_; else {r}.root = mput_{m}({r}.root, k_, v_, sspur_prio()); {r}; }})"),
+                    None => format!("({{ __auto_type k_ = {k}; __auto_type v_ = {v}; {r}.root = mput_{m}({r}.root, k_, v_, sspur_prio()); {r}; }})"),
+                }
             }
             "put" => {
                 let (k, v) = (self.expr(&args[0])?, self.expr(&args[1])?);
@@ -2373,6 +2460,7 @@ impl<'a> Cx<'a> {
         let Type::Con(sum, args) = t else { return Err(format!("'{ctor}' is not a native value")) };
         let vs = self.layouts.sum_variants(sum, args).ok_or_else(|| format!("'{ctor}' is not a native value"))?;
         let k = vs.iter().position(|(v, _)| v == ctor).ok_or("unknown constructor")?;
+        let reuse = self.reuse_next.take();
         let sc = self.cty(t)?;
         let base = sc.trim_end_matches('*').to_string();
         let mut s = String::from("({ ");
@@ -2395,7 +2483,12 @@ impl<'a> Cx<'a> {
             return Ok(format!("(&{sing})"));
         }
         let pv = self.fresh("vp");
-        if niche.is_some() {
+        if let Some(r) = reuse {
+            write!(s, "{sc} {pv} = {r}; ").unwrap();
+            if niche.is_none() {
+                write!(s, "{pv}->tag = {k}; ").unwrap();
+            }
+        } else if niche.is_some() {
             write!(s, "{sc} {pv} = ({sc})sspur_alloc(sizeof({base})); ").unwrap();
         } else {
             write!(s, "{sc} {pv} = ({sc})sspur_alloc(sizeof({base})); {pv}->tag = {k}; ").unwrap();
@@ -2419,6 +2512,13 @@ impl<'a> Cx<'a> {
             let src: Vec<Expr> = std::iter::once(recv.clone()).chain(args.iter().cloned()).collect();
             return self.call_user(name, vals, Some(t), Some(&src));
         }
+        if let Some(r) = self.fused(e, name, recv, args, t) {
+            return r;
+        }
+        if name == "map"
+            && let ExprKind::Range(a, b) = &recv.kind {
+                return self.range_map(a, b, &args[0], t);
+            }
         let rt = self.ty(recv)?;
         let r = self.expr(recv)?;
         if name == "str" {
@@ -2823,6 +2923,8 @@ impl<'a> Cx<'a> {
         let saved_name = self.fname.clone();
         let saved_inplace = std::mem::take(&mut self.inplace);
         let saved_know = std::mem::take(&mut self.know);
+        let saved_own = (self.own_fn.take(), std::mem::take(&mut self.own_spans), self.fn_has_catch);
+        let saved_hits = (std::mem::take(&mut self.fn_decls), std::mem::take(&mut self.hits), self.hit_ok);
         let mut out = Ok(());
         for (f, ps, r, _, _, lname) in &infos {
             match self.function_in(f, ps, r, self.fidx, lname, Some((env.clone(), inner_scope.clone()))) {
@@ -2839,6 +2941,8 @@ impl<'a> Cx<'a> {
         self.fname = saved_name;
         self.inplace = saved_inplace;
         self.know = saved_know;
+        (self.own_fn, self.own_spans, self.fn_has_catch) = saved_own;
+        (self.fn_decls, self.hits, self.hit_ok) = saved_hits;
         out?;
         let gv = self.fresh("gv");
         let mut s = format!("struct {env}* {gv} = (struct {env}*)sspur_alloc(sizeof(struct {env})); ");
@@ -2877,6 +2981,12 @@ impl<'a> Cx<'a> {
                 Stmt::Expr(x) => self.expr(x).map(|v| if last { format!("{v}; ") } else { format!("(void)({v}); ") }),
                 other => self.stmt(other).map(|c| if last { format!("{c}0LL; ") } else { c }),
             };
+            if let Stmt::Var(v, init) = st
+                && !self.fn_has_catch
+                && self.owned_var(init, &stmts[i + 1..], v)
+                && let Some((c, _)) = self.lookup(v) {
+                    self.owned.insert(c);
+                }
             if let Stmt::Var(v, _) = st {
                 self.pending_linear.remove(v.as_str());
                 if let (Some(iv), Some((c, _))) = (inv, self.lookup(v)) {
@@ -2928,8 +3038,11 @@ impl<'a> Cx<'a> {
                 Ok(format!("{c} {var} = {v}; "))
             }
             Stmt::Assign(n, e, _) => {
-                let v = self.expr(e)?;
                 let (var, _) = self.lookup(n).ok_or("assigns an unknown variable")?;
+                if self.owned.contains(&var) && self.own_assign(n, e) {
+                    return self.own_update(&var, e);
+                }
+                let v = self.expr(e)?;
                 Ok(format!("{var} = {v}; "))
             }
             Stmt::While(c, body) => {
@@ -3029,6 +3142,17 @@ impl<'a> Cx<'a> {
         write!(s, "{w}; }})").unwrap();
         Ok(s)
     }
+}
+
+fn mentions_method(e: &Expr, m: &str) -> bool {
+    let mut found = false;
+    visit::walk_expr(e, &mut |x| {
+        if matches!(&x.kind, ExprKind::Method { name, .. } if name == m) {
+            found = true;
+        }
+        !found
+    });
+    found
 }
 
 fn mentions(e: &Expr, m: &str) -> bool {

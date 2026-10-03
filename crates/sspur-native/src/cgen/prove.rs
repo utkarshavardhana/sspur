@@ -573,3 +573,31 @@ impl Cx<'_> {
         ok
     }
 }
+
+impl Cx<'_> {
+    pub(super) fn refine_holds(&mut self, r: &Expr, e: &Expr) -> bool {
+        if !self.ty(e).is_ok_and(|t| is(&t, "Int")) {
+            return false;
+        }
+        let iv = self.range(e);
+        if iv == FULL {
+            return false;
+        }
+        let k = self.fresh("rk");
+        let m = self.know.facts.len();
+        self.know.facts.push(Fact::Range(k.clone(), iv));
+        let ok = self.with_underscore(&k, |cx| cx.holds(r));
+        self.know.facts.truncate(m);
+        ok
+    }
+}
+
+impl Cx<'_> {
+    pub(super) fn hit_var(&self, map: &str, key: &Expr) -> Option<String> {
+        if !self.hit_ok || !self.inplace.contains(map) || !map.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return None;
+        }
+        let k = self.fixed_var(key)?;
+        k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_').then(|| format!("hit_{map}_{k}"))
+    }
+}

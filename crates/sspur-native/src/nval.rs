@@ -23,6 +23,7 @@ pub enum NVal {
     Res(Result<Box<NVal>, Box<NVal>>),
     Time(i64),
     Dur(i64),
+    Bits(i64, Vec<u64>),
 }
 
 #[derive(Clone, Default)]
@@ -64,6 +65,10 @@ impl Layouts {
         match (v, t) {
             (NVal::Unit, _) => out.push(0),
             (NVal::Int(n) | NVal::Time(n) | NVal::Dur(n), _) => out.push(*n),
+            (NVal::Bits(n, w), _) => {
+                out.push(*n);
+                out.extend(w.iter().map(|x| *x as i64));
+            }
             (NVal::Bool(b), _) => out.push(i64::from(*b)),
             (NVal::Float(x), _) => out.push(x.to_bits() as i64),
             (NVal::Str(s), _) => {
@@ -154,6 +159,14 @@ impl Layouts {
                 "Int" => NVal::Int(next()?),
                 "#Time" => NVal::Time(next()?),
                 "#Duration" => NVal::Dur(next()?),
+                "#Bits" => {
+                    let n = next()?;
+                    let mut w = Vec::new();
+                    for _ in 0..(n.clamp(0, 1 << 32) + 63) / 64 {
+                        w.push(next()? as u64);
+                    }
+                    NVal::Bits(n, w)
+                }
                 "Bool" => NVal::Bool(next()? != 0),
                 "F64" => NVal::Float(f64::from_bits(next()? as u64)),
                 "#Set" | "#Heap" => {
@@ -330,6 +343,10 @@ impl fmt::Display for NVal {
             NVal::Guess(v, c) => write!(f, "guess({v}, {c})"),
             NVal::Time(t) => write!(f, "{}", crate::chrono::iso(*t)),
             NVal::Dur(d) => write!(f, "{}", crate::chrono::dur_str(*d)),
+            NVal::Bits(n, w) => {
+                let items: Vec<String> = (0..*n).filter(|&i| w[(i / 64) as usize] >> (i % 64) & 1 == 1).map(|i| i.to_string()).collect();
+                write!(f, "bits({n}){{{}}}", items.join(", "))
+            }
             NVal::Opt(None) => write!(f, "none"),
             NVal::Opt(Some(x)) => write!(f, "some({x})"),
             NVal::Tuple(xs) => {

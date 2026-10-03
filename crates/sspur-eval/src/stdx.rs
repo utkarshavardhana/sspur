@@ -181,3 +181,90 @@ pub fn format_str(s: &str, spec: &str) -> R<String> {
     };
     Ok(pad(&f, "", "", &body, false))
 }
+
+fn words(n: i64) -> usize {
+    ((n + 63) / 64) as usize
+}
+
+pub fn bits_new(n: i64) -> R<Value> {
+    if n < 0 {
+        return trap("bits size must be >= 0");
+    }
+    if n > 1 << 32 {
+        return trap("out of memory");
+    }
+    Ok(Value::Bits(n, std::rc::Rc::new(vec![0; words(n)])))
+}
+
+fn bit_index(n: i64, i: i64) -> R<usize> {
+    if i < 0 || i >= n {
+        return trap(format!("bit index {i} out of range for {n} bits"));
+    }
+    Ok(i as usize)
+}
+
+pub fn bits_from(xs: &[Value], n: i64) -> R<Value> {
+    let Value::Bits(_, w) = bits_new(n)? else { unreachable!() };
+    let mut w = (*w).clone();
+    for x in xs {
+        let Value::Int(i) = x else { return trap("expected Int") };
+        let i = bit_index(n, *i)?;
+        w[i / 64] |= 1 << (i % 64);
+    }
+    Ok(Value::Bits(n, std::rc::Rc::new(w)))
+}
+
+pub fn bits_items(n: i64, w: &[u64]) -> Vec<i64> {
+    (0..n).filter(|&i| w[(i / 64) as usize] >> (i % 64) & 1 == 1).collect()
+}
+
+pub fn bits_method(name: &str, n: i64, w: &std::rc::Rc<Vec<u64>>, a: &[Value]) -> R<Value> {
+    let idx = || match a.first() {
+        Some(Value::Int(i)) => bit_index(n, *i),
+        _ => trap("expected Int"),
+    };
+    let other = || match a.first() {
+        Some(Value::Bits(m, v)) if *m == n => Ok(v.clone()),
+        Some(Value::Bits(m, _)) => trap(format!("bit sets differ in size ({n} and {m})")),
+        _ => trap("expected Bits"),
+    };
+    let make = |v: Vec<u64>| Value::Bits(n, std::rc::Rc::new(v));
+    Ok(match name {
+        "has" => {
+            let i = idx()?;
+            Value::Bool(w[i / 64] >> (i % 64) & 1 == 1)
+        }
+        "set" | "clear" | "flip" => {
+            let i = idx()?;
+            let mut v = (**w).clone();
+            let m = 1u64 << (i % 64);
+            match name {
+                "set" => v[i / 64] |= m,
+                "clear" => v[i / 64] &= !m,
+                _ => v[i / 64] ^= m,
+            }
+            make(v)
+        }
+        "len" => Value::Int(n),
+        "count" => Value::Int(w.iter().map(|x| i64::from(x.count_ones())).sum()),
+        "union" | "inter" | "diff" | "xor" => {
+            let o = other()?;
+            make(w.iter().zip(o.iter()).map(|(x, y)| match name {
+                "union" => x | y,
+                "inter" => x & y,
+                "diff" => x & !y,
+                _ => x ^ y,
+            }).collect())
+        }
+        "flip_all" => {
+            let mut v: Vec<u64> = w.iter().map(|x| !x).collect();
+            if n % 64 != 0 {
+                let last = v.len() - 1;
+                v[last] &= (1u64 << (n % 64)) - 1;
+            }
+            make(v)
+        }
+        "items" => Value::list(bits_items(n, w).into_iter().map(Value::Int).collect()),
+        _ => return trap(format!("no method '{name}' on Bits")),
+    })
+}

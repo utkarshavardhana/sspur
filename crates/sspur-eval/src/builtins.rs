@@ -95,6 +95,7 @@ impl Interp {
             Value::Heap(h) => self.heap_method(name, &h, a),
             Value::Time(t) => crate::stdtime::time_method(name, t, &a),
             Value::Dur(d) => crate::stdtime::dur_method(name, d, &a),
+            Value::Bits(n, w) => crate::stdx::bits_method(name, n, &w, &a),
             Value::Atomic(c) => Ok(match name {
                 "load" => Value::Int(c.v.get()),
                 "store" => {

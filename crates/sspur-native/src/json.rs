@@ -49,6 +49,13 @@ pub fn encode(l: &Layouts, v: &NVal, t: &Type, out: &mut String) -> Option<()> {
         (NVal::Unit, _) => out.push_str("null"),
         (NVal::Int(n) | NVal::Dur(n), _) => write!(out, "{n}").unwrap(),
         (NVal::Time(t), _) => quote(&crate::chrono::iso(*t), out),
+        (NVal::Bits(n, w), _) => {
+            out.push('"');
+            for i in (0..*n).rev() {
+                out.push(if w[(i / 64) as usize] >> (i % 64) & 1 == 1 { '1' } else { '0' });
+            }
+            out.push('"');
+        }
         (NVal::Bool(b), _) => out.push_str(if *b { "true" } else { "false" }),
         (NVal::Float(x), _) => {
             if x.is_finite() {
@@ -396,6 +403,18 @@ impl D<'_> {
                 },
                 "#Duration" => match self.dec(v, &Type::int()).map_err(|_| self.err(&want, v))? {
                     NVal::Int(n) => NVal::Dur(n),
+                    _ => return Err(self.err(&want, v)),
+                },
+                "#Bits" => match v {
+                    Some(Jv::Str(s)) if s.len() <= 1 << 20 && s.bytes().all(|c| c == b'0' || c == b'1') => {
+                        let mut w = vec![0u64; s.len().div_ceil(64)];
+                        for (k, c) in s.bytes().rev().enumerate() {
+                            if c == b'1' {
+                                w[k / 64] |= 1 << (k % 64);
+                            }
+                        }
+                        NVal::Bits(s.len() as i64, w)
+                    }
                     _ => return Err(self.err(&want, v)),
                 },
                 "#Time" => match v {

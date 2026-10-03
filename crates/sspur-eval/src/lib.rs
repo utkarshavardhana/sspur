@@ -1226,6 +1226,7 @@ pub fn to_nval(v: &Value) -> Option<sspur_native::nval::NVal> {
         }),
         Value::Time(t) => NVal::Time(*t),
         Value::Dur(d) => NVal::Dur(*d),
+        Value::Bits(n, w) => NVal::Bits(*n, (**w).clone()),
         _ => return None,
     })
 }
@@ -1260,6 +1261,7 @@ pub fn from_nval(v: sspur_native::nval::NVal) -> Value {
         }),
         NVal::Time(t) => Value::Time(t),
         NVal::Dur(d) => Value::Dur(d),
+        NVal::Bits(n, w) => Value::Bits(n, Rc::new(w)),
     }
 }
 

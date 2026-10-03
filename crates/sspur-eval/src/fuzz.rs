@@ -271,6 +271,11 @@ impl Interp {
                 Value::Int(n) => Value::Dur(n),
                 _ => return None,
             },
+            "Bits" if !self.types.contains_key(name) => {
+                let n = if rng.chance(10) { 0 } else { rng.below(140) as i64 };
+                let xs: Vec<Value> = (0..n).filter(|_| rng.chance(40)).map(Value::Int).collect();
+                crate::stdx::bits_from(&xs, n).ok()?
+            }
             "StrBuf" if !self.types.contains_key(name) => return self.generate(&Ty::Named { name: "Str".into(), args: vec![], span: Span::default() }, rng, opts, depth),
             _ => return self.gen_user(name, args, rng, opts, depth),
         })

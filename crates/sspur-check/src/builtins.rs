@@ -115,7 +115,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("*", "str[A](x: A) -> Str"),
 ];
 
-pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0)];
+pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0)];
 
 pub const STD_GLOBALS: &[&str] = &[
     "empty_set[A]() -> Set[A]",
@@ -156,6 +156,7 @@ pub const STD_GLOBALS: &[&str] = &[
     "rand_uniform(seed: Int, lo: F64, hi: F64) -> (F64, Int)",
     "rand_exp(seed: Int, rate: F64) -> (F64, Int)",
     "rand_bool(seed: Int, p: F64) -> (Bool, Int)",
+    "bits(n: Int) -> Bits",
     "time_ms(ms: Int) -> Time",
     "date(y: Int, m: Int, d: Int) -> Opt[Time]",
     "datetime(y: Int, mo: Int, d: Int, h: Int, mi: Int, s: Int) -> Opt[Time]",
@@ -255,6 +256,19 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("Int", "format(n: Int, spec: Str) -> Str"),
     ("F64", "format(x: F64, spec: Str) -> Str"),
     ("Str", "format(s: Str, spec: Str) -> Str"),
+    ("#Bits", "has(b: Bits, i: Int) -> Bool"),
+    ("#Bits", "set(b: Bits, i: Int) -> Bits"),
+    ("#Bits", "clear(b: Bits, i: Int) -> Bits"),
+    ("#Bits", "flip(b: Bits, i: Int) -> Bits"),
+    ("#Bits", "len(b: Bits) -> Int"),
+    ("#Bits", "count(b: Bits) -> Int"),
+    ("#Bits", "union(b: Bits, c: Bits) -> Bits"),
+    ("#Bits", "inter(b: Bits, c: Bits) -> Bits"),
+    ("#Bits", "diff(b: Bits, c: Bits) -> Bits"),
+    ("#Bits", "xor(b: Bits, c: Bits) -> Bits"),
+    ("#Bits", "flip_all(b: Bits) -> Bits"),
+    ("#Bits", "items(b: Bits) -> List[Int]"),
+    ("List", "to_bits(xs: List[Int], n: Int) -> Bits"),
     ("#Time", "unix_ms(t: Time) -> Int"),
     ("#Time", "year(t: Time) -> Int"),
     ("#Time", "month(t: Time) -> Int"),
@@ -314,7 +328,7 @@ pub const STD_METHODS: &[(&str, &str)] = &[
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "bits", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

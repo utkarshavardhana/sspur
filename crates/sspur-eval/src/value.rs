@@ -36,6 +36,7 @@ pub enum Value {
     Chan(Rc<ChanCell>),
     Time(i64),
     Dur(i64),
+    Bits(i64, Rc<Vec<u64>>),
 }
 
 pub struct AtomCell {
@@ -110,6 +111,7 @@ impl Value {
             Value::Heap(_) => 20,
             Value::Time(_) => 21,
             Value::Dur(_) => 22,
+            Value::Bits(..) => 23,
         }
     }
 
@@ -167,6 +169,7 @@ impl Ord for Value {
             (Atomic(a), Atomic(b)) => a.id.cmp(&b.id),
             (Chan(a), Chan(b)) => a.id.cmp(&b.id),
             (Time(a), Time(b)) | (Dur(a), Dur(b)) => a.cmp(b),
+            (Bits(n, a), Bits(m, b)) => n.cmp(m).then_with(|| a.cmp(b)),
             _ => self.rank().cmp(&other.rank()),
         }
     }
@@ -280,6 +283,10 @@ impl fmt::Display for Value {
             Value::Chan(_) => write!(f, "<chan>"),
             Value::Time(t) => write!(f, "{}", sspur_native::chrono::iso(*t)),
             Value::Dur(d) => write!(f, "{}", sspur_native::chrono::dur_str(*d)),
+            Value::Bits(n, w) => {
+                let items: Vec<String> = crate::stdx::bits_items(*n, w).iter().map(|i| i.to_string()).collect();
+                write!(f, "bits({n}){{{}}}", items.join(", "))
+            }
         }
     }
 }

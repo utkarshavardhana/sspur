@@ -460,6 +460,7 @@ impl Interp {
             "euler" => Value::Float(std::f64::consts::E),
             "inf" => Value::Float(f64::INFINITY),
             "nan" => Value::Float(f64::NAN),
+            "bits" => crate::stdx::bits_new(int(&a[0])?)?,
             "time_ms" | "date" | "datetime" | "parse_time" | "now" | "millis" | "secs" | "mins" | "hours" | "days" => crate::stdtime::global(n, &a)?,
             _ => return trap(format!("unknown builtin '{n}'")),
         })
@@ -592,6 +593,7 @@ impl Interp {
             "pop_front" => opt(xs.first().map(|x| pair(x.clone(), Value::list(xs[1..].to_vec())))),
             "pop_back" => opt(xs.last().map(|x| pair(x.clone(), Value::list(xs[..xs.len() - 1].to_vec())))),
             "to_set" => Value::Set(Rc::new(xs.iter().cloned().collect())),
+            "to_bits" => crate::stdx::bits_from(xs, int(&a[0])?)?,
             "shuffle" => {
                 let mut v = (**xs).clone();
                 let mut st = int(&a[0])? as u64;

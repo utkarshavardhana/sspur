@@ -666,3 +666,36 @@ static int64_t ss_add_months(int64_t t, int64_t n, Status* st) {
     if (__builtin_mul_overflow(ss_dfc(ny, nm, nd), SS_DAY, &v) || __builtin_add_overflow(v, ss_tod(t), &v)) sspur_trap(st, 1, 0, 0, 0);
     return v;
 }
+//@ bits fail failstr
+static int64_t ss_bw(int64_t n) { return (n + 63) / 64; }
+static uint64_t* ss_bw_alloc(int64_t n) { int64_t k = ss_bw(n); uint64_t* w = (uint64_t*)sspur_alloc_atomic((size_t)(k ? k : 1) * 8); memset(w, 0, (size_t)(k ? k : 1) * 8); return w; }
+static SBits ss_bits_new(int64_t n, Status* st) { if (n < 0) ss_fail(st, "bits size must be >= 0"); if (n > ((int64_t)1 << 32)) sspur_trap(st, 15, 0, 0, 0); SBits b; b.n = n; b.w = ss_bw_alloc(n); return b; }
+static void __attribute__((noreturn)) ss_bits_bad(int64_t n, int64_t i, Status* st) { SB_INIT(b); sb_put(&b, "bit index ", 10); sb_int(&b, i); sb_put(&b, " out of range for ", 18); sb_int(&b, n); sb_put(&b, " bits", 5); ss_failstr(st, sb_done(&b)); }
+static SBits ss_bits_copy(SBits a) { SBits b = a; int64_t k = ss_bw(a.n); b.w = ss_bw_alloc(a.n); if (k) memcpy(b.w, a.w, (size_t)k * 8); return b; }
+static int64_t ss_bits_has(SBits a, int64_t i, Status* st) { if (i < 0 || i >= a.n) ss_bits_bad(a.n, i, st); return (int64_t)((a.w[i >> 6] >> (i & 63)) & 1); }
+static SBits ss_bits_mod(SBits a, int64_t i, int op, Status* st) {
+    if (i < 0 || i >= a.n) ss_bits_bad(a.n, i, st);
+    SBits b = ss_bits_copy(a); uint64_t m = 1ULL << (i & 63);
+    if (op == 0) b.w[i >> 6] |= m; else if (op == 1) b.w[i >> 6] &= ~m; else b.w[i >> 6] ^= m;
+    return b;
+}
+static int64_t ss_bits_count(SBits a) { int64_t c = 0; for (int64_t k = 0; k < ss_bw(a.n); k++) c += __builtin_popcountll(a.w[k]); return c; }
+static SBits ss_bits_bin(SBits a, SBits o, int op, Status* st) {
+    if (a.n != o.n) { SB_INIT(e); sb_put(&e, "bit sets differ in size (", 25); sb_int(&e, a.n); sb_put(&e, " and ", 5); sb_int(&e, o.n); sb_put(&e, ")", 1); ss_failstr(st, sb_done(&e)); }
+    SBits b = ss_bits_copy(a);
+    for (int64_t k = 0; k < ss_bw(a.n); k++) { uint64_t y = o.w[k]; b.w[k] = op == 0 ? b.w[k] | y : op == 1 ? b.w[k] & y : op == 2 ? b.w[k] & ~y : b.w[k] ^ y; }
+    return b;
+}
+static SBits ss_bits_not(SBits a) { SBits b = ss_bits_copy(a); int64_t k = ss_bw(a.n); for (int64_t i = 0; i < k; i++) b.w[i] = ~b.w[i]; if (a.n % 64) b.w[k - 1] &= (1ULL << (a.n % 64)) - 1; return b; }
+static RawL ss_bits_items(SBits a) { int64_t n = ss_bits_count(a); RawL r = raw_alloc_a(n, 8, 1); int64_t* d = (int64_t*)r.data; int64_t c = 0; for (int64_t k = 0; k < ss_bw(a.n); k++) { uint64_t x = a.w[k]; while (x) { d[c++] = k * 64 + __builtin_ctzll(x); x &= x - 1; } } r.len = c; r.hdr[1] = c; return r; }
+static SBits ss_bits_from(const int64_t* d, int64_t len, int64_t n, Status* st) { SBits b = ss_bits_new(n, st); for (int64_t i = 0; i < len; i++) { int64_t x = d[i]; if (x < 0 || x >= n) ss_bits_bad(n, x, st); b.w[x >> 6] |= 1ULL << (x & 63); } return b; }
+static int ss_bits_cmp(SBits a, SBits b) { if (a.n != b.n) return a.n < b.n ? -1 : 1; for (int64_t k = 0; k < ss_bw(a.n); k++) if (a.w[k] != b.w[k]) return a.w[k] < b.w[k] ? -1 : 1; return 0; }
+static void ss_bits_show(SB* b, SBits a) { sb_put(b, "bits(", 5); sb_int(b, a.n); sb_put(b, "){", 2); int first = 1; for (int64_t k = 0; k < ss_bw(a.n); k++) { uint64_t x = a.w[k]; while (x) { if (!first) sb_put(b, ", ", 2); sb_int(b, k * 64 + __builtin_ctzll(x)); first = 0; x &= x - 1; } } sb_put(b, "}", 1); }
+static void ss_bits_json(SB* b, SBits a) { sb_put(b, "\"", 1); for (int64_t i = a.n - 1; i >= 0; i--) sb_put(b, (a.w[i >> 6] >> (i & 63)) & 1 ? "1" : "0", 1); sb_put(b, "\"", 1); }
+static int ss_bits_unjson(Str s, SBits* out) {
+    if (s.len > ((int64_t)1 << 20)) return 0;
+    for (int64_t i = 0; i < s.len; i++) if (s.p[i] != '0' && s.p[i] != '1') return 0;
+    SBits b; b.n = s.len; b.w = ss_bw_alloc(s.len);
+    for (int64_t k = 0; k < s.len; k++) if (s.p[s.len - 1 - k] == '1') b.w[k >> 6] |= 1ULL << (k & 63);
+    *out = b; return 1;
+}

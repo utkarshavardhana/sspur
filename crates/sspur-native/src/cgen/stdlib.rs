@@ -2,7 +2,7 @@ use super::*;
 
 const STD_RT: &str = include_str!("std_rt.c");
 
-pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration"];
+pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits"];
 
 fn section(key: &str) -> (Vec<&'static str>, &'static str) {
     for part in STD_RT.split("//@ ").skip(1) {
@@ -56,6 +56,7 @@ impl Cx<'_> {
             "#StrBuf" => "BU".into(),
             "#Time" => "TM".into(),
             "#Duration" => "DU".into(),
+            "#Bits" => "BI".into(),
             _ => format!("RS_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
         })
     }
@@ -64,6 +65,12 @@ impl Cx<'_> {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         match n.as_str() {
             "#Time" | "#Duration" => Ok("int64_t".into()),
+            "#Bits" => {
+                if self.helpers_done.insert("bits_type".into()) {
+                    writeln!(self.defs, "typedef struct {{ int64_t n; uint64_t* w; }} SBits;").unwrap();
+                }
+                Ok("SBits".into())
+            }
             "#Set" => self.cty(&set_map(&a[0])),
             "#StrBuf" => {
                 if self.helpers_done.insert("sbuf_type".into()) {
@@ -143,6 +150,10 @@ impl Cx<'_> {
             }
             "#StrBuf" => "return cmp_S((Str){a.len, a.data}, (Str){b.len, b.data});".into(),
             "#Time" | "#Duration" => "return cmp_I(a, b);".into(),
+            "#Bits" => {
+                self.std("bits");
+                "return ss_bits_cmp(a, b);".into()
+            }
             _ => {
                 let (ca, ce) = (self.helper_cmp(&a[0])?, self.helper_cmp(&a[1])?);
                 format!("if (a.ok != b.ok) return a.ok ? -1 : 1; return a.ok ? {ca}(a.v, b.v) : {ce}(a.e, b.e);")
@@ -166,6 +177,7 @@ impl Cx<'_> {
             }
             "#StrBuf" => "buf_push(b, v.len); for (int64_t i = 0; i < v.len; i += 8) { int64_t w = 0; memcpy(&w, v.data + i, (size_t)(v.len - i < 8 ? v.len - i : 8)); buf_push(b, w); }".into(),
             "#Time" | "#Duration" => "buf_push(b, v);".into(),
+            "#Bits" => "buf_push(b, v.n); for (int64_t k = 0; k < (v.n + 63) / 64; k++) buf_push(b, (int64_t)v.w[k]);".into(),
             _ => {
                 let (ea, ee) = (self.helper_enc(&a[0])?, self.helper_enc(&a[1])?);
                 format!("buf_push(b, v.ok); if (v.ok) {ea}(b, v.v); else {ee}(b, v.e);")
@@ -187,6 +199,10 @@ impl Cx<'_> {
                 format!("int64_t n = *(*p)++; {c} h = {{0}}; for (int64_t i = 0; i < n; i++) {{ __auto_type x = {d}(p); h.root = hpush_{hm}(h.root, x); }} return h;")
             }
             "#Time" | "#Duration" => "return *(*p)++;".into(),
+            "#Bits" => {
+                self.std("bits");
+                "SBits v; v.n = *(*p)++; v.w = ss_bw_alloc(v.n); for (int64_t k = 0; k < (v.n + 63) / 64; k++) v.w[k] = (uint64_t)*(*p)++; return v;".into()
+            }
             "#StrBuf" => "int64_t n = *(*p)++; char* s = (char*)sspur_alloc_atomic((size_t)n + 1); for (int64_t i = 0; i < n; i += 8) { int64_t w = *(*p)++; memcpy(s + i, &w, (size_t)(n - i < 8 ? n - i : 8)); } return (SBuf){n, s, 0};".into(),
             _ => {
                 let (da, de) = (self.helper_dec(&a[0])?, self.helper_dec(&a[1])?);
@@ -218,6 +234,10 @@ impl Cx<'_> {
                 self.std("chrono");
                 "(void)q; ss_dur_put(b, v);".into()
             }
+            "#Bits" => {
+                self.std("bits");
+                "(void)q; ss_bits_show(b, v);".into()
+            }
             _ => {
                 let (sa, se) = (self.helper_show(&a[0])?, self.helper_show(&a[1])?);
                 format!("if (v.ok) {{ sb_put(b, \"ok(\", 3); {sa}(b, v.v, 1); }} else {{ sb_put(b, \"err(\", 4); {se}(b, v.e, 1); }} sb_put(b, \")\", 1);")
@@ -241,6 +261,7 @@ impl Cx<'_> {
             }
             "#StrBuf" => "h = hash_S((Str){v.len, v.data});".into(),
             "#Time" | "#Duration" => "h = hash_I(v);".into(),
+            "#Bits" => "h = hash_I(v.n); for (int64_t k = 0; k < (v.n + 63) / 64; k++) h = hmix(h * 31 + v.w[k]);".into(),
             _ => {
                 let (ha, he) = (self.helper_hash(&a[0])?, self.helper_hash(&a[1])?);
                 format!("h = v.ok ? hmix(5 + {ha}(v.v)) : hmix(9 + {he}(v.e));")
@@ -392,6 +413,10 @@ impl Cx<'_> {
                 self.std("env");
                 format!("({{ RawL r_ = raw_alloc(ss_argc, sizeof(Str)); for (int64_t i_ = 0; i_ < ss_argc; i_++) ((Str*)r_.data)[i_] = ss_argv[i_]; r_.len = ss_argc; r_.hdr[1] = ss_argc; ({c}){{r_.len, (Str*)r_.data, r_.hdr}}; }})")
             }
+            "bits" => {
+                self.std("bits");
+                format!("ss_bits_new({}, st)", v(0))
+            }
             "time_ms" => format!("((int64_t)({}))", v(0)),
             "date" | "datetime" => {
                 self.std("chrono");
@@ -498,6 +523,22 @@ impl Cx<'_> {
                     "add_months" => format!("({{ int64_t t_ = {r}; int64_t n_ = {}; ss_add_months(t_, n_, st); }})", vals[0]),
                     "add_years" => format!("({{ int64_t t_ = {r}; int64_t n_ = {}; int64_t m_; if (UNLIKELY(__builtin_mul_overflow(n_, (int64_t)12, &m_))) TRAPV({T_OVERFLOW}, 0, 0); ss_add_months(t_, m_, st); }})", vals[0]),
                     _ => return Err(format!("uses Time.{name}")),
+                })
+            }
+            "#Bits" => {
+                self.std("bits");
+                Ok(match name {
+                    "has" => format!("({{ SBits b_ = {r}; int64_t i_ = {}; ss_bits_has(b_, i_, st); }})", vals[0]),
+                    "set" | "clear" | "flip" => format!("({{ SBits b_ = {r}; int64_t i_ = {}; ss_bits_mod(b_, i_, {}, st); }})", vals[0], ["set", "clear", "flip"].iter().position(|x| *x == name).unwrap()),
+                    "len" => format!("(({r}).n)"),
+                    "count" => format!("ss_bits_count({r})"),
+                    "union" | "inter" | "diff" | "xor" => format!("({{ SBits b_ = {r}; SBits o_ = {}; ss_bits_bin(b_, o_, {}, st); }})", vals[0], ["union", "inter", "diff", "xor"].iter().position(|x| *x == name).unwrap()),
+                    "flip_all" => format!("ss_bits_not({r})"),
+                    "items" => {
+                        let lc = self.cty(t)?;
+                        format!("({{ RawL r_ = ss_bits_items({r}); ({lc}){{r_.len, (int64_t*)r_.data, r_.hdr}}; }})")
+                    }
+                    _ => return Err(format!("uses Bits.{name}")),
                 })
             }
             "#Duration" => Ok(match name {
@@ -734,6 +775,11 @@ impl Cx<'_> {
                 let (mm, _, sc) = self.set_parts(t)?;
                 wrap(format!("{sc} s_ = {{0}}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) s_.root = mput_{mm}(s_.root, {l}.data[{i}], 0, sspur_prio()); s_;"))
             }
+            "to_bits" => {
+                self.std("bits");
+                let n = self.expr(&args[0])?;
+                wrap(format!("int64_t n_ = {n}; ss_bits_from({l}.data, {l}.len, n_, st);"))
+            }
             "shuffle" => {
                 self.std("rng");
                 let seed = self.expr(&args[0])?;
@@ -798,6 +844,10 @@ impl Cx<'_> {
             _ if is(&t, "Str") => "sj_quote(b, v);".to_string(),
             Type::Con(n, _) if n == "#StrBuf" => "sj_quote(b, (Str){v.len, v.data});".to_string(),
             Type::Con(n, _) if n == "#Duration" => "sb_int(b, v);".to_string(),
+            Type::Con(n, _) if n == "#Bits" => {
+                self.std("bits");
+                "ss_bits_json(b, v);".to_string()
+            }
             Type::Con(n, _) if n == "#Time" => {
                 self.std("chrono");
                 "sj_quote(b, ss_iso(v));".to_string()
@@ -901,6 +951,10 @@ impl Cx<'_> {
             _ if is(&t, "Str") => format!("if (!v || v->t != SJ_STR) {bad} *out = v->s; return 1;"),
             Type::Con(n, _) if n == "#StrBuf" => format!("if (!v || v->t != SJ_STR) {bad} *out = (SBuf){{v->s.len, (char*)v->s.p, 0}}; return 1;"),
             Type::Con(n, _) if n == "#Duration" => format!("if (!sj_int(v, out)) {bad} return 1;"),
+            Type::Con(n, _) if n == "#Bits" => {
+                self.std("bits");
+                format!("if (!v || v->t != SJ_STR || !ss_bits_unjson(v->s, out)) {bad} return 1;")
+            }
             Type::Con(n, _) if n == "#Time" => {
                 self.std("chrono");
                 format!("if (!v || v->t != SJ_STR || !ss_parse_time(v->s, out)) {bad} return 1;")
@@ -1000,6 +1054,7 @@ mod tests {
             let smt = sspur_smt::Oracle::new(&m, &check);
             let mut cx = Cx::new(&check, &eligible, &alias, &fields, &smt);
             cx.std_cty(&Type::con("#StrBuf"), "BU").unwrap();
+            cx.std_cty(&Type::con("#Bits"), "BI").unwrap();
             cx.std(key);
             let src = format!("{PRELUDE}{}{}", cx.defs, cx.protos);
             let path = std::env::temp_dir().join(format!("sspur_std_rt_{}_{key}.c", std::process::id()));

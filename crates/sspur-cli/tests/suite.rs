@@ -215,6 +215,7 @@ test t_closed = closed() == ()
     }
     std::fs::remove_file(&path).ok();
     assert_eq!(outputs[0], outputs[1]);
+}
 
 #[test]
 fn vectorized_pipelines_trap_exactly_like_the_interpreter() {

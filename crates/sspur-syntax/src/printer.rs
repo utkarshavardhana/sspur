@@ -309,6 +309,13 @@ pub fn expr(e: &Expr, ind: usize) -> String {
     }
 }
 
+fn iter_expr(e: &Expr, ind: usize) -> String {
+    match e.kind {
+        ExprKind::Block(_) => expr(e, ind + 2),
+        _ => expr(e, ind),
+    }
+}
+
 fn arms_head(e: &Expr, ind: usize) -> String {
     match e.kind {
         ExprKind::Match(..) | ExprKind::Catch(..) | ExprKind::Handle(..) => format!("do\n{}{}", pad(ind + 2), expr(e, ind + 2)),
@@ -359,13 +366,13 @@ fn stmt(s: &Stmt, ind: usize) -> String {
         Stmt::Expr(e) => expr(e, ind),
         Stmt::For(p, it, body) => match &body.kind {
             ExprKind::Block(stmts) => {
-                let mut s = format!("for {} in {}", pat(p), expr(it, ind));
+                let mut s = format!("for {} in {}", pat(p), iter_expr(it, ind));
                 for st in stmts {
                     s.push_str(&format!("\n{}{}", pad(ind + 2), stmt(st, ind + 2)));
                 }
                 s
             }
-            _ => format!("for {} in {}\n{}{}", pat(p), expr(it, ind), pad(ind + 2), branch(body, ind + 2)),
+            _ => format!("for {} in {}\n{}{}", pat(p), iter_expr(it, ind), pad(ind + 2), branch(body, ind + 2)),
         },
         Stmt::While(c, body) => match &body.kind {
             ExprKind::Block(stmts) => {

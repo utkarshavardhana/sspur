@@ -40,6 +40,7 @@ pub struct CheckOutput {
     pub newtypes: HashMap<String, Type>,
     pub local_fn_types: HashMap<(u32, u32), (Vec<Type>, Type)>,
     pub gen_loops: HashSet<(u32, u32)>,
+    pub clause_effects: HashMap<(u32, u32), BTreeSet<String>>,
 }
 
 pub type ExprKey = (u32, u32, u8);
@@ -155,6 +156,7 @@ struct Checker {
     op_effect: HashMap<String, String>,
     ueff_atoms: HashMap<String, (String, Vec<Type>)>,
     gen_loops: HashSet<(u32, u32)>,
+    clause_effects: HashMap<(u32, u32), BTreeSet<String>>,
     clause_depth: u32,
 }
 
@@ -231,6 +233,7 @@ pub fn check(m: &Module) -> CheckOutput {
         op_effect: HashMap::new(),
         ueff_atoms: HashMap::new(),
         gen_loops: HashSet::new(),
+        clause_effects: HashMap::new(),
         clause_depth: 0,
     };
     c.load_builtins();
@@ -281,7 +284,7 @@ pub fn check(m: &Module) -> CheckOutput {
             fix: vec![],
         });
     }
-    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops }
+    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects }
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -1590,6 +1593,15 @@ impl Checker {
         self.resolve(&bt)
     }
 
+    fn close_clause(&mut self, span: Span) {
+        let frame = self.frames.pop().unwrap();
+        let frame = self.norm_frame(frame);
+        self.clause_effects.insert((span.start, span.end), frame.keys().cloned().collect());
+        for (a, (s, t)) in frame {
+            self.add_effect(a, s, t);
+        }
+    }
+
     fn instances(&self, frame: &Frame, eff: &str) -> Vec<String> {
         frame.keys().filter(|k| self.ueff_atoms.get(*k).is_some_and(|(n, _)| n == eff)).cloned().collect()
     }
@@ -1694,8 +1706,10 @@ impl Checker {
             let rt = self.resolve(&ret);
             self.bind("resume", Type::Fn(vec![rt], Box::new(out.clone()), Row::default()), false);
             let or = self.resolve(&out);
+            self.frames.push(Frame::new());
             let t = self.infer(arm_body, Some(&or));
             self.expect(&out, &t, arm_body.span);
+            self.close_clause(arm_body.span);
             self.scopes.pop();
             let mut bad = Vec::new();
             resume_tail(arm_body, &mut bad);
@@ -2101,8 +2115,10 @@ impl Checker {
                 self.scopes.push(HashMap::new());
                 let et = self.resolve(&elem);
                 self.check_pat(p, &et);
+                self.frames.push(Frame::new());
                 let bt = self.infer(body, Some(&Type::unit()));
                 self.expect(&Type::unit(), &bt, body.span);
+                self.close_clause(body.span);
                 self.scopes.pop();
                 Type::unit()
             }

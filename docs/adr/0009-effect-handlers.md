@@ -60,9 +60,16 @@ The interpreter keeps a stack of handler frames. Performing an operation finds t
 
 ## Native tier
 
-Functions that perform a declared effect or `yield`, contain `handle`, or iterate a generator fall back to the interpreter, reported as `performs 'yield[Int]'`, `uses handle expressions`, or `iterates a generator`. Their callers fall back too (`calls 'f', which is not native`). Native code never performs a user operation, so control effects never cross the native boundary. While a `log` handler is active, the interpreter calls no native code, because native `log` writes straight to the host. Programs without these features compile exactly as before.
+Before generating C, the release tier lowers handlers by evidence passing (`crates/sspur-native/src/cgen/lower.rs`):
+
+- A function that performs declared effects gets an internal native copy that takes one closure per operation: `f__ev(args, ev__op)`, with a fresh effect row variable for each closure, so the arms' own effects (`log`, `div`) flow to the caller.
+- A tail-resumptive `handle` (every arm ends in `resume`, runs nothing after it, and cannot raise) becomes direct code. An operation performed lexically inside the body expands the arm inline; a call passes the arm as a closure.
+- A generator loop passes its body as the `yield` closure, so `for v in walk(t)` compiles to a recursive call with a loop-body closure.
+- The lowered module is printed, re-parsed, compared with the lowered AST, and re-checked. A function that fails any step keeps its original body and falls back, and so do its callers.
+
+These stay in the interpreter, with the reason shown by `sspur native --release`: arms that can finish without resuming, code after `resume`, arms that may raise, `log` handlers, `return` inside a generator loop, and lambdas or function-typed parameters that carry declared effects. The interpreter-visible entry point of an effect-performing function is still interpreted (`performs 'yield[Int]'`), because the interpreter's dynamic handler stack has to see its operations; its native copy is used only by native callers. Native code never performs an operation the interpreter has to handle, so control effects never cross the native boundary. While a `log` handler is active, the interpreter calls no native code, because native `log` writes straight to the host. Programs without effects compile exactly as before.
 
 ## Next
 
-- Native handlers: pass handlers as closures (evidence passing) for tail-resumptive arms, and compile aborting arms as a private `raise` caught by the `handle`.
+- Native aborting arms (a private `raise` caught by the `handle`) and native code after `resume`.
 - First-class handler values (`with h in e`), multi-shot continuations, and effect-generic arguments for `fail[E]` in function types.

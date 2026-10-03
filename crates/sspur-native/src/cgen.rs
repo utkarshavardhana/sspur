@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 mod fuse;
+mod lower;
 mod own;
 mod prove;
 use prove::{fits, raw_op, Iv, Know, FULL};
@@ -548,7 +549,20 @@ static OptS_ str_last(Str s) {
 "#;
 
 pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Compiled, String> {
-    let (src, plan) = generate(m, check)?;
+    let lowered = lower::lower(m, check);
+    let (m, check) = match &lowered {
+        Some((lm, lc, _)) => (lm, lc),
+        None => (m, check),
+    };
+    let (src, mut plan) = generate(m, check)?;
+    plan.skipped.retain(|n, _| lower::original_name(n) == n);
+    if let Some((_, _, why)) = &lowered {
+        for (n, reason) in plan.skipped.iter_mut() {
+            if let Some(w) = why.get(n).filter(|_| reason.starts_with("performs '") || reason == "uses handle expressions" || reason == "iterates a generator") {
+                *reason = w.clone();
+            }
+        }
+    }
     let lib = build(&src, opt)?;
     let library = unsafe { libloading::Library::new(&lib) }.map_err(|e| format!("cannot load {}: {e}", lib.display()))?;
     let mut scalar = HashMap::new();
@@ -565,13 +579,25 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
     }
     let free: libloading::Symbol<unsafe extern "C" fn(*mut i64)> = unsafe { library.get(b"sspur_buf_free") }.map_err(|e| e.to_string())?;
     let free = *free;
-    let defs: Vec<FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f.clone()) } else { None }).collect();
+    let defs: Vec<FnDef> = m
+        .defs
+        .iter()
+        .filter_map(|d| match d {
+            Def::Fn(f) => Some(FnDef { name: lower::original_name(&f.name).to_string(), ..f.clone() }),
+            _ => None,
+        })
+        .collect();
     let set_host: libloading::Symbol<unsafe extern "C" fn(*const crate::HostApi)> = unsafe { library.get(b"sspur_set_host") }.map_err(|e| e.to_string())?;
     unsafe { set_host(&crate::HOST) };
     Ok(assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines, free, plan.err_types))
 }
 
 pub fn c_source(m: &Module, check: &CheckOutput) -> String {
+    let lowered = lower::lower(m, check);
+    let (m, check) = match &lowered {
+        Some((lm, lc, _)) => (lm, lc),
+        None => (m, check),
+    };
     match generate(m, check) {
         Ok((src, _)) => src,
         Err(e) => format!("/* {e} */\n"),
@@ -1720,6 +1746,7 @@ impl<'a> Cx<'a> {
             match &x.kind {
                 ExprKind::Name(n) => names.push(n.clone()),
                 ExprKind::Placeholder => names.push("_".into()),
+                ExprKind::Block(stmts) => names.extend(stmts.iter().filter_map(|s| if let Stmt::Assign(n, _, _) = s { Some(n.clone()) } else { None })),
                 _ => {}
             }
             true

@@ -435,6 +435,7 @@ fn kind_name(k: &ExprKind) -> &'static str {
         ExprKind::Str(_) => "string",
         ExprKind::Match(..) => "match",
         ExprKind::Catch(..) => "catch",
+        ExprKind::Handle(..) => "handle",
         ExprKind::Lambda { .. } => "lambda",
         ExprKind::List(_) => "list",
         ExprKind::Record { .. } => "record",

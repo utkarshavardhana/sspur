@@ -150,6 +150,7 @@ impl Interp {
             Err(Ctrl::Trap(m)) if is_input_error(&m) => Outcome::Discard,
             Err(Ctrl::Trap(m)) => Outcome::Fail(m),
             Err(Ctrl::Return(_)) => Outcome::Pass,
+            Err(c) => Outcome::Fail(crate::describe(c)),
         }
     }
 
@@ -322,6 +323,7 @@ fn describe_result(r: crate::R) -> String {
         Err(Ctrl::Raise(v)) => format!("raise {}", crate::value::Quoted(&v)),
         Err(Ctrl::Trap(m)) => format!("trap {m}"),
         Err(Ctrl::Return(v)) => format!("ok {}", crate::value::Quoted(&v)),
+        Err(c) => format!("trap {}", crate::describe(c)),
     }
 }
 

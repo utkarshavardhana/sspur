@@ -1,0 +1,113 @@
+type Order = {sku: Str, qty: Int}
+type StockErr = OutOfStock{sku: Str}
+
+effect config(key: Str) -> Int
+
+effect inventory
+  stock(sku: Str) -> Int
+  reserve(sku: Str, qty: Int)
+
+effect audit(msg: Str)
+
+fn place(o: Order) -> Int ! inventory, audit, fail[StockErr]
+= do
+  have = stock(o.sku)
+  if have < o.qty then raise OutOfStock{sku: o.sku}
+  reserve(o.sku, o.qty)
+  audit("reserved {o.qty} {o.sku}")
+  have - o.qty
+
+fn place_all(os: List[Order]) -> Int ! inventory, audit, fail[StockErr]
+= os.fold(0, (acc, o) => acc + place(o))
+
+fn in_memory(os: List[Order], start: Int) -> (Int, Int, List[Str]) ! fail[StockErr]
+= do
+  var level = start
+  var notes = []
+  left = handle handle place_all(os)
+      | stock(_) => resume(level)
+      | reserve(_, qty) => do
+        level := level - qty
+        resume()
+    | audit(m) => do
+      notes := notes.push(m)
+      resume()
+  (left, level, notes)
+
+fn checked(os: List[Order], start: Int) -> Str
+= catch "left {in_memory(os, start).1}"
+  | OutOfStock{sku} => "out of {sku}"
+
+fn limit() -> Int ! config
+= config("limit") * 2 + config("floor")
+
+fn with_config(base: Int) -> Int
+= handle limit()
+  | config(key) => resume(if key == "limit" then base else 1)
+
+fn first_over(xs: List[Int], cap: Int) -> Opt[Int]
+= handle do
+    for x in xs
+      audit("{x}")
+    none
+  | audit(m) => if m.to_int.or(0) > cap then m.to_int else resume()
+
+fn traced(n: Int) -> Int ! log
+= handle do
+    audit("a")
+    audit("b")
+    n
+  | audit(m) => do
+    log("enter {m}")
+    r = resume()
+    log("leave {m} with {r}")
+    r + 1
+  | return(v) => v * 10
+
+fn noisy(x: Int) -> Int ! log
+= do
+  log("noisy {x}")
+  x * 2
+
+fn quiet(x: Int) -> (Int, List[Str])
+= do
+  var seen = []
+  r = handle noisy(x) + traced(x)
+    | log(m) => do
+      seen := seen.push(m)
+      resume()
+  (r, seen)
+
+fn stocked(os: List[Order]) -> Int ! audit, fail[StockErr]
+= handle place_all(os)
+  | stock(_) => resume(100)
+  | reserve(_, _) => resume()
+
+fn audit_fails(os: List[Order]) -> Int ! fail[StockErr]
+= handle stocked(os)
+  | audit(m) => raise OutOfStock{sku: m}
+
+fn audit_raises(os: List[Order]) -> Str
+= catch "{audit_fails(os)}"
+  | OutOfStock{sku} => sku
+
+fn main() -> Unit ! log
+= do
+  orders = [Order{sku: "a", qty: 3}, Order{sku: "b", qty: 4}]
+  log(checked(orders, 10))
+  log(checked(orders, 5))
+  log("config {with_config(20)}")
+  log("first {first_over([1, 5, 9, 12], 8)}")
+  log("traced {traced(4)}")
+  log("quiet {quiet(2)}")
+
+test mem = in_memory([Order{sku: "a", qty: 3}], 10) == (7, 7, ["reserved 3 a"])
+test fold_state = in_memory([Order{sku: "a", qty: 3}, Order{sku: "b", qty: 4}], 10) == (10, 3, ["reserved 3 a", "reserved 4 b"])
+test stock_out = checked([Order{sku: "a", qty: 3}, Order{sku: "b", qty: 4}], 5) == "out of b"
+test stock_ok = checked([Order{sku: "a", qty: 1}], 5) == "left 4"
+test config_reader = with_config(20) == 41
+test abort_early = first_over([1, 5, 9, 12], 8) == some(9)
+test abort_never = first_over([1, 2], 8) == none
+test after_resume = traced(4) == 42
+test log_captured = quiet(2) == (26, ["noisy 2", "enter a", "enter b", "leave b with 20", "leave a with 21"])
+test clause_error_escapes = audit_raises([Order{sku: "z", qty: 1}]) == "reserved 1 z"

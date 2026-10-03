@@ -27,6 +27,8 @@ type     := "type" Name params? "=" tybody ("derive" Name ("," Name)*)?
 tybody   := record | variant ("|" variant)* | ty ("where" expr)? | "new" ty
 record   := "{" (field ("," field)*)? "}"
 fn       := "fn" name params? "(" args? ")" ("->" ty)? ("!" effects)? clause* "=" body
+effect   := "effect" name params? (opsig | (NEWLINE INDENT name opsig)+)
+opsig    := "(" args? ")" ("->" ty)?
 clause   := ("pre" | "post" | "dec" | "cost") expr
 body     := expr | NEWLINE INDENT stmt+ DEDENT
 stmt     := pat "=" expr | "var" name "=" expr | name ":=" expr | expr
@@ -35,7 +37,7 @@ expr     := literal | name | expr "." name | expr "(" args ")" | lambda
           | "match" expr ("|" pat ("if" expr)? "=>" expr)+
           | "catch" expr ("|" pat ("if" expr)? "=>" expr)+
           | "raise" expr | "return" expr
-          | "with" handler "in" expr
+          | "handle" expr ("|" op "(" pats ")" "=>" expr)+ ("|" "return" "(" pat ")" "=>" expr)?
           | "par" "(" exprs ")"
           | "do" body
           | "for" pat "in" expr body

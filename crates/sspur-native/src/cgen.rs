@@ -3238,7 +3238,11 @@ impl<'a> Cx<'a> {
                     return Ok(format!("{{ int64_t {s_} = {av}; int64_t {e_} = {bv}; {reserve}for (int64_t {iv} = {s_}; {iv} < {e_}; {iv}++) {{ (void)({}); }} }} ", body?));
                 }
                 let lt = self.ty(it)?;
-                let et = elem(&lt, "List").ok_or("for loop over a non-list")?;
+                let et = match elem(&lt, "List") {
+                    Some(t) => t,
+                    None if is(&lt, "Unit") => return Err("iterates a generator".into()),
+                    None => return Err("for loop over a non-list".into()),
+                };
                 let lv = self.expr(it)?;
                 let (l, i) = (self.fresh("fl"), self.fresh("fi"));
                 self.scopes.push(HashMap::new());
@@ -3503,6 +3507,7 @@ fn kind_name(k: &ExprKind) -> &'static str {
     match k {
         ExprKind::Str(_) => "string",
         ExprKind::Catch(..) => "catch",
+        ExprKind::Handle(..) => "handle",
         ExprKind::Raise(_) => "raise",
         ExprKind::Lambda { .. } => "standalone lambda",
         ExprKind::Hole(_) => "hole",

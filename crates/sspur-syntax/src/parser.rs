@@ -202,12 +202,59 @@ impl Parser {
                 let body = self.expr_seq()?;
                 Ok(Def::Test(TestDef { name, span: start.to(self.prev_span()), body }))
             }
-            Tok::Kw(k @ ("trait" | "impl" | "store" | "svc" | "queue" | "effect")) => {
+            Tok::Kw("effect") => self.effect_def().map(Def::Effect),
+            Tok::Kw(k @ ("trait" | "impl" | "store" | "svc" | "queue")) => {
                 let k = *k;
                 self.err("E_UNSUPPORTED", format!("'{k}' definitions are not supported by this compiler version yet"))
             }
             _ => self.err("E_PARSE_DEF", format!("expected a definition, found {}", self.describe())),
         }
+    }
+
+    fn effect_def(&mut self) -> PResult<EffectDef> {
+        let start = self.expect_kw("effect")?;
+        let name = self.expect_ident()?;
+        let params = self.tparams()?;
+        let mut ops = Vec::new();
+        if self.is_sym("(") {
+            ops.push(self.op_sig(name.clone())?);
+        } else {
+            while let Some(c) = self.newline_then(|t| matches!(t, Tok::Ident(_))) {
+                if c == 0 {
+                    break;
+                }
+                self.bump();
+                let op = self.expect_ident()?;
+                ops.push(self.op_sig(op)?);
+            }
+            if ops.is_empty() {
+                return self.err("E_PARSE_EFFECT", "an effect needs at least one operation: 'effect name(x: T) -> R', or operations on indented lines");
+            }
+        }
+        Ok(EffectDef { name, params, ops, span: start.to(self.prev_span()) })
+    }
+
+    fn op_sig(&mut self, name: String) -> PResult<OpSig> {
+        let params = self.params()?;
+        let ret = if self.eat_sym("->") { Some(self.ty()?) } else { None };
+        Ok(OpSig { name, params, ret })
+    }
+
+    fn params(&mut self) -> PResult<Vec<Param>> {
+        self.expect_sym("(")?;
+        let mut params = Vec::new();
+        while !self.is_sym(")") {
+            let pname = self.expect_ident()?;
+            self.expect_sym(":")?;
+            let ty = self.ty()?;
+            let refine = if self.eat_kw("where") { Some(self.refine_expr()?) } else { None };
+            params.push(Param { name: pname, ty, refine });
+            if !self.eat_sym(",") {
+                break;
+            }
+        }
+        self.expect_sym(")")?;
+        Ok(params)
     }
 
     fn tparams(&mut self) -> PResult<Vec<TParam>> {
@@ -471,19 +518,7 @@ impl Parser {
         self.expect_kw("fn")?;
         let name = self.expect_ident()?;
         let tparams = self.tparams()?;
-        self.expect_sym("(")?;
-        let mut params = Vec::new();
-        while !self.is_sym(")") {
-            let pname = self.expect_ident()?;
-            self.expect_sym(":")?;
-            let ty = self.ty()?;
-            let refine = if self.eat_kw("where") { Some(self.refine_expr()?) } else { None };
-            params.push(Param { name: pname, ty, refine });
-            if !self.eat_sym(",") {
-                break;
-            }
-        }
-        self.expect_sym(")")?;
+        let params = self.params()?;
         let ret = if self.eat_sym("->") { Some(self.ty()?) } else { None };
         let effects = if self.eat_sym("!") { self.effects()? } else { vec![] };
         let sig_span = start.to(self.prev_span());
@@ -525,6 +560,9 @@ impl Parser {
         match self.peek() {
             Tok::Ident(_) => matches!(self.peek_at(1), Tok::Sym("=>")),
             Tok::Sym("(") => {
+                if matches!((self.peek_at(1), self.peek_at(2)), (Tok::Sym(")"), Tok::Sym("=>"))) {
+                    return true;
+                }
                 let mut i = 1;
                 loop {
                     match self.peek_at(i) {
@@ -547,7 +585,7 @@ impl Parser {
         if self.lambda_ahead() {
             let mut params = Vec::new();
             if self.eat_sym("(") {
-                loop {
+                while !self.is_sym(")") {
                     params.push(self.expect_ident()?);
                     if !self.eat_sym(",") {
                         break;
@@ -592,6 +630,16 @@ impl Parser {
                     ExprKind::Catch(Box::new(scrut), arms)
                 };
                 Ok(Expr::new(kind, start.to(self.prev_span())))
+            }
+            Tok::Kw("handle") => {
+                let indent = self.line_indent;
+                self.bump();
+                let body = self.expr()?;
+                let arms = self.handle_arms(indent)?;
+                if arms.is_empty() {
+                    return self.err("E_PARSE_ARMS", "expected at least one '| op(x) => ...' arm");
+                }
+                Ok(Expr::new(ExprKind::Handle(Box::new(body), arms), start.to(self.prev_span())))
             }
             Tok::Kw("do") => {
                 self.bump();
@@ -723,6 +771,49 @@ impl Parser {
             let body = if self.assign_ahead() { self.branch()? } else { self.block_or_seq()? };
             self.line_indent = saved;
             arms.push(Arm { pat, guard, body });
+        }
+        Ok(arms)
+    }
+
+    fn handle_arms(&mut self, indent: u32) -> PResult<Vec<Arm>> {
+        let mut arms = Vec::new();
+        let mut col = None;
+        loop {
+            let op_ahead = |p: &Self, i: usize| match p.peek_at(i) {
+                Tok::Kw("return") => true,
+                Tok::Ident(n) => !is_upper(n) && matches!(p.peek_at(i + 1), Tok::Sym("(" | "=>")),
+                _ => false,
+            };
+            if let Some(c) = self.newline_then(|t| matches!(t, Tok::Sym("|"))) {
+                if c < indent || col.is_some_and(|k| k != c) || !op_ahead(self, 2) {
+                    break;
+                }
+                col = Some(c);
+                self.line_indent = c;
+                self.bump();
+            } else if self.is_sym("|") && !op_ahead(self, 1) {
+                break;
+            }
+            if !self.eat_sym("|") {
+                break;
+            }
+            let pat = if self.eat_kw("return") {
+                self.expect_sym("(")?;
+                let p = self.pat()?;
+                self.expect_sym(")")?;
+                Pat::Ctor { name: "return".into(), args: CtorArgs::Positional(vec![p]) }
+            } else {
+                match self.pat()? {
+                    Pat::Bind(name) => Pat::Ctor { name, args: CtorArgs::Positional(vec![]) },
+                    p @ Pat::Ctor { args: CtorArgs::Positional(_), .. } => p,
+                    _ => return self.err("E_PARSE_HANDLER", "expected an operation arm like '| op(x) =>' or '| return(r) =>'"),
+                }
+            };
+            self.expect_sym("=>")?;
+            let saved = self.line_indent;
+            let body = if self.assign_ahead() { self.branch()? } else { self.block_or_seq()? };
+            self.line_indent = saved;
+            arms.push(Arm { pat, guard: None, body });
         }
         Ok(arms)
     }
@@ -1066,7 +1157,7 @@ impl Parser {
                 self.bump();
                 ExprKind::Par(self.args()?)
             }
-            Tok::Kw("if" | "match" | "catch" | "do" | "raise" | "return") => return self.expr(),
+            Tok::Kw("if" | "match" | "catch" | "handle" | "do" | "raise" | "return") => return self.expr(),
             Tok::Ident(name) => {
                 self.bump();
                 if is_upper(&name) && self.is_sym("{") {

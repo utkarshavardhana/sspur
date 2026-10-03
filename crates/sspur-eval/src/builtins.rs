@@ -37,10 +37,7 @@ fn index(n: i64, len: usize) -> usize {
 impl Interp {
     pub(crate) fn call_global(&self, n: &str, mut a: Vec<Value>) -> R {
         Ok(match n {
-            "log" => {
-                self.emit(a[0].to_string());
-                Value::Unit
-            }
+            "log" => return self.perform("log", a),
             "some" => Value::some(a.remove(0)),
             "ok" => Value::Res(Ok(Rc::new(a.remove(0)))),
             "err" => Value::Res(Err(Rc::new(a.remove(0)))),
@@ -64,6 +61,7 @@ impl Interp {
                 let (x, y) = (a.remove(0), a.remove(0));
                 if y > x { y } else { x }
             }
+            _ if self.ops.contains(n) => return self.perform(n, a),
             _ => return trap(format!("unknown builtin '{n}'")),
         })
     }

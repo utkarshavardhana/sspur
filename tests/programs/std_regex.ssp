@@ -1,0 +1,60 @@
+type Entry = {level: Str, code: Int, msg: Str}
+
+fn re(p: Str) -> Regex
+= match regex(p)
+  | ok(r) => r
+  | err(_) => re("")
+
+fn parse_log(line: Str) -> Opt[Entry]
+= re("^\\[(\\w+)\\] (\\d+): (.*)$").captures(line).map(g => Entry{level: g[1], code: g[2].to_int.or(0), msg: g[3]})
+
+fn emails(text: Str) -> List[Str]
+= re("[\\w.+-]+@[\\w-]+\\.[\\w.]+").find_all(text)
+
+fn redact(text: Str) -> Str
+= re("\\d\{3}-\\d\{4}").replace(text, "XXX-XXXX")
+
+fn swap_names(s: Str) -> Str
+= re("(\\w+), (\\w+)").replace(s, "$2 $1")
+
+fn tokens(s: Str) -> List[Str]
+= re("\\s*[,;]\\s*").split(s)
+
+fn error_of(p: Str) -> Str
+= match regex(p)
+  | ok(_) => "ok"
+  | err(e) => e
+
+fn search(p: Str, s: Str) -> List[Str]
+= match regex(p)
+  | ok(r) => [r.is_match(s).str, r.find(s).or("-"), r.span(s).str, r.find_all(s).str, r.captures(s).str, r.replace(s, "<$0>"), r.split(s).str]
+  | err(e) => [e]
+
+test logs = parse_log("[WARN] 42: disk low") == some(Entry{level: "WARN", code: 42, msg: "disk low"}) and parse_log("WARN 42") == none
+test mail = emails("write to ana@example.com or bo.b+x@mail.co.uk today") == ["ana@example.com", "bo.b+x@mail.co.uk"]
+test phone = redact("call 555-1234 or 555-9876") == "call XXX-XXXX or XXX-XXXX"
+test groups = swap_names("Doe, Jane; Roe, Rick") == "Jane Doe; Rick Roe" and re("(a)|(b)").captures("b") == some(["b", "", "b"])
+test splitting = tokens("a, b;c ,d") == ["a", "b", "c", "d"] and re(",").split("") == [""] and re("x*").split("ab") == ["", "a", "b", ""]
+test greedy_lazy = re("a+").find("caaat") == some("aaa") and re("a+?").find("caaat") == some("a") and re("<.*>").find("<a><b>") == some("<a><b>") and re("<.*?>").find("<a><b>") == some("<a>")
+test leftmost_first = re("a|ab").find("ab") == some("a") and re("ab|a").find("ab") == some("ab") and re("(a|ab)(c|bcd)").captures("abcd") == some(["abcd", "a", "bcd"])
+test anchors = re("^ab$").is_match("ab") and not re("^ab$").is_match("abc") and re("\\bcat\\b").find_all("cat concat cat.") == ["cat", "cat"] and re("\\Bcat").find_all("cat concat") == ["cat"]
+test counted = re("^a{2,3}$").is_match("aaa") and not re("^a{2,3}$").is_match("aaaa") and re("^a\{2}$").is_match("aa") and re("x{2,}").find("xxxxx") == some("xxxxx") and re("a{,2}").find("a{,2}") == some("a{,2}")
+test classes = re("[^a-c]+").find("abcxyzab") == some("xyz") and re("[\\d.]+").find("v1.2.3!") == some("1.2.3") and re("[]a]+").find("x]a]") == some("]a]") and re("[a-]+").find("b-a-") == some("-a-") and re("\\W+").find("ab, cd") == some(", ")
+test unicode = re("é+").find("caféé!") == some("éé") and re(".").find_all("añb") == ["a", "ñ", "b"] and re("[à-ü]").find("xyzö") == some("ö") and re("ñ").span("añb") == some((1, 2))
+test empty_matches = re("a*").find_all("baa") == ["", "aa", ""] and re("").replace("ab", "-") == "-a-b-" and re("x*").replace("abc", "!") == "!a!b!c!"
+test dots = re("a.c").is_match("abc") and not re("a.c").is_match("a\nc") and re("\\.").find_all("a.b.c") == [".", "."]
+test escapes = re("\\t\\n").is_match("x\t\ny") and re("\\$\\(\\)").is_match("$()") and re("a\\|b").find("a|b") == some("a|b")
+test replace_refs = re("(\\w)(\\d)").replace("a1 b2", "$2$1 $$ $9") == "1a $ $9 2b $ $9" and re("o").replace("foo", "0") == "f00"
+test errors = [error_of("a("), error_of("a)"), error_of("[a-"), error_of("*a"), error_of("a**"), error_of("a{3,2}"), error_of("\\q"), error_of("[z-a]"), error_of("(?x)"), error_of("a\{1001}"), error_of("(x\{999})\{999}")] == ["unclosed group", "unmatched ')'", "unclosed class", "nothing to repeat", "nothing to repeat", "bad repetition", "bad escape", "bad class range", "bad group", "bad repetition", "regex too large"]
+test values = re("a+").str == "/a+/" and re("a") == re("a") and re("a") != re("b") and [re("b"), re("a")].sort == [re("a"), re("b")]
+test probe = search("(\\d+)-(\\d+)", "x 10-20 y 3-4") == ["true", "10-20", "some((2, 7))", "[\"10-20\", \"3-4\"]", "some([\"10-20\", \"10\", \"20\"])", "x <10-20> y <3-4>", "[\"x \", \" y \", \"\"]"]
+
+fn built_re(k: Int, j: Int, m: Int) -> List[Str]
+= do
+  atoms = ["a", "b", ".", "[ab]", "[^a]", "\\d", "\\w", "(a|b)", "(?:ab|a)", "x", "^", "$", "\\b", "é", "(a*)", "[a-c\\s]"]
+  quants = ["", "*", "+", "?", "*?", "+?", "\{1,2}", "\{2}", "??", "\{0,3}?"]
+  p = (0..4).map(i => atoms[k.shr(i * 4).band(15)] + quants[j.shr(i * 4).band(15) % 10]).join("")
+  s = (0..m.band(15)).map(i => ["a", "b", "1", " ", "é", "x", "ab", "\n"][m.shr(4 + i * 3).band(7)]).join("")
+  search(p, s) + [p]
+
+test built_ok = built_re(1, 2, 37).len == 8

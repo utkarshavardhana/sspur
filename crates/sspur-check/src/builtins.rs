@@ -115,7 +115,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("*", "str[A](x: A) -> Str"),
 ];
 
-pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0)];
+pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0), ("Regex", "#Regex", 0)];
 
 pub const STD_GLOBALS: &[&str] = &[
     "empty_set[A]() -> Set[A]",
@@ -157,6 +157,7 @@ pub const STD_GLOBALS: &[&str] = &[
     "rand_exp(seed: Int, rate: F64) -> (F64, Int)",
     "rand_bool(seed: Int, p: F64) -> (Bool, Int)",
     "bits(n: Int) -> Bits",
+    "regex(p: Str) -> Res[Regex, Str]",
     "big(n: Int) -> BigInt",
     "parse_big(s: Str) -> Opt[BigInt]",
     "decimal(s: Str) -> Opt[Dec]",
@@ -304,6 +305,13 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("#Dec", "abs(a: Dec) -> Dec"),
     ("#Dec", "sign(a: Dec) -> Int"),
     ("#Dec", "to_f64(a: Dec) -> F64"),
+    ("#Regex", "is_match(r: Regex, s: Str) -> Bool"),
+    ("#Regex", "find(r: Regex, s: Str) -> Opt[Str]"),
+    ("#Regex", "span(r: Regex, s: Str) -> Opt[(Int, Int)]"),
+    ("#Regex", "find_all(r: Regex, s: Str) -> List[Str]"),
+    ("#Regex", "captures(r: Regex, s: Str) -> Opt[List[Str]]"),
+    ("#Regex", "replace(r: Regex, s: Str, rep: Str) -> Str"),
+    ("#Regex", "split(r: Regex, s: Str) -> List[Str]"),
     ("#Bits", "has(b: Bits, i: Int) -> Bool"),
     ("#Bits", "set(b: Bits, i: Int) -> Bits"),
     ("#Bits", "clear(b: Bits, i: Int) -> Bits"),
@@ -376,7 +384,7 @@ pub const STD_METHODS: &[(&str, &str)] = &[
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "regex", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

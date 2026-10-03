@@ -1024,3 +1024,319 @@ static int ss_dec_parse(Str s, SDec* out) {
     *out = ss_dec_mk(ss_big_digits(neg, buf, ni + nf), nf); return 1;
 }
 static double ss_dec_f64(SDec a) { Str s = ss_dec_str(a); char* c = (char*)sspur_alloc_atomic((size_t)s.len + 1); memcpy(c, s.p, (size_t)s.len); c[s.len] = 0; return strtod(c, 0); }
+//@ regex utf8
+enum { RN_EMPTY, RN_CHAR, RN_ANY, RN_CLASS, RN_ASSERT, RN_GROUP, RN_CAT, RN_ALT, RN_REP };
+enum { RI_CHAR, RI_ANY, RI_CLASS, RI_SPLIT, RI_JMP, RI_SAVE, RI_ASSERT, RI_MATCH };
+typedef struct SsRN { int kind; uint32_t c; int64_t k, min, max; int greedy; struct SsRN** kids; int64_t nk, ck; } SsRN;
+typedef struct { uint32_t* r; int64_t n, cap; } SsRV;
+typedef struct { uint32_t* r; int64_t n; int neg; } SsRC;
+typedef struct { int op; int64_t a, b; } SsRI;
+struct SsRe { Str src; SsRI* prog; int64_t np; SsRC* cls; int64_t nc; int64_t groups; };
+typedef struct { uint32_t* c; int64_t n, pos, groups; SsRC* cls; int64_t nc, cc; const char* err; } SsRP;
+static SsRN* rn_new(int kind) { SsRN* x = (SsRN*)sspur_alloc(sizeof(SsRN)); memset(x, 0, sizeof *x); x->kind = kind; x->k = -1; x->max = -1; return x; }
+static void rn_push(SsRN* x, SsRN* kid) { if (x->nk == x->ck) { int64_t nc = x->ck ? x->ck * 2 : 4; SsRN** nk = (SsRN**)sspur_alloc((size_t)nc * sizeof(SsRN*)); if (x->nk) memcpy(nk, x->kids, (size_t)x->nk * sizeof(SsRN*)); x->kids = nk; x->ck = nc; } x->kids[x->nk++] = kid; }
+static void rv_push(SsRV* v, uint32_t a, uint32_t b) { if (v->n + 2 > v->cap) { int64_t nc = v->cap ? v->cap * 2 : 16; uint32_t* nr = (uint32_t*)sspur_alloc_atomic((size_t)nc * 4); if (v->n) memcpy(nr, v->r, (size_t)v->n * 4); v->r = nr; v->cap = nc; } v->r[v->n++] = a; v->r[v->n++] = b; }
+static const uint32_t ss_re_digit[] = {0x30, 0x39}, ss_re_word[] = {0x30, 0x39, 0x41, 0x5A, 0x5F, 0x5F, 0x61, 0x7A}, ss_re_space[] = {0x09, 0x0D, 0x20, 0x20};
+static int rp_perl(uint32_t e, SsRV* v) {
+    const uint32_t* set; int64_t n; int neg = e == 'D' || e == 'W' || e == 'S';
+    if (e == 'd' || e == 'D') { set = ss_re_digit; n = 2; }
+    else if (e == 'w' || e == 'W') { set = ss_re_word; n = 8; }
+    else if (e == 's' || e == 'S') { set = ss_re_space; n = 4; }
+    else return 0;
+    if (!neg) { for (int64_t i = 0; i < n; i += 2) rv_push(v, set[i], set[i + 1]); return 1; }
+    uint32_t lo = 0;
+    for (int64_t i = 0; i < n; i += 2) { if (set[i] > lo) rv_push(v, lo, set[i] - 1); lo = set[i + 1] + 1; }
+    if (lo <= 0x10FFFF) rv_push(v, lo, 0x10FFFF);
+    return 1;
+}
+static int rp_simple(uint32_t e, uint32_t* out) {
+    switch (e) { case 'n': *out = 10; return 1; case 't': *out = 9; return 1; case 'r': *out = 13; return 1; case 'f': *out = 12; return 1; case 'v': *out = 11; return 1; case '0': *out = 0; return 1; }
+    if (e < 0x80 && !((e >= '0' && e <= '9') || (e >= 'a' && e <= 'z') || (e >= 'A' && e <= 'Z'))) { *out = e; return 1; }
+    return 0;
+}
+static int rp_quant(SsRP* p, int64_t q, int64_t* mn, int64_t* mx, int64_t* nx) {
+    if (q >= p->n) return 0;
+    uint32_t c = p->c[q];
+    if (c == '*') { *mn = 0; *mx = -1; *nx = q + 1; return 1; }
+    if (c == '+') { *mn = 1; *mx = -1; *nx = q + 1; return 1; }
+    if (c == '?') { *mn = 0; *mx = 1; *nx = q + 1; return 1; }
+    if (c != '{') return 0;
+    int64_t i = q + 1, st = i, v = 0;
+    while (i < p->n && p->c[i] >= '0' && p->c[i] <= '9') { v = v * 10 + (p->c[i] - '0'); if (v > 100000) v = 100000; i++; }
+    if (i == st || i >= p->n) return 0;
+    if (p->c[i] == '}') { *mn = v; *mx = v; *nx = i + 1; return 1; }
+    if (p->c[i] != ',') return 0;
+    i++; int64_t st2 = i, w = 0;
+    while (i < p->n && p->c[i] >= '0' && p->c[i] <= '9') { w = w * 10 + (p->c[i] - '0'); if (w > 100000) w = 100000; i++; }
+    if (i >= p->n || p->c[i] != '}') return 0;
+    *mn = v; *mx = i > st2 ? w : -1; *nx = i + 1; return 1;
+}
+static SsRN* rp_alt(SsRP* p);
+static SsRN* rp_class_node(SsRP* p, SsRV* v, int neg) {
+    if (p->nc == p->cc) { int64_t nc = p->cc ? p->cc * 2 : 8; SsRC* n = (SsRC*)sspur_alloc((size_t)nc * sizeof(SsRC)); if (p->nc) memcpy(n, p->cls, (size_t)p->nc * sizeof(SsRC)); p->cls = n; p->cc = nc; }
+    p->cls[p->nc].r = v->r; p->cls[p->nc].n = v->n / 2; p->cls[p->nc].neg = neg;
+    SsRN* x = rn_new(RN_CLASS); x->k = p->nc++; return x;
+}
+static int rp_catom(SsRP* p, SsRV* v, int* set, uint32_t* a) {
+    uint32_t c = p->c[p->pos++];
+    if (c != '\\') { *set = 0; *a = c; return 1; }
+    if (p->pos >= p->n) { p->err = "bad escape"; return 0; }
+    uint32_t e = p->c[p->pos++];
+    if (rp_perl(e, v)) { *set = 1; return 1; }
+    if (!rp_simple(e, a)) { p->err = "bad escape"; return 0; }
+    *set = 0; return 1;
+}
+static SsRN* rp_class(SsRP* p) {
+    int neg = 0; if (p->pos < p->n && p->c[p->pos] == '^') { neg = 1; p->pos++; }
+    SsRV v = {0, 0, 0}; int first = 1;
+    for (;;) {
+        if (p->pos >= p->n) { p->err = "unclosed class"; return 0; }
+        if (p->c[p->pos] == ']' && !first) { p->pos++; break; }
+        first = 0;
+        int set; uint32_t a;
+        if (!rp_catom(p, &v, &set, &a)) return 0;
+        if (set) continue;
+        if (p->pos < p->n && p->c[p->pos] == '-' && p->pos + 1 < p->n && p->c[p->pos + 1] != ']') {
+            p->pos++; int set2; uint32_t b; SsRV tmp = {0, 0, 0};
+            if (!rp_catom(p, &tmp, &set2, &b)) return 0;
+            if (set2 || a > b) { p->err = "bad class range"; return 0; }
+            rv_push(&v, a, b);
+        } else rv_push(&v, a, a);
+    }
+    return rp_class_node(p, &v, neg);
+}
+static SsRN* rp_atom(SsRP* p) {
+    uint32_t c = p->c[p->pos++];
+    int64_t mn, mx, nx;
+    if (c == '(') {
+        int64_t idx = -1;
+        if (p->pos < p->n && p->c[p->pos] == '?') {
+            if (!(p->pos + 1 < p->n && p->c[p->pos + 1] == ':')) { p->err = "bad group"; return 0; }
+            p->pos += 2;
+        } else {
+            idx = ++p->groups;
+            if (p->groups > 100) { p->err = "too many groups"; return 0; }
+        }
+        SsRN* inner = rp_alt(p); if (!inner) return 0;
+        if (!(p->pos < p->n && p->c[p->pos] == ')')) { p->err = "unclosed group"; return 0; }
+        p->pos++;
+        SsRN* g = rn_new(RN_GROUP); g->k = idx; rn_push(g, inner); return g;
+    }
+    if (c == '[') return rp_class(p);
+    if (c == '.') return rn_new(RN_ANY);
+    if (c == '^' || c == '$') { SsRN* x = rn_new(RN_ASSERT); x->k = c == '^' ? 0 : 1; return x; }
+    if (c == '\\') {
+        if (p->pos >= p->n) { p->err = "bad escape"; return 0; }
+        uint32_t e = p->c[p->pos++];
+        if (e == 'b' || e == 'B') { SsRN* x = rn_new(RN_ASSERT); x->k = e == 'b' ? 2 : 3; return x; }
+        SsRV v = {0, 0, 0};
+        if (rp_perl(e, &v)) return rp_class_node(p, &v, 0);
+        uint32_t ch; if (!rp_simple(e, &ch)) { p->err = "bad escape"; return 0; }
+        SsRN* x = rn_new(RN_CHAR); x->c = ch; return x;
+    }
+    if (c == '*' || c == '+' || c == '?' || (c == '{' && rp_quant(p, p->pos - 1, &mn, &mx, &nx))) { p->err = "nothing to repeat"; return 0; }
+    SsRN* x = rn_new(RN_CHAR); x->c = c; return x;
+}
+static SsRN* rp_repeat(SsRP* p) {
+    SsRN* a = rp_atom(p); if (!a) return 0;
+    int64_t mn, mx, nx;
+    if (!rp_quant(p, p->pos, &mn, &mx, &nx)) return a;
+    if (mn > 1000 || (mx >= 0 && (mx > 1000 || mx < mn))) { p->err = "bad repetition"; return 0; }
+    p->pos = nx; int greedy = 1;
+    if (p->pos < p->n && p->c[p->pos] == '?') { p->pos++; greedy = 0; }
+    int64_t a1, a2, a3;
+    if (rp_quant(p, p->pos, &a1, &a2, &a3)) { p->err = "nothing to repeat"; return 0; }
+    SsRN* r = rn_new(RN_REP); rn_push(r, a); r->min = mn; r->max = mx; r->greedy = greedy; return r;
+}
+static SsRN* rp_cat(SsRP* p) {
+    SsRN* x = rn_new(RN_CAT);
+    while (p->pos < p->n && p->c[p->pos] != '|' && p->c[p->pos] != ')') { SsRN* r = rp_repeat(p); if (!r) return 0; rn_push(x, r); }
+    if (!x->nk) x->kind = RN_EMPTY;
+    return x;
+}
+static SsRN* rp_alt(SsRP* p) {
+    SsRN* first = rp_cat(p); if (!first) return 0;
+    if (!(p->pos < p->n && p->c[p->pos] == '|')) return first;
+    SsRN* x = rn_new(RN_ALT); rn_push(x, first);
+    while (p->pos < p->n && p->c[p->pos] == '|') { p->pos++; SsRN* b = rp_cat(p); if (!b) return 0; rn_push(x, b); }
+    return x;
+}
+typedef struct { SsRI* p; int64_t n, cap; const char* err; } SsRCm;
+static int64_t rc_emit(SsRCm* c, int op, int64_t a, int64_t b) {
+    if (c->n >= 20000) { c->err = "regex too large"; return -1; }
+    if (c->n == c->cap) { int64_t nc = c->cap ? c->cap * 2 : 32; SsRI* np = (SsRI*)sspur_alloc_atomic((size_t)nc * sizeof(SsRI)); if (c->n) memcpy(np, c->p, (size_t)c->n * sizeof(SsRI)); c->p = np; c->cap = nc; }
+    c->p[c->n].op = op; c->p[c->n].a = a; c->p[c->n].b = b; return c->n++;
+}
+static int rc_node(SsRCm* c, SsRN* x) {
+    switch (x->kind) {
+    case RN_EMPTY: return 1;
+    case RN_CHAR: return rc_emit(c, RI_CHAR, x->c, 0) >= 0;
+    case RN_ANY: return rc_emit(c, RI_ANY, 0, 0) >= 0;
+    case RN_CLASS: return rc_emit(c, RI_CLASS, x->k, 0) >= 0;
+    case RN_ASSERT: return rc_emit(c, RI_ASSERT, x->k, 0) >= 0;
+    case RN_GROUP:
+        if (x->k >= 0 && rc_emit(c, RI_SAVE, 2 * x->k, 0) < 0) return 0;
+        if (!rc_node(c, x->kids[0])) return 0;
+        if (x->k >= 0 && rc_emit(c, RI_SAVE, 2 * x->k + 1, 0) < 0) return 0;
+        return 1;
+    case RN_CAT:
+        for (int64_t i = 0; i < x->nk; i++) if (!rc_node(c, x->kids[i])) return 0;
+        return 1;
+    case RN_ALT: {
+        int64_t* jumps = (int64_t*)sspur_alloc_atomic((size_t)x->nk * 8); int64_t nj = 0;
+        for (int64_t k = 0; k < x->nk; k++) {
+            if (k + 1 < x->nk) {
+                int64_t s = rc_emit(c, RI_SPLIT, 0, 0); if (s < 0) return 0;
+                if (!rc_node(c, x->kids[k])) return 0;
+                int64_t j = rc_emit(c, RI_JMP, 0, 0); if (j < 0) return 0;
+                jumps[nj++] = j;
+                c->p[s].a = s + 1; c->p[s].b = c->n;
+            } else if (!rc_node(c, x->kids[k])) return 0;
+        }
+        for (int64_t i = 0; i < nj; i++) c->p[jumps[i]].a = c->n;
+        return 1;
+    }
+    case RN_REP: {
+        SsRN* in = x->kids[0];
+        for (int64_t i = 0; i < x->min; i++) if (!rc_node(c, in)) return 0;
+        if (x->max < 0) {
+            int64_t l = rc_emit(c, RI_SPLIT, 0, 0); if (l < 0) return 0;
+            if (!rc_node(c, in)) return 0;
+            if (rc_emit(c, RI_JMP, l, 0) < 0) return 0;
+            int64_t end = c->n;
+            if (x->greedy) { c->p[l].a = l + 1; c->p[l].b = end; } else { c->p[l].a = end; c->p[l].b = l + 1; }
+            return 1;
+        }
+        int64_t cnt = x->max - x->min; int64_t* sp = (int64_t*)sspur_alloc_atomic((size_t)(cnt + 1) * 8);
+        for (int64_t i = 0; i < cnt; i++) { sp[i] = rc_emit(c, RI_SPLIT, 0, 0); if (sp[i] < 0) return 0; if (!rc_node(c, in)) return 0; }
+        int64_t end = c->n;
+        for (int64_t i = 0; i < cnt; i++) { int64_t s = sp[i]; if (x->greedy) { c->p[s].a = s + 1; c->p[s].b = end; } else { c->p[s].a = end; c->p[s].b = s + 1; } }
+        return 1;
+    }
+    }
+    return 1;
+}
+static SsRe* ss_re_compile(Str src, Str* err) {
+    SsRP p; memset(&p, 0, sizeof p);
+    p.c = (uint32_t*)sspur_alloc_atomic((size_t)(src.len + 1) * 4);
+    for (int64_t i = 0; i < src.len;) p.c[p.n++] = ss_utf8_get(src, &i);
+    SsRN* root = rp_alt(&p);
+    if (root && p.pos < p.n) p.err = "unmatched ')'";
+    SsRCm c; memset(&c, 0, sizeof c);
+    if (!p.err) { if (rc_emit(&c, RI_SAVE, 0, 0) < 0 || !rc_node(&c, root) || rc_emit(&c, RI_SAVE, 1, 0) < 0 || rc_emit(&c, RI_MATCH, 0, 0) < 0) p.err = c.err; }
+    if (p.err) { *err = str_lit(p.err, (int64_t)strlen(p.err)); return 0; }
+    SsRe* re = (SsRe*)sspur_alloc(sizeof(SsRe));
+    re->src = src; re->prog = c.p; re->np = c.n; re->cls = p.cls; re->nc = p.nc; re->groups = p.groups;
+    return re;
+}
+typedef struct { int64_t* dense; int64_t* sparse; int64_t* caps; int64_t len; } SsRL;
+static inline int ss_re_isw(Str t, int64_t i) { if (i < 0 || i >= t.len) return 0; unsigned char c = (unsigned char)t.p[i]; return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
+static int ss_re_holds(int64_t k, Str t, int64_t pos) {
+    if (k == 0) return pos == 0;
+    if (k == 1) return pos == t.len;
+    int b = ss_re_isw(t, pos - 1) != ss_re_isw(t, pos);
+    return k == 2 ? b : !b;
+}
+static void ss_re_add(SsRe* re, SsRL* l, int64_t pc0, int64_t pos, int64_t* caps, int64_t ns, Str t, int64_t* stk) {
+    int64_t sp = 0;
+    stk[0] = 0; stk[1] = pc0; stk[2] = 0; sp = 1;
+    while (sp) {
+        sp--; int64_t kind = stk[3 * sp], a = stk[3 * sp + 1], b = stk[3 * sp + 2];
+        if (kind == 1) { caps[a] = b; continue; }
+        int64_t pc = a;
+        for (;;) {
+            int64_t i = l->sparse[pc];
+            if (i < l->len && l->dense[i] == pc) break;
+            l->sparse[pc] = l->len; l->dense[l->len++] = pc;
+            SsRI in = re->prog[pc];
+            if (in.op == RI_JMP) { pc = in.a; continue; }
+            if (in.op == RI_SPLIT) { stk[3 * sp] = 0; stk[3 * sp + 1] = in.b; stk[3 * sp + 2] = 0; sp++; pc = in.a; continue; }
+            if (in.op == RI_SAVE) { stk[3 * sp] = 1; stk[3 * sp + 1] = in.a; stk[3 * sp + 2] = caps[in.a]; sp++; caps[in.a] = pos; pc++; continue; }
+            if (in.op == RI_ASSERT) { if (!ss_re_holds(in.a, t, pos)) break; pc++; continue; }
+            memcpy(l->caps + pc * ns, caps, (size_t)ns * 8);
+            break;
+        }
+    }
+}
+static int ss_re_hit(SsRe* re, int64_t k, uint32_t c) {
+    SsRC* cl = &re->cls[k]; int hit = 0;
+    for (int64_t i = 0; i < cl->n; i++) if (cl->r[2 * i] <= c && c <= cl->r[2 * i + 1]) { hit = 1; break; }
+    return hit != cl->neg;
+}
+static int ss_re_search(SsRe* re, Str t, int64_t start, int64_t* out) {
+    int64_t n = re->np, ns = 2 * (re->groups + 1);
+    int64_t* mem = (int64_t*)malloc((size_t)(n * 4 + 2 * n * ns + ns + 3 * (n + 2)) * 8);
+    SsRL L1 = {mem, mem + n, mem + 2 * n, 0}, L2 = {mem + 2 * n + n * ns, mem + 3 * n + n * ns, mem + 4 * n + n * ns, 0};
+    int64_t* caps = mem + 4 * n + 2 * n * ns; int64_t* stk = caps + ns;
+    for (int64_t i = 0; i < n; i++) { L1.sparse[i] = 0; L2.sparse[i] = 0; }
+    SsRL* cl = &L1; SsRL* nl = &L2;
+    int64_t pos = start; int got = 0;
+    for (;;) {
+        if (!got) { for (int64_t i = 0; i < ns; i++) caps[i] = -1; ss_re_add(re, cl, 0, pos, caps, ns, t, stk); }
+        if (!cl->len) break;
+        uint32_t c = 0xFFFFFFFFu; int64_t next = pos;
+        if (pos < t.len) c = ss_utf8_get(t, &next);
+        for (int64_t i = 0; i < cl->len; i++) {
+            int64_t pc = cl->dense[i]; SsRI in = re->prog[pc]; int hit = 0;
+            if (in.op == RI_CHAR) hit = pos < t.len && c == (uint32_t)in.a;
+            else if (in.op == RI_ANY) hit = pos < t.len && c != 10;
+            else if (in.op == RI_CLASS) hit = pos < t.len && ss_re_hit(re, in.a, c);
+            else if (in.op == RI_MATCH) { memcpy(out, cl->caps + pc * ns, (size_t)ns * 8); got = 1; break; }
+            if (hit) { memcpy(caps, cl->caps + pc * ns, (size_t)ns * 8); ss_re_add(re, nl, pc + 1, next, caps, ns, t, stk); }
+        }
+        SsRL* sw = cl; cl = nl; nl = sw; nl->len = 0;
+        if (pos >= t.len) break;
+        pos = next;
+    }
+    free(mem);
+    return got;
+}
+static int64_t* ss_re_all(SsRe* re, Str t, int64_t* count) {
+    int64_t ns = 2 * (re->groups + 1), cap = 8, n = 0;
+    int64_t* all = (int64_t*)sspur_alloc_atomic((size_t)(cap * ns) * 8);
+    int64_t* m = (int64_t*)malloc((size_t)ns * 8);
+    int64_t pos = 0;
+    while (pos <= t.len) {
+        if (!ss_re_search(re, t, pos, m)) break;
+        if (n == cap) { int64_t* na = (int64_t*)sspur_alloc_atomic((size_t)(cap * 2 * ns) * 8); memcpy(na, all, (size_t)(n * ns) * 8); all = na; cap *= 2; }
+        memcpy(all + n * ns, m, (size_t)ns * 8); n++;
+        if (m[1] == m[0]) { if (m[1] >= t.len) break; int64_t j = m[1]; ss_utf8_get(t, &j); pos = j; }
+        else pos = m[1];
+    }
+    free(m);
+    *count = n; return all;
+}
+static Str ss_re_group(Str t, const int64_t* m, int64_t g) { int64_t s = m[2 * g], e = m[2 * g + 1]; if (s >= 0 && e >= s) return (Str){e - s, t.p + s}; return (Str){0, t.p}; }
+static void ss_re_expand(SB* b, Str rep, Str t, const int64_t* m, int64_t groups) {
+    int64_t i = 0, run = 0;
+    while (i < rep.len) {
+        if (rep.p[i] == '$' && i + 1 < rep.len) {
+            char d = rep.p[i + 1];
+            if (d == '$') { sb_put(b, rep.p + run, i + 1 - run); i += 2; run = i; continue; }
+            if (d >= '0' && d <= '9' && d - '0' <= groups) { sb_put(b, rep.p + run, i - run); Str g = ss_re_group(t, m, d - '0'); sb_put(b, g.p, g.len); i += 2; run = i; continue; }
+        }
+        i++;
+    }
+    sb_put(b, rep.p + run, rep.len - run);
+}
+static Str ss_re_replace(SsRe* re, Str t, Str rep) {
+    int64_t cnt, ns = 2 * (re->groups + 1); int64_t* all = ss_re_all(re, t, &cnt);
+    SB_INIT(b); int64_t last = 0;
+    for (int64_t k = 0; k < cnt; k++) { int64_t* m = all + k * ns; sb_put(&b, t.p + last, m[0] - last); ss_re_expand(&b, rep, t, m, re->groups); last = m[1]; }
+    sb_put(&b, t.p + last, t.len - last);
+    return sb_done(&b);
+}
+static RawL ss_re_strs(SsRe* re, Str t, int split) {
+    int64_t cnt, ns = 2 * (re->groups + 1); int64_t* all = ss_re_all(re, t, &cnt);
+    RawL r = raw_alloc(cnt + 1, sizeof(Str)); Str* d = (Str*)r.data; int64_t last = 0, k = 0;
+    for (int64_t i = 0; i < cnt; i++) { int64_t* m = all + i * ns; d[k++] = split ? (Str){m[0] - last, t.p + last} : (Str){m[1] - m[0], t.p + m[0]}; last = m[1]; }
+    if (split) d[k++] = (Str){t.len - last, t.p + last};
+    r.len = k; r.hdr[1] = k; return r;
+}
+static RawL ss_re_caps(SsRe* re, Str t, int* ok) {
+    int64_t ns = 2 * (re->groups + 1); int64_t* m = (int64_t*)sspur_alloc_atomic((size_t)ns * 8);
+    RawL r = raw_alloc(re->groups + 1, sizeof(Str));
+    *ok = ss_re_search(re, t, 0, m);
+    if (*ok) { for (int64_t g = 0; g <= re->groups; g++) ((Str*)r.data)[g] = ss_re_group(t, m, g); r.len = re->groups + 1; r.hdr[1] = r.len; }
+    return r;
+}

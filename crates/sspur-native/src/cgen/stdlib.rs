@@ -2,7 +2,7 @@ use super::*;
 
 const STD_RT: &str = include_str!("std_rt.c");
 
-pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits", "#HashMap", "#HashSet", "#BigInt", "#Dec"];
+pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits", "#HashMap", "#HashSet", "#BigInt", "#Dec", "#Regex"];
 
 fn section(key: &str) -> (Vec<&'static str>, &'static str) {
     for part in STD_RT.split("//@ ").skip(1) {
@@ -58,6 +58,7 @@ impl Cx<'_> {
             "#Duration" => "DU".into(),
             "#Bits" => "BI".into(),
             "#BigInt" => "BG".into(),
+            "#Regex" => "RX".into(),
             "#Dec" => "DC".into(),
             "#HashMap" => format!("HM_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
             "#HashSet" => format!("HS_{}", self.mangle(&a[0])?),
@@ -69,6 +70,12 @@ impl Cx<'_> {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         match n.as_str() {
             "#Time" | "#Duration" => Ok("int64_t".into()),
+            "#Regex" => {
+                if self.helpers_done.insert("regex_type".into()) {
+                    writeln!(self.defs, "typedef struct SsRe SsRe;").unwrap();
+                }
+                Ok("SsRe*".into())
+            }
             "#BigInt" | "#Dec" => {
                 if self.helpers_done.insert("big_type".into()) {
                     writeln!(self.defs, "typedef struct {{ int64_t n; uint32_t* d; }} SBig;").unwrap();
@@ -171,6 +178,10 @@ impl Cx<'_> {
             }
             "#StrBuf" => "return cmp_S((Str){a.len, a.data}, (Str){b.len, b.data});".into(),
             "#Time" | "#Duration" => "return cmp_I(a, b);".into(),
+            "#Regex" => {
+                self.std("regex");
+                "return cmp_S(a->src, b->src);".into()
+            }
             "#BigInt" => {
                 self.std("big");
                 "return ss_big_cmp(a, b);".into()
@@ -212,6 +223,11 @@ impl Cx<'_> {
             }
             "#StrBuf" => "buf_push(b, v.len); for (int64_t i = 0; i < v.len; i += 8) { int64_t w = 0; memcpy(&w, v.data + i, (size_t)(v.len - i < 8 ? v.len - i : 8)); buf_push(b, w); }".into(),
             "#Time" | "#Duration" => "buf_push(b, v);".into(),
+            "#Regex" => {
+                self.std("regex");
+                let e = self.helper_enc(&Type::str())?;
+                format!("{e}(b, v->src);")
+            }
             "#BigInt" => "buf_push(b, v.n); for (int64_t k = 0; k < (v.n < 0 ? -v.n : v.n); k++) buf_push(b, (int64_t)v.d[k]);".into(),
             "#Dec" => "buf_push(b, v.m.n); for (int64_t k = 0; k < (v.m.n < 0 ? -v.m.n : v.m.n); k++) buf_push(b, (int64_t)v.m.d[k]); buf_push(b, v.s);".into(),
             "#HashMap" | "#HashSet" => {
@@ -242,6 +258,11 @@ impl Cx<'_> {
                 format!("int64_t n = *(*p)++; {c} h = {{0}}; for (int64_t i = 0; i < n; i++) {{ __auto_type x = {d}(p); h.root = hpush_{hm}(h.root, x); }} return h;")
             }
             "#Time" | "#Duration" => "return *(*p)++;".into(),
+            "#Regex" => {
+                self.std("regex");
+                let d = self.helper_dec(&Type::str())?;
+                format!("Str s = {d}(p); Str e; return ss_re_compile(s, &e);")
+            }
             "#BigInt" | "#Dec" => {
                 self.std("big");
                 let tail = if n == "#Dec" { "SDec o; o.m = v; o.s = *(*p)++; return o;" } else { "return v;" };
@@ -297,6 +318,10 @@ impl Cx<'_> {
                 self.std("big");
                 "(void)q; ss_big_put(b, v);".into()
             }
+            "#Regex" => {
+                self.std("regex");
+                "(void)q; sb_put(b, \"/\", 1); sb_put(b, v->src.p, v->src.len); sb_put(b, \"/\", 1);".into()
+            }
             "#Dec" => {
                 self.std("dec");
                 "(void)q; ss_dec_put(b, v);".into()
@@ -330,6 +355,10 @@ impl Cx<'_> {
             }
             "#StrBuf" => "h = hash_S((Str){v.len, v.data});".into(),
             "#Time" | "#Duration" => "h = hash_I(v);".into(),
+            "#Regex" => {
+                self.std("regex");
+                "h = hash_S(v->src);".into()
+            }
             "#BigInt" => "h = hash_I(v.n); for (int64_t k = 0; k < (v.n < 0 ? -v.n : v.n); k++) h = hmix(h * 31 + v.d[k]);".into(),
             "#Dec" => "h = hash_I(v.m.n ^ (v.s << 40)); for (int64_t k = 0; k < (v.m.n < 0 ? -v.m.n : v.m.n); k++) h = hmix(h * 31 + v.m.d[k]);".into(),
             "#HashMap" | "#HashSet" => {
@@ -501,6 +530,10 @@ impl Cx<'_> {
                 self.std("dec");
                 format!("({{ Str s_ = {}; SDec d_; {c} o_; memset(&o_, 0, sizeof o_); if (ss_dec_parse(s_, &d_)) {{ o_.some = 1; o_.v = d_; }} o_; }})", v(0))
             }
+            "regex" => {
+                self.std("regex");
+                format!("({{ Str p_ = {}; Str e_ = {{0, 0}}; SsRe* x_ = ss_re_compile(p_, &e_); {c} r_; memset(&r_, 0, sizeof r_); if (x_) {{ r_.ok = 1; r_.v = x_; }} else r_.e = e_; r_; }})", v(0))
+            }
             "bits" => {
                 self.std("bits");
                 format!("ss_bits_new({}, st)", v(0))
@@ -614,6 +647,25 @@ impl Cx<'_> {
                 })
             }
             "#HashMap" | "#HashSet" => self.hash_method(r, rt, name, &vals, t),
+            "#Regex" => {
+                self.std("regex");
+                let c = self.cty(t)?;
+                let head = format!("SsRe* re_ = {r}; Str t_ = {}; ", vals[0]);
+                Ok(match name {
+                    "is_match" => format!("({{ {head}int64_t* m_ = (int64_t*)sspur_alloc_atomic((size_t)(2 * re_->groups + 2) * 8); (int64_t)ss_re_search(re_, t_, 0, m_); }})"),
+                    "find" | "span" => {
+                        let fill = if name == "find" { "o_.v = ss_re_group(t_, m_, 0);" } else { "o_.v.f0 = utf8_len((Str){m_[0], t_.p}); o_.v.f1 = utf8_len((Str){m_[1], t_.p});" };
+                        format!("({{ {head}int64_t* m_ = (int64_t*)sspur_alloc_atomic((size_t)(2 * re_->groups + 2) * 8); {c} o_; memset(&o_, 0, sizeof o_); if (ss_re_search(re_, t_, 0, m_)) {{ o_.some = 1; {fill} }} o_; }})")
+                    }
+                    "find_all" | "split" => format!("({{ {head}RawL r_ = ss_re_strs(re_, t_, {}); ({c}){{r_.len, (Str*)r_.data, r_.hdr}}; }})", i32::from(name == "split")),
+                    "captures" => {
+                        let lc = self.cty(&arg0(t))?;
+                        format!("({{ {head}int ok_; RawL r_ = ss_re_caps(re_, t_, &ok_); {c} o_; memset(&o_, 0, sizeof o_); if (ok_) {{ o_.some = 1; o_.v = ({lc}){{r_.len, (Str*)r_.data, r_.hdr}}; }} o_; }})")
+                    }
+                    "replace" => format!("({{ {head}Str w_ = {}; ss_re_replace(re_, t_, w_); }})", vals[1]),
+                    _ => return Err(format!("uses Regex.{name}")),
+                })
+            }
             "#BigInt" => {
                 self.std("big");
                 let bin = |f: &str| format!("({{ SBig a_ = {r}; SBig b_ = {}; {f}; }})", vals.first().cloned().unwrap_or_default());
@@ -1305,6 +1357,7 @@ mod tests {
             cx.std_cty(&Type::con("#StrBuf"), "BU").unwrap();
             cx.std_cty(&Type::con("#Bits"), "BI").unwrap();
             cx.std_cty(&Type::con("#BigInt"), "BG").unwrap();
+            cx.std_cty(&Type::con("#Regex"), "RX").unwrap();
             cx.std(key);
             let src = format!("{PRELUDE}{}{}", cx.defs, cx.protos);
             let path = std::env::temp_dir().join(format!("sspur_std_rt_{}_{key}.c", std::process::id()));

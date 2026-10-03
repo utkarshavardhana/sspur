@@ -26,6 +26,7 @@ pub enum NVal {
     Bits(i64, Vec<u64>),
     Big(crate::bigint::Big),
     Dec(crate::bigint::Big, i64),
+    Regex(String),
 }
 
 #[derive(Clone, Default)]
@@ -82,7 +83,7 @@ impl Layouts {
             }
             (NVal::Bool(b), _) => out.push(i64::from(*b)),
             (NVal::Float(x), _) => out.push(x.to_bits() as i64),
-            (NVal::Str(s), _) => {
+            (NVal::Str(s) | NVal::Regex(s), _) => {
                 let b = s.as_bytes();
                 out.push(b.len() as i64);
                 for chunk in b.chunks(8) {
@@ -204,6 +205,10 @@ impl Layouts {
                         NVal::Res(Err(Box::new(self.decode(words, pos, &a[1])?)))
                     }
                 }
+                "#Regex" => match self.decode(words, pos, &Type::str())? {
+                    NVal::Str(s) => NVal::Regex(s),
+                    _ => return None,
+                },
                 "Str" | "#StrBuf" => {
                     let len = next()? as usize;
                     let mut bytes = Vec::with_capacity(len);
@@ -364,6 +369,7 @@ impl fmt::Display for NVal {
             NVal::Time(t) => write!(f, "{}", crate::chrono::iso(*t)),
             NVal::Dur(d) => write!(f, "{}", crate::chrono::dur_str(*d)),
             NVal::Big(b) => write!(f, "{b}"),
+            NVal::Regex(s) => write!(f, "/{s}/"),
             NVal::Dec(m, s) => write!(f, "{}", crate::bigint::dec_str(m, *s)),
             NVal::Bits(n, w) => {
                 let items: Vec<String> = (0..*n).filter(|&i| w[(i / 64) as usize] >> (i % 64) & 1 == 1).map(|i| i.to_string()).collect();

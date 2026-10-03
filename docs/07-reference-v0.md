@@ -219,6 +219,44 @@ An `extern fn` has no body and declares exactly `! ffi`. `from "m"` links `libm`
 
 `sspur bind header.h [--lib L]` prints extern declarations for a C header (parsed by clang) and lists what it skipped in `//` comments. `sspur export-c file.ssp -o libfoo [--shared]` builds `libfoo.a` (or a shared library) plus `libfoo.h`. Each function with `Int`/`F64`/`Bool`/`Str` parameters and result becomes `int32_t foo_f(args..., T* out)`, which returns 0, or 100 for an unhandled error, or a trap code. `foo_last_error()` returns the message, and `foo_free` releases returned strings. See `examples/ffi` and ADR 0014.
 
+## Systems profile (`sys`)
+
+A first line `profile sys` enables owned resources, borrows and raw memory (ADR 0012). Other modules can't use them (`E_PROFILE`).
+
+```
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File) -> Unit ! log
+= log("close {f.fd}")
+
+fn grow(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn run() -> Int ! log
+= do
+  var a = File{fd: 1}
+  grow(&mut a)
+  a.size
+```
+
+| Feature | Rules |
+|---|---|
+| `res type T = {..} drop f` | A record owned by one variable. It moves on use, and `f(x: T) -> Unit` runs when the owner's scope ends: in reverse order, on `return` and on `raise` unwinding, and before `:=` replaces a live value, but not on a trap. `drop(x)` runs it early; `leak(x)` skips it. The dropping function must declare the destructor's effects |
+| `res type T = {..}` | Linear: it must be consumed exactly once (passed on, returned, destructured with `T{a, b} = x`, or `leak(x)`); otherwise `E_RES_LEAK` |
+| Moves | Using a moved value is `E_USE_MOVED`, including in a later loop iteration or after a branch that may have moved it. Resources can't go into lists, tuples, `Opt`, plain records, generic parameters, builtins, lambdas or function values, and can't be matched on. Only a type's destructor can destructure it |
+| Borrows | `p: &T` and `p: &mut T` are parameter types only. Pass `&x` or `&mut x` (`x` must be a `var`); `x.m()` borrows `x` when `m` takes a borrow. `p.f := v` and `p := v` write through `&mut`. Borrows can't be returned, bound, stored or captured, and one call can't take `&mut x` together with another borrow or a move of `x` (`E_BORROW_CONFLICT`) |
+| `x.f := v` | Sugar for `x := x with f := v` (an in-place update) |
+| `Ptr[T]` | Raw memory of `Int`, `F64` or `Bool`: `alloc(n, init)`, `free(p)`, `p.load(i)`, `p.store(i, v)`, `p.offset(n)`, plus `null()` and `p.is_null`. All but the last two perform `unsafe`. Native code does no checks; the interpreter traps on out-of-bounds access, use after free and double free |
+| `unsafe` | Declare `! unsafe`, or discharge it with an `unsafe "reason"` line after the signature (reported as `A_UNSAFE`). Otherwise `E_UNSAFE` |
+| Tasks | A `par` task can't use a resource or borrow from outside it (`E_PAR_SHARE`); move resources between tasks with `c.send(x)` and receive them with `for x in c` |
+
 ## Services
 
 ```

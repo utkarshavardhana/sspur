@@ -292,6 +292,9 @@ fn str_method(name: &str, x: &str, a: Vec<Value>) -> R {
             if n < 0 {
                 return trap("repeat count must be >= 0");
             }
+            if !x.is_empty() && n > (1i64 << 32) / x.len() as i64 {
+                return trap("out of memory");
+            }
             Value::str(&x.repeat(n as usize))
         }
         "to_int" => x.trim().parse::<i64>().map_or(Value::Opt(None), |n| Value::some(Value::Int(n))),

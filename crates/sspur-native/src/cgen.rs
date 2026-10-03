@@ -94,7 +94,7 @@ static size_t gc_take_pages(size_t n) {
         }
     }
     size_t i = gc_next; gc_next += n;
-    if ((gc_next << GC_SHIFT) > GC_REGION) abort();
+    if ((gc_next << GC_SHIFT) > GC_REGION) sspur_trap((Status*)gc_root_ptr, 15, 0, 0, 0);
     return i;
 }
 static void gc_release_page(size_t i) {
@@ -269,6 +269,7 @@ static inline void* sspur_alloc(size_t n) { return gc_alloc(n, 0); }
 static inline void* sspur_alloc_atomic(size_t n) { return gc_alloc(n, 1); }
 typedef struct { int64_t len; void* data; int64_t* hdr; } RawL;
 static RawL raw_alloc_a(int64_t cap, size_t es, int atomic) {
+    if (UNLIKELY(cap > ((int64_t)1 << 32))) sspur_trap((Status*)gc_root_ptr, 15, 0, 0, 0);
     if (cap < 4) cap = 4;
     int64_t* h = (int64_t*)gc_alloc(32 + (size_t)cap * es, atomic);
     h[0] = cap; h[1] = 0; h[2] = atomic; h[3] = 0;
@@ -2356,7 +2357,7 @@ impl<'a> Cx<'a> {
             }
             "repeat" => {
                 let n = arg(self, 0)?;
-                format!("({{ Str s_ = {r}; int64_t n_ = {n}; if (UNLIKELY(n_ < 0)) TRAPV({T_REPEAT}, 0, 0); str_repeat(s_, n_); }})")
+                format!("({{ Str s_ = {r}; int64_t n_ = {n}; if (UNLIKELY(n_ < 0)) TRAPV({T_REPEAT}, 0, 0); if (UNLIKELY(s_.len && n_ > (((int64_t)1 << 32) / s_.len))) TRAPV(15, 0, 0); str_repeat(s_, n_); }})")
             }
             "is_alpha" => format!("({{ Str s_ = {r}; host_.str_class(1, s_.p, s_.len); }})"),
             "split" | "chars" | "words" => {

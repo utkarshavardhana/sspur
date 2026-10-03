@@ -433,6 +433,7 @@ impl Interp {
             },
             ExprKind::Unary(UnOp::Not, x) => Ok(Value::Bool(!self.truthy(x, env)?)),
             ExprKind::Range(a, b) => match (self.eval(a, env)?, self.eval(b, env)?) {
+                (Value::Int(a), Value::Int(b)) if b as i128 - a as i128 > 1 << 32 => trap("out of memory"),
                 (Value::Int(a), Value::Int(b)) => Ok(Value::list((a..b).map(Value::Int).collect())),
                 _ => trap("range bounds must be Int"),
             },

@@ -31,6 +31,7 @@ pub(crate) const T_MSG: i64 = 12;
 pub(crate) const T_REPEAT: i64 = 13;
 pub(crate) const T_RAISE: i64 = 100;
 pub(crate) const T_GUESS: i64 = 14;
+pub(crate) const T_OOM: i64 = 15;
 
 #[repr(C)]
 struct Status {
@@ -313,6 +314,7 @@ impl Compiled {
             (T_UNWRAP, _) => "unwrapped none with .get; check with is_some, match on some/none, or use .or(default)".into(),
             (T_NOMATCH, _) => "no match arm".into(),
             (T_REPEAT, _) => "repeat count must be >= 0".into(),
+            (T_OOM, _) => "out of memory".into(),
             (T_GUESS, _) => format!("guess confidence {} is outside [0, 1]", f64::from_bits(st.value as u64)),
             (T_MSG, _) if !st.rbuf.is_null() => {
                 let bytes = unsafe { std::slice::from_raw_parts(st.rbuf as *const u8, st.rlen as usize) };

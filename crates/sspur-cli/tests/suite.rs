@@ -161,3 +161,58 @@ test big_ok = prime_count(2000000) == 148933 and first_fault(2000000, -1, -1) ==
     std::fs::remove_file(&path).ok();
     assert!(outputs.iter().all(|o| *o == outputs[0]));
 }
+
+#[test]
+fn concurrency_failures_are_identical_in_both_tiers() {
+    if std::process::Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let src = "type E = Boom{n: Int}
+fn waiter(c: Chan[Int]) -> Int ! conc
+= c.recv.or(-1)
+fn dead() -> Int ! conc
+= do
+  c = chan()
+  (a, b) = par(waiter(c), waiter(c))
+  a + b
+fn failing(n: Int) -> Int ! fail[E]
+= if n > 2 then raise Boom{n} else n
+fn fails() -> Int ! fail[E]
+= do
+  (a, b, c) = par(failing(1), failing(5), failing(3))
+  a + b + c
+fn trapper(c: Chan[Int]) -> Int ! conc
+= do
+  c.send(1)
+  1 / 0
+fn mixed() -> Int ! conc
+= do
+  c = chan()
+  (a, b) = par(waiter(c) + waiter(c), trapper(c))
+  a + b
+fn closed() -> Unit ! conc
+= do
+  c = chan()
+  c.close
+  c.send(1)
+test t_dead = dead() == 0
+test t_fail = catch fails() == 0
+  | Boom{n} => n == 5
+test t_mixed = mixed() == 0
+test t_closed = closed() == ()
+";
+    let path = std::env::temp_dir().join(format!("sspur_conc_fail_{}.ssp", std::process::id()));
+    std::fs::write(&path, src).unwrap();
+    let expected = ["FAIL  t_dead: deadlock: every task is blocked on recv", "FAIL  t_mixed: division by zero", "FAIL  t_closed: send on a closed channel", "1 passed, 3 failed"];
+    let mut outputs = Vec::new();
+    for mode in ["--interp", "--release"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_sspur")).arg("test").arg(mode).arg(&path).output().unwrap();
+        let out = String::from_utf8(out.stdout).unwrap();
+        for line in expected {
+            assert!(out.lines().any(|l| l == line), "{mode}: missing {line:?} in\n{out}");
+        }
+        outputs.push(out);
+    }
+    std::fs::remove_file(&path).ok();
+    assert_eq!(outputs[0], outputs[1]);
+}

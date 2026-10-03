@@ -108,7 +108,7 @@ impl Interp {
         };
         let depth = self.depth.get();
         let results: Vec<RefCell<Option<R>>> = (0..n).map(|_| RefCell::new(None)).collect();
-        let spawned = std::thread::scope(|sc| {
+        std::thread::scope(|sc| {
             for (k, &id) in ids.iter().enumerate() {
                 let job = Unsafe((self as *const Interp, body as *const dyn Fn(usize) -> R, &results[k] as *const RefCell<Option<R>>));
                 let r = std::thread::Builder::new().stack_size(TASK_STACK).spawn_scoped(sc, move || {
@@ -152,7 +152,6 @@ impl Interp {
             }
             self.switch(Some(me));
         });
-        let _: () = spawned;
         let mut out = Vec::with_capacity(n);
         let mut first_err: Option<Ctrl> = None;
         let mut deadlock: Option<Ctrl> = None;

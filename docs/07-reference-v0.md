@@ -85,7 +85,7 @@ fn name[A, e](p: A, f: A -> A ! e) -> A ! e
   ```
   Patterns: `_`, a name, literals, tuples `(a, 0)`, `Ctor`, `Ctor{field, field: pat}`, `some(p)`, `none`, `ok(p)`, `err(p)`. A non-exhaustive match is a compile error.
 - `return e` exits the function early (not allowed inside lambdas).
-- `par(a, b)` evaluates both and returns the tuple `(a, b)`.
+- `par(a, b, ...)` runs each argument as a concurrent task and returns the tuple of results (see Concurrency).
 - `?` or `?name` is a typed hole. The compiler reports its expected type and the in-scope values that fit.
 
 ## Effects
@@ -98,6 +98,7 @@ Every function declares what it does after `!`. Undeclared effects are compile e
 | `fail[E]` | `raise e` where `e: E`, or calling a function with `fail[E]` |
 | Effect row `e` | Calling a function-typed parameter whose type has `! e` |
 | `div` | A `while` loop (the loop may not terminate) |
+| `conc` | Creating or using an `Atomic[Int]` or a `Chan[T]` |
 | A declared effect, e.g. `ask` | Calling one of its operations, e.g. `ask()` |
 | `yield[T]` | `yield(x)` where `x: T` (built in, for generators) |
 
@@ -140,6 +141,46 @@ fn run() -> Int
 - Effects: a `handle` must cover every operation of each effect it names, and it removes those effects from `e`'s row. The arms' own effects belong to the surrounding function: an arm runs outside its own handler, so an operation performed in an arm goes to the next enclosing handler.
 - `log` is an ordinary effect with the operation `log(msg)`, so `handle e | log(m) => do; logs := logs.push(m); resume()` captures output.
 - `raise` in an arm leaves the whole `handle` (a `catch` inside `e` doesn't see it), and errors raised by `e` pass through. `return` is not allowed in an arm.
+
+## Concurrency
+
+```
+fn add_range(total: Atomic[Int], lo: Int, hi: Int) -> Unit ! conc
+= total.add((lo..hi).sum)
+
+fn sum_to(n: Int) -> Int ! conc
+= do
+  total = atomic(0)
+  for w in par(0..4)
+    add_range(total, w * n / 4, (w + 1) * n / 4)
+  total.load
+
+fn produce(out: Chan[Int], n: Int) -> Unit ! conc
+= do
+  for i in 0..n
+    out.send(i)
+  out.close
+
+fn drain(c: Chan[Int]) -> Int ! conc
+= do
+  var s = 0
+  for x in c
+    s := s + x
+  s
+
+fn pipe(n: Int) -> Int ! conc
+= do
+  c = chan()
+  (_, s) = par(produce(c, n), drain(c))
+  s
+```
+
+- `par(e1, ..., en)` (at least two) runs each argument as a task; `for x in par(xs)` runs the body once per element, each as a task. Both wait for every task before continuing, so tasks never outlive their scope.
+- `atomic(v)` makes an `Atomic[Int]` with `.load`, `.store(v)`, `.add(d)` (traps on overflow), `.cas(expect, value)` (returns whether it swapped). All operations are sequentially consistent.
+- `chan()` makes an unbounded `Chan[T]` with `.send(x)`, `.recv` (an `Opt[T]`: `none` once closed and empty), `.close`, and `for x in c`, which runs until the channel is closed and empty. Sending on a closed channel traps.
+- Tasks share only immutable values, atomics and channels. A task cannot assign a variable declared outside it (`E_PAR_RACE`), use a function value from outside it (`E_PAR_SHARE`; call top-level functions by name instead), send functions on a channel, perform `log` or handled effects (`E_PAR_EFFECT`), or `return` (`E_RETURN_IN_PAR`).
+- If tasks fail, the leftmost task's error or trap wins, after all tasks finish. When every task is blocked in `recv`, the blocked receivers trap with `deadlock: every task is blocked on recv`.
+- Native code runs each task on its own thread; the interpreter runs one task at a time and switches when a task blocks. Use `par` for coarse tasks; pure `map`/`filter` pipelines parallelize automatically.
 
 ## Generators
 

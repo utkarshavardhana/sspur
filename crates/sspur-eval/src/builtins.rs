@@ -3,7 +3,7 @@ use crate::{trap, Ctrl, Interp, R};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-const GLOBALS: &[&str] = &["log", "some", "ok", "err", "empty_map", "min", "max", "secret", "pii", "untrusted", "guess"];
+const GLOBALS: &[&str] = &["log", "some", "ok", "err", "empty_map", "min", "max", "secret", "pii", "untrusted", "guess", "atomic", "chan"];
 
 pub fn is_global(n: &str) -> bool {
     GLOBALS.contains(&n)
@@ -42,6 +42,8 @@ impl Interp {
             "ok" => Value::Res(Ok(Rc::new(a.remove(0)))),
             "err" => Value::Res(Err(Rc::new(a.remove(0)))),
             "empty_map" => Value::Map(Rc::new(BTreeMap::new())),
+            "atomic" => self.new_atomic(int(&a[0])?),
+            "chan" => self.new_chan(),
             "secret" => Value::Wrap("Secret".into(), Rc::new(a.remove(0))),
             "pii" => Value::Wrap("Pii".into(), Rc::new(a.remove(0))),
             "untrusted" => Value::Wrap("Untrusted".into(), Rc::new(a.remove(0))),
@@ -83,6 +85,34 @@ impl Interp {
                 _ => trap(format!("no method '{name}' on Res")),
             },
             Value::Map(m) => map_method(name, &m, a),
+            Value::Atomic(c) => Ok(match name {
+                "load" => Value::Int(c.v.get()),
+                "store" => {
+                    c.v.set(int(&a[0])?);
+                    Value::Unit
+                }
+                "add" => match c.v.get().checked_add(int(&a[0])?) {
+                    Some(v) => {
+                        c.v.set(v);
+                        Value::Unit
+                    }
+                    None => return trap("integer overflow"),
+                },
+                "cas" => {
+                    let ok = c.v.get() == int(&a[0])?;
+                    if ok {
+                        c.v.set(int(&a[1])?);
+                    }
+                    Value::Bool(ok)
+                }
+                _ => return trap(format!("no method '{name}' on Atomic")),
+            }),
+            Value::Chan(c) => match name {
+                "send" => self.chan_send(&c, a[0].clone()),
+                "recv" => Ok(Value::Opt(self.chan_recv(&c)?.map(Rc::new))),
+                "close" => self.chan_close(&c),
+                _ => trap(format!("no method '{name}' on Chan")),
+            },
             Value::Wrap(kind, inner) => match name {
                 "map" => Ok(Value::Wrap(kind, Rc::new(self.apply(&a[0], vec![(*inner).clone()])?))),
                 "check" => self.apply(&a[0], vec![(*inner).clone()]),

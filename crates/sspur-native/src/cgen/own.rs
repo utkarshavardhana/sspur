@@ -280,7 +280,7 @@ impl Cx<'_> {
         let body = self.apply(f, vec![(x.clone(), Type::int())]);
         self.know.facts.truncate(m);
         let body = body?;
-        Ok(format!("({{ int64_t s_ = {av}; int64_t e_ = {bv}; int64_t n_ = e_ > s_ ? e_ - s_ : 0; RawL r_ = raw_alloc(n_, sizeof({oc})); {oc}* d_ = ({oc}*)r_.data; for (int64_t {i} = 0; {i} < n_; {i}++) {{ int64_t {x} = s_ + {i}; d_[{i}] = {body}; }} r_.hdr[1] = n_; ({out}){{n_, d_, r_.hdr}}; }})"))
+        Ok(format!("({{ int64_t s_ = {av}; int64_t re_ = {bv}; int64_t n_ = re_ > s_ ? re_ - s_ : 0; RawL r_ = raw_alloc(n_, sizeof({oc})); {oc}* d_ = ({oc}*)r_.data; for (int64_t {i} = 0; {i} < n_; {i}++) {{ int64_t {x} = s_ + {i}; d_[{i}] = {body}; }} r_.hdr[1] = n_; ({out}){{n_, d_, r_.hdr}}; }})"))
     }
 
     pub(super) fn proven_fields(&mut self, e: &Expr, owner: &str, fields: &[(String, Expr)]) -> HashSet<String> {

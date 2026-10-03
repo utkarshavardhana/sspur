@@ -7,6 +7,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod conc;
 mod fuse;
 mod lower;
 mod own;
@@ -30,6 +31,8 @@ typedef struct { int64_t code, func, clause, value, limit; int64_t* rbuf; int64_
 static _Thread_local jmp_buf* sspur_jb;
 static void __attribute__((noinline, cold, noreturn)) sspur_trap(Status* st, int64_t c, int64_t f, int64_t cl, int64_t v) { st->code = c; st->func = f; st->clause = cl; st->value = v; longjmp(*sspur_jb, 1); }
 #define TRAPV(c, cl, val) sspur_trap(st, (c), FIDX, (cl), (int64_t)(val))
+static int64_t ss_live;
+#define SS_MT() UNLIKELY(__atomic_load_n(&ss_live, __ATOMIC_RELAXED))
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
@@ -79,7 +82,7 @@ static void* par_loop(void* a) {
     pthread_mutex_unlock(&par_mu);
     return 0;
 }
-static void __attribute__((noinline, cold)) par_init(void) {
+static void par_init_once(void) {
     const char* e = getenv("SSPUR_THREADS");
     long n = e && *e ? strtol(e, 0, 10) : sysconf(_SC_NPROCESSORS_ONLN);
     if (n < 1) n = 1;
@@ -90,6 +93,7 @@ static void __attribute__((noinline, cold)) par_init(void) {
     pthread_attr_destroy(&at);
     par_nt = k;
 }
+static void __attribute__((noinline, cold)) par_init(void) { static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, par_init_once); }
 static __attribute__((destructor)) void par_fini(void) {
     if (par_nt <= 1 || __atomic_load_n(&par_busy, __ATOMIC_ACQUIRE)) return;
     pthread_mutex_lock(&par_mu); par_quit = 1; pthread_cond_broadcast(&par_cv); pthread_mutex_unlock(&par_mu);
@@ -310,9 +314,9 @@ static void* gc_alloc_large(size_t n, int atomic) {
     gc_since += np << GC_SHIFT;
     return gc_lo + (i << GC_SHIFT);
 }
-static void* __attribute__((noinline)) gc_alloc_slow(size_t n, int atomic) {
+static void* gc_alloc_slow1(size_t n, int atomic) {
     if (!gc_ready) gc_init();
-    if (n > 32768) { if (gc_since > gc_threshold && gc_depth > 0) gc_collect(); return gc_alloc_large(n, atomic); }
+    if (n > 32768) { if (gc_since > gc_threshold && gc_depth > 0 && !ss_live) gc_collect(); return gc_alloc_large(n, atomic); }
     int cls = gc_class_of[(n + 7) >> 3];
     for (;;) {
         GcCursor* k = &gc_cur[atomic][cls];
@@ -327,7 +331,7 @@ static void* __attribute__((noinline)) gc_alloc_slow(size_t n, int atomic) {
             return f;
         }
         gc_flush_one(atomic, cls);
-        if (gc_since > gc_threshold && gc_depth > 0) { gc_collect(); continue; }
+        if (gc_since > gc_threshold && gc_depth > 0 && !ss_live) { gc_collect(); continue; }
         if (gc_partial_n[atomic][cls]) {
             size_t pi = gc_partial[atomic][cls][--gc_partial_n[atomic][cls]];
             GcPage* m = gc_meta[pi];
@@ -341,8 +345,16 @@ static void* __attribute__((noinline)) gc_alloc_slow(size_t n, int atomic) {
         gc_new_page(atomic, cls);
     }
 }
+static pthread_mutex_t gc_mu = PTHREAD_MUTEX_INITIALIZER;
+static void* __attribute__((noinline)) gc_alloc_slow(size_t n, int atomic) {
+    if (!SS_MT()) return gc_alloc_slow1(n, atomic);
+    pthread_mutex_lock(&gc_mu);
+    void* r = gc_alloc_slow1(n, atomic);
+    pthread_mutex_unlock(&gc_mu);
+    return r;
+}
 static inline __attribute__((always_inline)) void* gc_alloc(size_t n, int atomic) {
-    if (n && n <= 32768) {
+    if (n && n <= 32768 && !SS_MT()) {
         int cls = gc_class_of[(n + 7) >> 3];
         GcCursor* k = &gc_cur[atomic][cls];
         uint32_t sz = gc_sizes[cls];
@@ -373,15 +385,16 @@ static RawL raw_alloc_a(int64_t cap, size_t es, int atomic) {
 }
 static RawL raw_alloc(int64_t cap, size_t es) { return raw_alloc_a(cap, es, 0); }
 static inline int64_t raw_offset(RawL l, size_t es) { return ((char*)l.data - (char*)(l.hdr + 4)) / (int64_t)es; }
+static int raw_claim(RawL l, int64_t extra, size_t es) { int64_t e = raw_offset(l, es) + l.len; return __atomic_compare_exchange_n(&l.hdr[1], &e, e + extra, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED); }
 static inline __attribute__((always_inline)) RawL raw_reserve(RawL l, int64_t extra, size_t es) {
-    if (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0]) return l;
+    if (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0] && (!SS_MT() || raw_claim(l, extra, es))) return l;
     RawL n = raw_alloc_a((l.len + extra) * 2, es, l.hdr ? (int)l.hdr[2] : 0);
     if (l.len) memcpy(n.data, l.data, (size_t)l.len * es);
     n.len = l.len; n.hdr[1] = l.len;
     return n;
 }
 static RawL raw_reserve_exact(RawL l, int64_t extra, size_t es) {
-    if (extra <= 0 || (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0])) return l;
+    if (extra <= 0 || (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0] && (!SS_MT() || raw_claim(l, extra, es)))) return l;
     RawL n = raw_alloc_a(l.len + extra, es, l.hdr ? (int)l.hdr[2] : 0);
     if (l.len) memcpy(n.data, l.data, (size_t)l.len * es);
     n.len = l.len; n.hdr[1] = l.len;
@@ -426,12 +439,107 @@ static RawL raw_sorted(RawL l, size_t es, int (*cmp)(const void*, const void*)) 
     if (c.len > 1) raw_msort((char*)c.data, c.len, es, cmp, (char*)sspur_alloc((size_t)c.len * es));
     return c;
 }
+typedef struct SsTask { void (*run)(struct SsTask*); void* clo; void* out; int64_t idx; Status st; int64_t depth; int64_t fail; struct SsGroup* g; pthread_t th; int started; } SsTask;
+typedef struct SsGroup { int64_t remaining; int waiting; pthread_cond_t cv; } SsGroup;
+typedef struct SsWait { struct SsWait* prev; struct SsWait* next; void* ch; int woken, dead; pthread_cond_t cv; } SsWait;
+typedef struct { int64_t v, id; } SsAtom;
+typedef struct { int64_t id, es, head, len, cap, closed; char* buf; } SsChan;
+static pthread_mutex_t ss_mu = PTHREAD_MUTEX_INITIALIZER;
+static int64_t ss_blocked, ss_joining, ss_ids;
+static SsWait ss_wq = {&ss_wq, &ss_wq, 0, 0, 0};
+static void ss_set_live(int64_t d) { __atomic_store_n(&ss_live, ss_live + d, __ATOMIC_RELAXED); }
+static void ss_wake(SsWait* w, int dead) { w->prev->next = w->next; w->next->prev = w->prev; ss_blocked--; w->woken = 1; w->dead = dead; pthread_cond_signal(&w->cv); }
+static void ss_check(void) { if (ss_blocked > 0 && ss_blocked + ss_joining == ss_live + 1) while (ss_wq.next != &ss_wq) ss_wake(ss_wq.next, 1); }
+static void* ss_thread(void* a) {
+    SsTask* t = (SsTask*)a;
+    t->run(t);
+    pthread_mutex_lock(&ss_mu);
+    SsGroup* g = t->g;
+    if (--g->remaining == 0 && g->waiting) { g->waiting = 0; ss_joining--; pthread_cond_signal(&g->cv); }
+    ss_set_live(-1);
+    ss_check();
+    pthread_mutex_unlock(&ss_mu);
+    return 0;
+}
+static int64_t __attribute__((noinline)) ss_par(SsTask* ts, int64_t n, Status* st, int64_t depth) {
+    if (n <= 0) return 0;
+    SsGroup g; g.remaining = n - 1; g.waiting = 0; pthread_cond_init(&g.cv, 0);
+    for (int64_t i = 0; i < n; i++) { memset(&ts[i].st, 0, sizeof(Status)); ts[i].st.limit = st->limit; ts[i].depth = depth; ts[i].fail = 0; ts[i].g = &g; ts[i].started = 0; }
+    if (n > 1) {
+        pthread_mutex_lock(&ss_mu); ss_set_live(n - 1); pthread_mutex_unlock(&ss_mu);
+        pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, (size_t)1 << 29);
+        for (int64_t i = 1; i < n; i++) {
+            if (pthread_create(&ts[i].th, &at, ss_thread, &ts[i]) == 0) { ts[i].started = 1; continue; }
+            ts[i].fail = 1; ts[i].st.code = 15;
+            pthread_mutex_lock(&ss_mu); g.remaining--; ss_set_live(-1); pthread_mutex_unlock(&ss_mu);
+        }
+        pthread_attr_destroy(&at);
+    }
+    jmp_buf* saved = sspur_jb;
+    ts[0].run(&ts[0]);
+    sspur_jb = saved;
+    pthread_mutex_lock(&ss_mu);
+    if (g.remaining > 0) { g.waiting = 1; ss_joining++; ss_check(); while (g.waiting) pthread_cond_wait(&g.cv, &ss_mu); }
+    pthread_mutex_unlock(&ss_mu);
+    for (int64_t i = 1; i < n; i++) if (ts[i].started) pthread_join(ts[i].th, 0);
+    pthread_cond_destroy(&g.cv);
+    int64_t pick = -1;
+    for (int64_t i = 0; i < n && pick < 0; i++) if (ts[i].fail && ts[i].st.code != 16) pick = i;
+    for (int64_t i = 0; i < n && pick < 0; i++) if (ts[i].fail) pick = i;
+    for (int64_t i = 0; i < n; i++) if (i != pick && ts[i].st.rbuf) free(ts[i].st.rbuf);
+    if (pick < 0) return 0;
+    Status* c = &ts[pick].st;
+    if (ts[pick].fail == 2) { st->err = c->err; st->err_type = c->err_type; return 100; }
+    st->code = c->code; st->func = c->func; st->clause = c->clause; st->value = c->value; st->rbuf = c->rbuf; st->rlen = c->rlen;
+    longjmp(*sspur_jb, 1);
+}
+static SsAtom* ss_atomic(int64_t v) { SsAtom* a = (SsAtom*)sspur_alloc_atomic(sizeof(SsAtom)); a->v = v; a->id = __atomic_add_fetch(&ss_ids, 1, __ATOMIC_RELAXED); return a; }
+static SsChan* ss_chan(int64_t es) { SsChan* c = (SsChan*)sspur_alloc(sizeof(SsChan)); memset(c, 0, sizeof(SsChan)); c->es = es ? es : 1; c->id = __atomic_add_fetch(&ss_ids, 1, __ATOMIC_RELAXED); return c; }
+static void ss_send(SsChan* c, const void* v, Status* st) {
+    pthread_mutex_lock(&ss_mu);
+    if (c->closed) { pthread_mutex_unlock(&ss_mu); sspur_trap(st, 17, 0, 0, 0); }
+    if (c->len == c->cap) {
+        int64_t nc = c->cap ? c->cap * 2 : 8;
+        char* nb = (char*)sspur_alloc((size_t)(nc * c->es));
+        for (int64_t i = 0; i < c->len; i++) memcpy(nb + i * c->es, c->buf + ((c->head + i) % c->cap) * c->es, (size_t)c->es);
+        c->buf = nb; c->head = 0; c->cap = nc;
+    }
+    memcpy(c->buf + ((c->head + c->len) % c->cap) * c->es, v, (size_t)c->es);
+    c->len++;
+    for (SsWait* w = ss_wq.next; w != &ss_wq; w = w->next) if (w->ch == c) { ss_wake(w, 0); break; }
+    pthread_mutex_unlock(&ss_mu);
+}
+static int64_t ss_recv(SsChan* c, void* out, Status* st) {
+    pthread_mutex_lock(&ss_mu);
+    for (;;) {
+        if (c->len) { memcpy(out, c->buf + c->head * c->es, (size_t)c->es); c->head = (c->head + 1) % c->cap; c->len--; pthread_mutex_unlock(&ss_mu); return 1; }
+        if (c->closed) { pthread_mutex_unlock(&ss_mu); return 0; }
+        SsWait w; w.ch = c; w.woken = 0; w.dead = 0; pthread_cond_init(&w.cv, 0);
+        w.prev = ss_wq.prev; w.next = &ss_wq; ss_wq.prev->next = &w; ss_wq.prev = &w; ss_blocked++;
+        ss_check();
+        while (!w.woken) pthread_cond_wait(&w.cv, &ss_mu);
+        pthread_cond_destroy(&w.cv);
+        if (w.dead) { pthread_mutex_unlock(&ss_mu); sspur_trap(st, 16, 0, 0, 0); }
+    }
+}
+static void ss_close(SsChan* c) {
+    pthread_mutex_lock(&ss_mu);
+    c->closed = 1;
+    for (SsWait* w = ss_wq.next; w != &ss_wq;) { SsWait* nx = w->next; if (w->ch == c) ss_wake(w, 0); w = nx; }
+    pthread_mutex_unlock(&ss_mu);
+}
+static inline int64_t ss_add(SsAtom* a, int64_t d, Status* st) {
+    int64_t o = __atomic_load_n(&a->v, __ATOMIC_SEQ_CST), r;
+    do { if (UNLIKELY(__builtin_add_overflow(o, d, &r))) sspur_trap(st, 1, 0, 0, 0); } while (!__atomic_compare_exchange_n(&a->v, &o, r, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+    return 0;
+}
+static inline int64_t ss_cas(SsAtom* a, int64_t e, int64_t v) { return __atomic_compare_exchange_n(&a->v, &e, v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); }
 #define TO_RAW(l) ((RawL){(l).len, (void*)(l).data, (l).hdr})
 static inline int64_t dbits(double x) { int64_t b; memcpy(&b, &x, 8); return b; }
 static inline double bitsd(int64_t b) { double x; memcpy(&x, &b, 8); return x; }
 static inline int64_t dkey(double x) { int64_t b = dbits(x); b ^= (int64_t)(((uint64_t)(b >> 63)) >> 1); return b; }
 static uint64_t sspur_prio_state = 0x9E3779B97F4A7C15ULL;
-static inline uint64_t sspur_prio(void) { uint64_t z = (sspur_prio_state += 0x9E3779B97F4A7C15ULL); z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL; z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL; return z ^ (z >> 31); }
+static inline uint64_t sspur_prio(void) { uint64_t z = SS_MT() ? __atomic_add_fetch(&sspur_prio_state, 0x9E3779B97F4A7C15ULL, __ATOMIC_RELAXED) : (sspur_prio_state += 0x9E3779B97F4A7C15ULL); z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL; z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL; return z ^ (z >> 31); }
 static inline uint64_t hmix(uint64_t h) { h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL; h ^= h >> 33; return h; }
 static inline uint64_t hash_I(int64_t v) { return hmix((uint64_t)v); }
 static inline int cmp_I(int64_t a, int64_t b) { return (a > b) - (a < b); }
@@ -791,6 +899,9 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
                 if params.iter().chain([&ret]).any(has_fn) {
                     continue;
                 }
+                if params.iter().chain([&ret]).any(|t| conc::opaque(&cx.layouts, t)) {
+                    continue;
+                }
                 entries.push_str(&cx.entries(&f.name, &params, &ret, scalar)?);
             }
             entries.push_str(&cx.enc_err_fn()?);
@@ -812,7 +923,7 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
             src.push_str(&bodies);
             src.push_str(&entries);
             src.push_str(&cx.helpers_late);
-            plan_fns.retain(|_, (p, r, _)| !p.iter().chain([&*r]).any(has_fn));
+            plan_fns.retain(|_, (p, r, _)| !p.iter().chain([&*r]).any(|t| has_fn(t) || conc::opaque(&cx.layouts, t)));
             let src = cx.atomize(&src);
             let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone() };
             return Ok((src, plan));
@@ -833,7 +944,7 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
 }
 
 fn precheck(f: &FnDef) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail") && !f.tparams.iter().any(|p| p.name == e.name)) {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "conc") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())
@@ -1080,6 +1191,8 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if n == "Map" => format!("M_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
             Type::Con(n, a) if matches!(n.as_str(), "Secret" | "Pii" | "Untrusted") => format!("W{}_{}", &n[..1], self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Guess" => format!("G_{}", self.mangle(&a[0])?),
+            Type::Con(n, a) if n == "Atomic" => format!("AT_{}", self.mangle(&a[0])?),
+            Type::Con(n, a) if n == "Chan" => format!("CH_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n) => format!("N_{n}"),
             Type::Con(n, a) if self.layouts.records.contains_key(n) || self.layouts.sums.contains_key(n) => {
                 let kind = if self.layouts.records.contains_key(n) { "R" } else { "S" };
@@ -1182,6 +1295,8 @@ impl<'a> Cx<'a> {
             Type::Con(n, _) if matches!(n.as_str(), "Int" | "Bool" | "Unit") => Ok("int64_t".into()),
             Type::Con(n, _) if n == "F64" => Ok("double".into()),
             Type::Con(n, _) if n == "Str" => Ok("Str".into()),
+            Type::Con(n, _) if n == "Atomic" => Ok("SsAtom*".into()),
+            Type::Con(n, _) if n == "Chan" => Ok("SsChan*".into()),
             Type::Con(n, a) if n == "List" => {
                 self.fwd_decl(&m);
                 if self.complete.insert(m.clone()) {
@@ -1341,6 +1456,7 @@ impl<'a> Cx<'a> {
                 let ec = self.helper_cmp(&a[0])?;
                 write!(body, "int64_t n = a.len < b.len ? a.len : b.len; for (int64_t i = 0; i < n; i++) {{ int c = {ec}(a.data[i], b.data[i]); if (c) return c; }} return cmp_I(a.len, b.len);").unwrap();
             }
+            Type::Con(n, _) if n == "Atomic" || n == "Chan" => body.push_str("return cmp_I(a->id, b->id);"),
             Type::Con(n, a) if n == "Guess" => {
                 let ec = self.helper_cmp(&a[0])?;
                 write!(body, "int c = {ec}(a.v, b.v); if (c) return c; return cmp_D(a.conf, b.conf);").unwrap();
@@ -1787,7 +1903,7 @@ impl<'a> Cx<'a> {
     }
 
     fn may_raise(&self, name: &str) -> bool {
-        self.fn_def(name).is_none_or(|f| f.effects.iter().any(|e| !matches!(e.name.as_str(), "log" | "div")))
+        self.fn_def(name).is_none_or(|f| f.effects.iter().any(|e| !matches!(e.name.as_str(), "log" | "div" | "conc")))
     }
 
     fn fn_def(&self, name: &str) -> Option<&FnDef> {
@@ -2046,6 +2162,10 @@ impl<'a> Cx<'a> {
                     return self.call_closure(&fv, &ft, vals);
                 }
                 let ExprKind::Name(n) = &f.kind else { unreachable!() };
+                if !self.check.fn_types.contains_key(n)
+                    && let Some(code) = self.conc_global(n, args, &t)? {
+                        return Ok(code);
+                    }
                 match n.as_str() {
                     "empty_map" => Ok(format!("(({}){{0}})", self.cty(&t)?)),
                     "secret" | "pii" | "untrusted" => self.expr(&args[0]),
@@ -2153,7 +2273,7 @@ impl<'a> Cx<'a> {
             ExprKind::Range(a, b) => {
                 let (av, bv) = (self.expr(a)?, self.expr(b)?);
                 let lc = self.cty(&t)?;
-                Ok(format!("({{ int64_t s_ = {av}; int64_t e_ = {bv}; int64_t n_ = e_ > s_ ? e_ - s_ : 0; RawL r_ = raw_alloc(n_, 8); int64_t* d_ = (int64_t*)r_.data; for (int64_t i_ = 0; i_ < n_; i_++) d_[i_] = s_ + i_; r_.len = n_; r_.hdr[1] = n_; ({lc}){{n_, d_, r_.hdr}}; }})"))
+                Ok(format!("({{ int64_t s_ = {av}; int64_t re_ = {bv}; int64_t n_ = re_ > s_ ? re_ - s_ : 0; RawL r_ = raw_alloc(n_, 8); int64_t* d_ = (int64_t*)r_.data; for (int64_t i_ = 0; i_ < n_; i_++) d_[i_] = s_ + i_; r_.len = n_; r_.hdr[1] = n_; ({lc}){{n_, d_, r_.hdr}}; }})"))
             }
             ExprKind::If(c, a, b) => {
                 let cv = self.expr(c)?;
@@ -2210,7 +2330,8 @@ impl<'a> Cx<'a> {
                 write!(s, "r_.hdr[1] = {n}; ({lc}){{{n}, d_, r_.hdr}}; }})", n = xs.len()).unwrap();
                 Ok(s)
             }
-            ExprKind::Tuple(xs) | ExprKind::Par(xs) => {
+            ExprKind::Par(xs) => self.par_tasks(xs, &t),
+            ExprKind::Tuple(xs) => {
                 let tc = self.cty(&t)?;
                 let mut s = String::from("({ ");
                 let mut names = Vec::new();
@@ -2289,6 +2410,8 @@ impl<'a> Cx<'a> {
             _ if is(t, "Unit") => "sb_put(b, \"()\", 2);".to_string(),
             _ if is(t, "F64") => "sb_f64(b, v);".to_string(),
             _ if is(t, "Str") => "if (q) sb_strq(b, v); else sb_put(b, v.p, v.len);".to_string(),
+            Type::Con(n, _) if n == "Atomic" => "sb_put(b, \"<atomic>\", 8);".to_string(),
+            Type::Con(n, _) if n == "Chan" => "sb_put(b, \"<chan>\", 6);".to_string(),
             Type::Con(n, a) if n == "List" => {
                 let e = self.helper_show(&a[0])?;
                 format!("sb_put(b, \"[\", 1); for (int64_t i = 0; i < v.len; i++) {{ if (i) sb_put(b, \", \", 2); {e}(b, v.data[i], 1); }} sb_put(b, \"]\", 1);")
@@ -2642,6 +2765,7 @@ impl<'a> Cx<'a> {
                 let e = self.helper_hash(&a[0])?;
                 write!(body, "for (int64_t i = 0; i < v.len; i++) h = hmix(h * 31 + {e}(v.data[i])); h = hmix(h ^ (uint64_t)v.len);").unwrap();
             }
+            Type::Con(n, _) if n == "Atomic" || n == "Chan" => body.push_str("h = hash_I(v->id);"),
             Type::Con(n, a) if n == "Opt" => {
                 let e = self.helper_hash(&a[0])?;
                 write!(body, "h = v.some ? hmix(11 + {e}(v.v)) : 3;").unwrap();
@@ -2798,6 +2922,9 @@ impl<'a> Cx<'a> {
         let r = self.expr(recv)?;
         if name == "str" {
             return self.show_str(&r, &rt);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "Atomic" || n == "Chan") {
+            return self.conc_method(&r, &rt, name, args, t);
         }
         if is(&rt, "Str") {
             return self.str_method(&r, name, args, t);
@@ -3378,6 +3505,13 @@ impl<'a> Cx<'a> {
                 Ok(format!("while ({cv}) {{ {poll}(void)({}); }} ", b?))
             }
             Stmt::For(p, it, body) => {
+                if let ExprKind::Par(src) = &it.kind
+                    && src.len() == 1 {
+                        return self.par_for(p, &src[0], body);
+                    }
+                if self.ty(it).is_ok_and(|t| elem(&t, "Chan").is_some()) {
+                    return self.chan_for(p, it, body);
+                }
                 if let (Pat::Bind(i), ExprKind::Range(a, b)) = (p, &it.kind) {
                     let (av, bv) = (self.expr(a)?, self.expr(b)?);
                     let (s_, e_) = (self.fresh("fs"), self.fresh("fe"));

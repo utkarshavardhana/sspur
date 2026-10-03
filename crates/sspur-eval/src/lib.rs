@@ -1,6 +1,7 @@
 #![allow(clippy::mutable_key_type)]
 mod builtins;
 pub mod fuzz;
+mod sched;
 pub mod value;
 
 use sspur_syntax::*;
@@ -91,6 +92,7 @@ pub struct Interp {
     gen_loops: HashSet<(u32, u32)>,
     handlers: RefCell<Vec<HFrame>>,
     next_handler: Cell<u64>,
+    sched: sched::Sched,
 }
 
 const MAX_DEPTH: u32 = 20_000;
@@ -128,6 +130,7 @@ impl Interp {
             gen_loops,
             handlers: RefCell::new(vec![]),
             next_handler: Cell::new(0),
+            sched: Default::default(),
         };
         for d in &m.defs {
             match d {
@@ -720,7 +723,8 @@ impl Interp {
                 }
             }
             ExprKind::List(xs) => Ok(Value::list(self.eval_args(xs, env)?)),
-            ExprKind::Tuple(xs) | ExprKind::Par(xs) => Ok(Value::Tuple(Rc::new(self.eval_args(xs, env)?))),
+            ExprKind::Tuple(xs) => Ok(Value::Tuple(Rc::new(self.eval_args(xs, env)?))),
+            ExprKind::Par(xs) => Ok(Value::Tuple(Rc::new(self.run_tasks(xs.len(), &|k| self.eval(&xs[k], &Env::child(env)))?))),
             ExprKind::Raise(x) => Err(Ctrl::Raise(self.eval(x, env)?)),
             ExprKind::Return(x) => Err(Ctrl::Return(self.eval(x, env)?)),
             ExprKind::Table(_) => trap("a rule table can only be the body of a rule"),
@@ -847,8 +851,32 @@ impl Interp {
                     Err(c) => Err(c),
                 }
             }
+            Stmt::For(p, it, body) if matches!(&it.kind, ExprKind::Par(xs) if xs.len() == 1) => {
+                let ExprKind::Par(src) = &it.kind else { unreachable!() };
+                let Value::List(xs) = self.eval(&src[0], env)? else { return trap("for expects a List") };
+                self.run_tasks(xs.len(), &|k| {
+                    let inner = Env::child(env);
+                    if self.bind_pat(p, &xs[k], &inner) {
+                        self.eval(body, &inner)?;
+                    }
+                    Ok(Value::Unit)
+                })?;
+                Ok(Value::Unit)
+            }
             Stmt::For(p, it, body) => {
-                let Value::List(xs) = self.eval(it, env)? else { return trap("for expects a List") };
+                let xs = match self.eval(it, env)? {
+                    Value::List(xs) => xs,
+                    Value::Chan(c) => {
+                        while let Some(x) = self.chan_recv(&c)? {
+                            let inner = Env::child(env);
+                            if self.bind_pat(p, &x, &inner) {
+                                self.eval(body, &inner)?;
+                            }
+                        }
+                        return Ok(Value::Unit);
+                    }
+                    _ => return trap("for expects a List"),
+                };
                 for x in xs.iter() {
                     let inner = Env::child(env);
                     if self.bind_pat(p, x, &inner) {

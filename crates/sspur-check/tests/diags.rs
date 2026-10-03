@@ -199,3 +199,31 @@ fn branching_alias_cycle_is_reported() {
     assert!(codes("type A = (A, A)\nfn f(x: A) -> Int\n= 1").contains(&"E_TYPE_CYCLE".to_string()));
     assert!(start.elapsed() < std::time::Duration::from_secs(1));
 }
+
+#[test]
+fn par_tasks_cannot_race_on_shared_state() {
+    let race = "fn f() -> Int\n= do\n  var s = 0\n  for i in par(0..3)\n    s := s + i\n  s";
+    assert_eq!(codes(race), vec!["E_PAR_RACE"]);
+    let own = "fn f() -> Int\n= do\n  for i in par(0..3)\n    var s = i\n    s := s + 1\n  0";
+    assert!(codes(own).is_empty(), "{:?}", diags(own));
+    let closure = "fn f() -> Int\n= do\n  var s = 0\n  fn bump() -> Unit\n  = do\n    s := s + 1\n  for i in par(0..3)\n    bump()\n  s";
+    assert_eq!(codes(closure), vec!["E_PAR_SHARE"]);
+    let param = "fn both(f: () -> Int) -> (Int, Int)\n= par(f(), f())";
+    assert_eq!(codes(param), vec!["E_PAR_SHARE", "E_PAR_SHARE"]);
+    let chan_fn = "fn f() -> Unit ! conc\n= do\n  c = chan()\n  c.send(x => x + 1)";
+    assert_eq!(codes(chan_fn), vec!["E_PAR_SHARE"]);
+    let atomic = "fn f() -> Int ! conc\n= do\n  a = atomic(0)\n  for i in par(0..3)\n    a.add(i)\n  a.load";
+    assert!(codes(atomic).is_empty(), "{:?}", diags(atomic));
+}
+
+#[test]
+fn par_tasks_restrict_effects_and_control() {
+    assert_eq!(codes("fn f() -> Unit ! log\n= do\n  for i in par(0..2)\n    log(\"x\")\n  ()"), vec!["E_PAR_EFFECT"]);
+    assert_eq!(codes("effect ask() -> Int\nfn f() -> (Int, Int) ! ask\n= par(ask(), 1)"), vec!["E_PAR_EFFECT"]);
+    assert_eq!(codes("fn f() -> Int\n= do\n  for i in par(0..2)\n    return 1\n  0"), vec!["E_RETURN_IN_PAR"]);
+    assert_eq!(codes("fn f() -> (Int, Int)\n= par(1)"), vec!["E_PAR_ARITY", "E_TYPE_MISMATCH"]);
+    assert_eq!(codes("fn f() -> Int\n= do\n  a = atomic(1)\n  a.load"), vec!["E_EFFECT_MISSING"]);
+    assert_eq!(codes("fn f(c: Chan[Int]) -> Int\n= do\n  var s = 0\n  for x in c\n    s := s + x\n  s"), vec!["E_EFFECT_MISSING"]);
+    let fails = "type E = Bad\nfn g(x: Int) -> Int ! fail[E]\n= if x > 1 then raise Bad else x\nfn f() -> (Int, Int) ! fail[E]\n= par(g(1), g(2))";
+    assert!(codes(fails).is_empty(), "{:?}", diags(fails));
+}

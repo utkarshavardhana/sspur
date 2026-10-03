@@ -404,7 +404,7 @@ impl Cx<'_> {
                 let (av, bv) = (self.expr(a)?, self.expr(b)?);
                 riv = Some((self.range(a).0, self.range(b).1 - 1));
                 self.for_range_facts(&x, a, b);
-                (format!("int64_t s_ = {av}; int64_t e_ = {bv}; int64_t {n} = e_ > s_ ? e_ - s_ : 0; "), format!("int64_t {x} = s_ + {i}; "))
+                (format!("int64_t s_ = {av}; int64_t re_ = {bv}; int64_t {n} = re_ > s_ ? re_ - s_ : 0; "), format!("int64_t {x} = s_ + {i}; "))
             }
             _ => {
                 let lv = self.expr(src)?;

@@ -10,6 +10,8 @@ pub const GLOBALS: &[&str] = &[
     "pii[A](x: A) -> Pii[A]",
     "untrusted[A](x: A) -> Untrusted[A]",
     "guess[A](x: A, conf: F64) -> Guess[A]",
+    "atomic(x: Int) -> Atomic[Int] ! conc",
+    "chan[A]() -> Chan[A] ! conc",
 ];
 
 pub const METHODS: &[(&str, &str)] = &[
@@ -96,5 +98,12 @@ pub const METHODS: &[(&str, &str)] = &[
     ("F64", "round(n: F64) -> Int"),
     ("F64", "floor(n: F64) -> Int"),
     ("F64", "sqrt(n: F64) -> F64"),
+    ("Atomic", "load(a: Atomic[Int]) -> Int ! conc"),
+    ("Atomic", "store_(a: Atomic[Int], v: Int) -> Unit ! conc"),
+    ("Atomic", "add(a: Atomic[Int], d: Int) -> Unit ! conc"),
+    ("Atomic", "cas(a: Atomic[Int], expect: Int, value: Int) -> Bool ! conc"),
+    ("Chan", "send[A](c: Chan[A], x: A) -> Unit ! conc"),
+    ("Chan", "recv[A](c: Chan[A]) -> Opt[A] ! conc"),
+    ("Chan", "close[A](c: Chan[A]) -> Unit ! conc"),
     ("*", "str[A](x: A) -> Str"),
 ];

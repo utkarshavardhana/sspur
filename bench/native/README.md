@@ -11,12 +11,14 @@
 | Strings: build 2M words, lowercase, split, count, sort | `strings_big` | 0.09s | 0.06s | **0.65x** | 34 MB / 88 MB |
 | App: generate CSV, parse with errors, aggregate in a map, report | `app` | 0.15s | 0.11s | **0.71x** | 33 MB / 134 MB |
 | Long-running loop: 2M iterations, about 700 MB of short-lived garbage | `churn` | | 0.06s | | 265 MB |
+| Pure pipelines: Collatz, primes, hashed table, Mandelbrot (10 cores) | `parallel` | 2.09s (single-threaded) | 0.33s (2.01s with `SSPUR_THREADS=1`) | **0.16x** | 17 MB / 21 MB |
 
 SSPUR times include about 10 ms of fixed startup (parse, typecheck, load the cached library). When speed and memory trade off, SSPUR picks speed (ADR 0008).
 
 - Checks the compiler proves can never fail are omitted (ADR 0007). The rest stay.
 - Every C++ version carries the same safety checks SSPUR always has (overflow, bounds, contracts) via `__builtin_*_overflow` and `abort()`.
 - The output of each pair is identical (checked by `diff`).
+- `parallel` compares against single-threaded C++ on purpose: SSPUR parallelizes a pure pipeline with no code change, and its traps and results stay identical to sequential execution for any `SSPUR_THREADS` (default: online cores; `1` disables). The machine had other load during measurement; with `SSPUR_THREADS=1`, SSPUR is 0.96x C++.
 - A cold first build adds about 0.6 to 0.9s of clang time, once. After that it's cached under `~/.cache/sspur/native/`.
 
 ## Memory
@@ -35,7 +37,7 @@ Stress mode is `SSPUR_GC_STRESS=<bytes>`, which collects every N bytes. The suit
 
 ## Coverage
 
-- Every function in `tests/programs/` (14 programs) and in the 199-program evaluation corpus written by other models (247 of 247 functions) compiles natively.
+- Every function in `tests/programs/` (18 programs) and in the 199-program evaluation corpus written by other models (247 of 247 functions) compiles natively.
 - Native results are identical to the interpreter on all of them, plus 300 random inputs per function (`sspur fuzz --differential`).
 
 ## Why it matches or beats C++
@@ -55,6 +57,7 @@ Stress mode is `SSPUR_GC_STRESS=<bytes>`, which collects every N bytes. The suit
 | Single-allocation `join` with inline short copies; `for` loops that push once per iteration reserve capacity up front; hand-written integer formatting | No `snprintf`, no reallocation chains |
 | Traps `longjmp` from a cold function to the entry; calls to functions that can't `raise` carry no result check; self tail calls are loops | Safety checks stay off the hot path; recursion costs what it does in C |
 | Generic functions monomorphized; closures are a function pointer plus an arena environment | Template-like specialization; no boxing |
+| **Automatic parallelism** (ADR 0009): fused `map`/`filter` pipelines ending in an Int `sum`, `len`, or a scalar `map`, whose lambdas and callees are effect-free (only `div` allowed) and scalar-only, run on a pthread pool once a timed sequential warm-up predicts more than 100 microseconds of work | 6x on 10 cores with bit-identical results and traps; float sums stay sequential |
 
 ## Tiers
 

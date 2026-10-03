@@ -1,0 +1,47 @@
+fn collatz_len(n: Int where _ > 0) -> Int ! div
+= do
+  var x = n
+  var steps = 0
+  while x != 1
+    x := if x % 2 == 0 then x / 2 else 3 * x + 1
+    steps := steps + 1
+  steps
+
+fn is_prime(n: Int) -> Bool ! div
+= do
+  var d = 2
+  var ok = n >= 2
+  while ok and d * d <= n
+    if n % d == 0 then ok := false
+    d := d + 1
+  ok
+
+fn mix(x: Int) -> Int
+= do
+  var h = x
+  for r in 0..64
+    h := (h * 31 + r) % 1000003
+  h
+
+fn escape(i: Int, w: Int) -> Int ! div
+= do
+  cx = (i % w).to_f64 * 3.0 / w.to_f64 - 2.0
+  cy = (i / w).to_f64 * 2.0 / w.to_f64 - 1.0
+  var x = 0.0
+  var y = 0.0
+  var k = 0
+  while k < 200 and x * x + y * y <= 4.0
+    t = x * x - y * y + cx
+    y := 2.0 * x * y + cy
+    x := t
+    k := k + 1
+  k
+
+fn main() -> Unit ! log, div
+= do
+  log("collatz steps below 3000000: {(1..3000000).map(collatz_len).sum}")
+  log("primes below 4000000: {(0..4000000).filter(is_prime).len}")
+  log("sum of primes below 2000000: {(0..2000000).filter(is_prime).sum}")
+  hs = (0..2000000).map(i => mix(i))
+  log("mixed {hs.len} values, checksum {hs.sum}")
+  log("mandelbrot 1000x1000 iterations: {(0..1000000).map(i => escape(i, 1000)).sum}")

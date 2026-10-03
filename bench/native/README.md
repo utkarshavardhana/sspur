@@ -12,6 +12,7 @@
 | App: generate CSV, parse with errors, aggregate in a map, report | `app` | 0.15s | 0.11s | **0.71x** | 33 MB / 134 MB |
 | Long-running loop: 2M iterations, about 700 MB of short-lived garbage | `churn` | | 0.06s | | 265 MB |
 | Pure pipelines: Collatz, primes, hashed table, Mandelbrot (10 cores) | `parallel` | 2.09s (single-threaded) | 0.33s (2.01s with `SSPUR_THREADS=1`) | **0.16x** | 17 MB / 21 MB |
+| Data-parallel numeric: checked Int map/filter/sum, squares, counts, mapped lists, F64 dot and saxpy over 1M-element lists | `simd` | 0.29s | 0.25s (0.31s with `SSPUR_THREADS=1`; 0.38s before ADR 0015) | **0.86x** | 40 MB / 316 MB |
 
 Against C++ -O3 (same machine, 2026-10-03): compute 0.88x, typical 0.18x (hand-tuned C++ -O3 0.20s, so 0.60x), strings 0.54x, app 0.60x, parallel 0.15x. -O3 is no faster than -O2 on these workloads.
 
@@ -21,6 +22,7 @@ SSPUR times include about 10 ms of fixed startup (parse, typecheck, load the cac
 - Every C++ version carries the same safety checks SSPUR always has (overflow, bounds, contracts) via `__builtin_*_overflow` and `abort()`.
 - The output of each pair is identical (checked by `diff`).
 - `parallel` compares against single-threaded C++ on purpose: SSPUR parallelizes a pure pipeline with no code change, and its traps and results stay identical to sequential execution for any `SSPUR_THREADS` (default: online cores; `1` disables). The machine had other load during measurement; with `SSPUR_THREADS=1`, SSPUR is 0.96x C++.
+- In `simd` (single-threaded, per 40 rounds), the checked Int kernels take 18 ms (`affine`) and 21 ms (`squares`) against 35 ms each before ADR 0015 and 42 ms in C++. The F64 dot product ties C++ (sums keep sequential order). The two kernels that build new 8 MB lists lose to C++ on first-touch page faults in the GC heap, which is also why peak memory is higher.
 - A cold first build adds about 0.6 to 0.9s of clang time, once. After that it's cached under `~/.cache/sspur/native/`.
 
 ## Memory
@@ -60,6 +62,7 @@ Stress mode is `SSPUR_GC_STRESS=<bytes>`, which collects every N bytes. The suit
 | Traps `longjmp` from a cold function to the entry; calls to functions that can't `raise` carry no result check; self tail calls are loops | Safety checks stay off the hot path; recursion costs what it does in C |
 | Generic functions monomorphized; closures are a function pointer plus an arena environment | Template-like specialization; no boxing |
 | **Automatic parallelism** (ADR 0009): fused `map`/`filter` pipelines ending in an Int `sum`, `len`, or a scalar `map`, whose lambdas and callees are effect-free (only `div` allowed) and scalar-only, run on a pthread pool once a timed sequential warm-up predicts more than 100 microseconds of work | 6x on 10 cores with bit-identical results and traps; float sums stay sequential |
+| **Vectorizable checks** (ADR 0015): fused Int and F64 pipelines compute 64-element blocks branch-free, OR-ing overflow, range, and bounds conditions into one flag; a flagged block re-runs sequentially to report the exact trap. Under a checked small-value assumption the interval prover removes most per-element checks | clang emits NEON/SSE code for checked arithmetic; checked Int kernels about 2x faster than before and than C++ with the same checks |
 
 ## Tiers
 

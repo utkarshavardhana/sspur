@@ -451,7 +451,7 @@ impl Cx<'_> {
         let (body, xf) = r?;
         let float = is(t, "F64");
         let (decl, step, fin) = match end {
-            End::Sum if float => ("double acc_ = 0.0; ".to_string(), format!("acc_ += {xf}; "), "acc_; ".to_string()),
+            End::Sum if float => ("double acc_ = -0.0; int any_ = 0; ".to_string(), format!("acc_ += {xf}; any_ = 1; "), "any_ ? acc_ : 0.0; ".to_string()),
             End::Sum if plan.deferred => (
                 "int64_t acc_ = 0; int ov_ = 0; ".to_string(),
                 format!("if (UNLIKELY(__builtin_add_overflow(acc_, {xf}, &acc_))) ov_ = 1; "),

@@ -3050,7 +3050,7 @@ impl<'a> Cx<'a> {
             "reverse" => wrap(format!("RawL r_ = raw_alloc({l}.len, sizeof({ec})); {ec}* d_ = ({ec}*)r_.data; for (int64_t {i} = 0; {i} < {l}.len; {i}++) d_[{i}] = {l}.data[{l}.len - 1 - {i}]; r_.hdr[1] = {l}.len; ({lc}){{{l}.len, d_, r_.hdr}};")),
             "sum" => {
                 if is(et, "F64") {
-                    wrap(format!("double s_ = 0.0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) s_ += {l}.data[{i}]; s_;"))
+                    wrap(format!("double s_ = -0.0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) s_ += {l}.data[{i}]; {l}.len ? s_ : 0.0;"))
                 } else {
                     wrap(format!("int64_t s_; if (UNLIKELY(sum_i64({l}.data, {l}.len, &s_))) TRAPV({T_OVERFLOW}, 0, 0); s_;"))
                 }

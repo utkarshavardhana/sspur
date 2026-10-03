@@ -1,0 +1,120 @@
+type Job = {id: Int, name: Str}
+type JobErr = TooBig{id: Int} | Empty
+
+fn digit_sum(n: Int) -> Int
+= if n < 10 then n else n % 10 + digit_sum(n / 10)
+
+fn add_range(total: Atomic[Int], lo: Int, hi: Int) -> Unit ! conc
+= do
+  var s = 0
+  for i in lo..hi
+    s := s + digit_sum(i)
+  total.add(s)
+
+fn atomic_sum(n: Int, workers: Int) -> Int ! conc
+  pre workers > 0
+= do
+  total = atomic(0)
+  for w in par(0..workers)
+    add_range(total, w * n / workers, (w + 1) * n / workers)
+  total.load
+
+fn sequential_sum(n: Int) -> Int
+= (0..n).map(digit_sum).sum
+
+fn bump_max(best: Atomic[Int], v: Int) -> Unit ! conc, div
+= do
+  var done = false
+  while not done
+    cur = best.load
+    done := v <= cur or best.cas(cur, v)
+  ()
+
+fn atomic_max(xs: List[Int]) -> Int ! conc, div
+= do
+  best = atomic(0)
+  for x in par(xs)
+    bump_max(best, x)
+  best.load
+
+fn produce(out: Chan[Int], n: Int) -> Unit ! conc
+= do
+  for i in 1..n + 1
+    out.send(i)
+  out.close
+
+fn square_stage(input: Chan[Int], out: Chan[Int]) -> Unit ! conc
+= do
+  for x in input
+    out.send(x * x)
+  out.close
+
+fn drain(input: Chan[Int]) -> Int ! conc
+= do
+  var s = 0
+  for x in input
+    s := s + x
+  s
+
+fn pipeline(n: Int) -> Int ! conc
+= do
+  a = chan()
+  b = chan()
+  (_, _, s) = par(produce(a, n), square_stage(a, b), drain(b))
+  s
+
+fn label(out: Chan[Job], ids: List[Int]) -> Unit ! conc
+= do
+  for i in ids
+    out.send(Job{id: i, name: "job-{i}"})
+  ()
+
+fn fan_in(n: Int) -> List[Str] ! conc
+= do
+  jobs = chan()
+  for part in par([0, 1, 2])
+    label(jobs, (0..n).filter(_ % 3 == part))
+  jobs.close
+  var names = []
+  for j in jobs
+    names := names.push(j.name)
+  names.sort
+
+fn check_job(id: Int) -> Int ! fail[JobErr]
+= if id > 100 then raise TooBig{id} else id * 2
+
+fn checked(a: Int, b: Int, c: Int) -> Int ! fail[JobErr]
+= do
+  (x, y, z) = par(check_job(a), check_job(b), check_job(c))
+  x + y + z
+
+fn split_stats(xs: List[Int]) -> (Int, Int, Int)
+= par(xs.sum, xs.filter(_ % 2 == 0).len, xs.map(digit_sum).sum)
+
+fn first_or_none(c: Chan[Int]) -> Opt[Int] ! conc
+= c.recv
+
+fn closed_empty() -> (Opt[Int], Opt[Int]) ! conc
+= do
+  c = chan()
+  c.send(7)
+  c.close
+  (first_or_none(c), first_or_none(c))
+
+test atomic_sum_matches_sequential = atomic_sum(10000, 4) == sequential_sum(10000)
+test atomic_sum_one_worker = atomic_sum(1000, 1) == sequential_sum(1000)
+test atomic_max_finds_max = atomic_max([5, 42, 17, 3, 41]) == 42
+test pipeline_squares = pipeline(100) == 338350
+test fan_in_collects_all = fan_in(9) == ["job-0", "job-1", "job-2", "job-3", "job-4", "job-5", "job-6", "job-7", "job-8"]
+test par_values = split_stats([1, 2, 3, 4, 19]) == (29, 2, 20)
+test checked_ok = catch checked(1, 2, 3) == 12
+  | _ => false
+test checked_leftmost_error = catch checked(1, 500, 300) == 0
+  | TooBig{id} => id == 500
+  | Empty => false
+test closed_channel_drains_then_none = closed_empty() == (some(7), none)
+test atomic_ops = do
+  a = atomic(5)
+  a.store(9)
+  a.add(-2)
+  (a.cas(7, 1), a.cas(7, 2), a.load) == (true, false, 1)

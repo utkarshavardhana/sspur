@@ -17,6 +17,14 @@ pub fn print_def(d: &Def) -> String {
         Def::Fn(f) => print_fn(f),
         Def::Test(t) => format!("test {} = {}", t.name, expr(&t.body, 0)),
         Def::Effect(e) => print_effect_def(e),
+        Def::Store(st) => format!("store {} = {}[{}, {}]", st.name, st.kind, ty(&st.key), ty(&st.val)),
+        Def::Svc(sv) => {
+            let mut s = format!("svc {}", sv.name);
+            for ep in &sv.eps {
+                s.push_str(&format!("\n  ep {} {:?} = {}", ep.method, ep.path, ep.handler));
+            }
+            s
+        }
     }
 }
 
@@ -108,12 +116,21 @@ pub fn print_sig(f: &FnDef) -> String {
             None => format!("{}: {}", p.name, ty(&p.ty)),
         })
         .collect();
-    let mut s = format!("fn {}{}({})", f.name, tparams(&f.tparams), params.join(", "));
+    let kw = if f.ext.is_some() { "extern fn" } else { "fn" };
+    let mut s = format!("{kw} {}{}({})", f.name, tparams(&f.tparams), params.join(", "));
     if let Some(r) = &f.ret {
         s.push_str(&format!(" -> {}", ty(r)));
     }
     if !f.effects.is_empty() {
         s.push_str(&format!(" ! {}", effects(&f.effects)));
+    }
+    if let Some(x) = &f.ext {
+        if let Some(l) = &x.lib {
+            s.push_str(&format!(" from {l:?}"));
+        }
+        if x.symbol != f.name {
+            s.push_str(&format!(" as {:?}", x.symbol));
+        }
     }
     s
 }
@@ -124,6 +141,9 @@ fn print_fn(f: &FnDef) -> String {
 
 fn print_fn_at(f: &FnDef, ind: usize) -> String {
     let mut s = print_sig(f);
+    if f.ext.is_some() {
+        return s;
+    }
     let c = pad(ind + 2);
     if let Some(r) = &f.trusted {
         s.push_str(&format!("\n{c}unsafe {}", expr(&Expr::new(ExprKind::Str(vec![StrPart::Lit(r.clone())]), Span::default()), 0)));

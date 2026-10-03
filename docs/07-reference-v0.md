@@ -4,7 +4,7 @@ This is everything the current compiler implements, and it's all an agent needs 
 
 ## Program shape
 
-A program is a set of definitions: `type`, `fn`, `effect`, and `test`. Order doesn't matter. There are no imports and no comments. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
+A program is a set of definitions: `type`, `fn`, `extern fn`, `effect`, `test`, and for services `store` and `svc`. Order doesn't matter. There are no imports. `//` line comments are skipped in files but aren't stored in the codebase. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
 
 ```
 type Item = {sku: Str, qty: Int where _ > 0, price: Int where _ >= 0}
@@ -85,7 +85,7 @@ fn name[A, e](p: A, f: A -> A ! e) -> A ! e
   ```
   Patterns: `_`, a name, literals, tuples `(a, 0)`, `Ctor`, `Ctor{field, field: pat}`, `some(p)`, `none`, `ok(p)`, `err(p)`. A non-exhaustive match is a compile error.
 - `return e` exits the function early (not allowed inside lambdas).
-- `par(a, b)` evaluates both and returns the tuple `(a, b)`.
+- `par(a, b, ...)` runs each argument as a concurrent task and returns the tuple of results (see Concurrency).
 - `?` or `?name` is a typed hole. The compiler reports its expected type and the in-scope values that fit.
 
 ## Effects
@@ -98,8 +98,10 @@ Every function declares what it does after `!`. Undeclared effects are compile e
 | `fail[E]` | `raise e` where `e: E`, or calling a function with `fail[E]` |
 | Effect row `e` | Calling a function-typed parameter whose type has `! e` |
 | `div` | A `while` loop (the loop may not terminate) |
+| `conc` | Creating or using an `Atomic[Int]` or a `Chan[T]` |
 | A declared effect, e.g. `ask` | Calling one of its operations, e.g. `ask()` |
 | `yield[T]` | `yield(x)` where `x: T` (built in, for generators) |
+| `ffi` | Calling an `extern fn` |
 
 Effects flow through lambdas: `xs.map(x => noisy(x))` performs `noisy`'s effects.
 
@@ -141,6 +143,46 @@ fn run() -> Int
 - `log` is an ordinary effect with the operation `log(msg)`, so `handle e | log(m) => do; logs := logs.push(m); resume()` captures output.
 - `raise` in an arm leaves the whole `handle` (a `catch` inside `e` doesn't see it), and errors raised by `e` pass through. `return` is not allowed in an arm.
 
+## Concurrency
+
+```
+fn add_range(total: Atomic[Int], lo: Int, hi: Int) -> Unit ! conc
+= total.add((lo..hi).sum)
+
+fn sum_to(n: Int) -> Int ! conc
+= do
+  total = atomic(0)
+  for w in par(0..4)
+    add_range(total, w * n / 4, (w + 1) * n / 4)
+  total.load
+
+fn produce(out: Chan[Int], n: Int) -> Unit ! conc
+= do
+  for i in 0..n
+    out.send(i)
+  out.close
+
+fn drain(c: Chan[Int]) -> Int ! conc
+= do
+  var s = 0
+  for x in c
+    s := s + x
+  s
+
+fn pipe(n: Int) -> Int ! conc
+= do
+  c = chan()
+  (_, s) = par(produce(c, n), drain(c))
+  s
+```
+
+- `par(e1, ..., en)` (at least two) runs each argument as a task; `for x in par(xs)` runs the body once per element, each as a task. Both wait for every task before continuing, so tasks never outlive their scope.
+- `atomic(v)` makes an `Atomic[Int]` with `.load`, `.store(v)`, `.add(d)` (traps on overflow), `.cas(expect, value)` (returns whether it swapped). All operations are sequentially consistent.
+- `chan()` makes an unbounded `Chan[T]` with `.send(x)`, `.recv` (an `Opt[T]`: `none` once closed and empty), `.close`, and `for x in c`, which runs until the channel is closed and empty. Sending on a closed channel traps.
+- Tasks share only immutable values, atomics and channels. A task cannot assign a variable declared outside it (`E_PAR_RACE`), use a function value from outside it (`E_PAR_SHARE`; call top-level functions by name instead), send functions on a channel, perform `log` or handled effects (`E_PAR_EFFECT`), or `return` (`E_RETURN_IN_PAR`).
+- If tasks fail, the leftmost task's error or trap wins, after all tasks finish. When every task is blocked in `recv`, the blocked receivers trap with `deadlock: every task is blocked on recv`.
+- Native code runs each task on its own thread; the interpreter runs one task at a time and switches when a task blocks. Use `par` for coarse tasks; pure `map`/`filter` pipelines parallelize automatically.
+
 ## Generators
 
 A generator is a function that performs `yield[T]`. A `for` loop over a `Unit` expression that yields runs its body for each yielded value, and removes `yield[T]` from the row. Generators can be recursive or infinite, and `return` in the loop body leaves the enclosing function.
@@ -163,6 +205,37 @@ fn sum_tree(t: Tree) -> Int
 ```
 
 Pass a generator as a value with a thunk, `() => walk(t)`, typed `() -> Unit ! yield[T], e`. A `handle` over `yield` that stops resuming takes a prefix, which also works on infinite generators.
+
+## C interop
+
+```
+extern fn cbrt(x: F64) -> F64 ! ffi from "m"
+extern fn strlen(s: Str) -> U64 ! ffi
+extern fn getenv(name: Str) -> Opt[Str] ! ffi
+extern fn ln(x: F64) -> F64 ! ffi from "m" as "log"
+```
+
+An `extern fn` has no body and declares exactly `! ffi`. `from "m"` links `libm` (a path also works; omit it for libc), and `as "sym"` names the C symbol. Signatures use C widths: `Int` (int64_t), `I8 I16 I32 U8 U16 U32 U64`, `F32`, `F64`, `Bool`, `Str` (`const char*`), `Opt[Str]` (nullable), `List[W]` parameters (`const W*`), and a `Unit` result. Callers see `Int` and `F64`. Out-of-range integers, NUL bytes, `NULL` for a `Str` result, and invalid UTF-8 trap with an `ffi:` message. Both tiers call C directly: the interpreter through `dlsym`, for up to 6 integer and 8 float arguments.
+
+`sspur bind header.h [--lib L]` prints extern declarations for a C header (parsed by clang) and lists what it skipped in `//` comments. `sspur export-c file.ssp -o libfoo [--shared]` builds `libfoo.a` (or a shared library) plus `libfoo.h`. Each function with `Int`/`F64`/`Bool`/`Str` parameters and result becomes `int32_t foo_f(args..., T* out)`, which returns 0, or 100 for an unhandled error, or a trap code. `foo_last_error()` returns the message, and `foo_free` releases returned strings. See `examples/ffi` and ADR 0014.
+
+## Services
+
+```
+store Items = table[ItemId, Item]
+
+fn read(id: Str) -> Opt[Item] ! db.read[Items]
+= db.get(Items, ItemId(id))
+
+svc items
+  ep get "/items/{id}" = read
+```
+
+- `store S = table[K, V]`: K is `Str`, `Int`, or a newtype over them. `db.get(S, k)` returns `Opt[V]` and `db.scan(S)` returns `List[V]`; both need `db.read[S]`. `db.put(S, k, v)` and `db.del(S, k)` (returns whether the key existed) need `db.write[S]`.
+- `svc name` followed by `ep METHOD "path" = fname` lines (`get post put patch delete`). Each `{x}` path segment binds the parameter named `x` (`Str`, `Int`, or a newtype). At most one other parameter is the JSON request body, and GET and DELETE take none. A handler may only perform `db.*`, `log`, `div`, and `fail`.
+- Responses: `Opt` none is 404, `Unit` is 204, POST success is 201, other success is 200. `raise` returns `{"error": value}`, with the status chosen by variant name: `NotFound` 404, `Conflict` 409, `Forbidden` 403, `Unauthorized` 401, `Invalid` 400, others 422. A request that fails a refinement or doesn't decode gets 400.
+- JSON: records are objects, lists and tuples are arrays, `Opt` is the value or `null`, newtypes are their inner value, and a variant is `"Name"` or `{"tag": "Name", ...fields}`.
+- `sspur deploy plan file [--out DIR]` writes a CloudFormation template, per-handler IAM policies derived from the effects (only the DynamoDB actions the handler can reach, on its table), and the native Lambda `bootstrap.c`. `sspur deploy local file [--port N]` serves the service on 127.0.0.1 with emulated Lambda and DynamoDB that enforce those policies. Neither command calls AWS. See ADR 0016.
 
 ## Accepted input forms
 
@@ -228,7 +301,7 @@ Notes: `first`, `last`, `get`, `min`, `max`, and `find` return `Opt`. `counts` r
 
 ## CLI and agent tools
 
-`sspur check|run|test|fuzz|verify|hash|fmt [file]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter.
+`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local file`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. `sspur bind header.h` generates extern declarations.
 
 `sspur fuzz` turns contracts into property tests. It generates inputs that satisfy `pre` and `where`, then reports shrunk counterexamples for any `post` violation or trap.
 

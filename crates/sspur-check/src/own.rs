@@ -1,4 +1,4 @@
-use crate::Diag;
+use crate::{Diag, ExprKey, Type};
 use sspur_syntax::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -68,6 +68,8 @@ struct A<'a> {
     fns: HashMap<String, &'a FnDef>,
     user_methods: &'a HashSet<(u32, u32)>,
     record_types: &'a HashMap<(u32, u32), String>,
+    expr_types: &'a HashMap<ExprKey, Type>,
+    task: Option<usize>,
     st: State,
     barrier: usize,
     in_catch: u32,
@@ -96,13 +98,15 @@ fn root_name(e: &Expr) -> Option<&str> {
     }
 }
 
-pub fn analyze(m: &Module, record_types: &HashMap<(u32, u32), String>, user_methods: &HashSet<(u32, u32)>) -> Output {
+pub fn analyze(m: &Module, record_types: &HashMap<(u32, u32), String>, user_methods: &HashSet<(u32, u32)>, expr_types: &HashMap<ExprKey, Type>) -> Output {
     let sys = m.profile.as_deref() == Some("sys");
     let mut a = A {
         res: HashMap::new(),
         fns: HashMap::new(),
         user_methods,
         record_types,
+        expr_types,
+        task: None,
         st: State { scopes: vec![], dead: false },
         barrier: 0,
         in_catch: 0,
@@ -154,7 +158,7 @@ pub fn analyze(m: &Module, record_types: &HashMap<(u32, u32), String>, user_meth
                 a.end_scope(t.body.span);
                 a.drop_effects.remove(&t.name);
             }
-            Def::Effect(_) => {}
+            _ => {}
         }
     }
     Output { info: a.info, diags: a.diags, drop_effects: a.drop_effects }
@@ -220,6 +224,9 @@ impl<'a> A<'a> {
                 }
                 let inner_top = top && matches!(name.as_str(), "&" | "&mut" | "own");
                 for x in args {
+                    if name == "Chan" && matches!(x, Ty::Named { name: r, args: ra, .. } if ra.is_empty() && self.res.contains_key(r)) {
+                        continue;
+                    }
                     self.check_ty(x, inner_top, s, what);
                 }
             }
@@ -461,6 +468,10 @@ impl<'a> A<'a> {
             return K::Plain;
         };
         let l = self.st.scopes[d][i].clone();
+        if self.task.is_some_and(|t| d < t) && !matches!(l.kind, K::Plain) {
+            self.err_hint("E_PAR_SHARE", span, format!("'{n}' is a resource or borrow owned outside this task"), Some("create it inside the task, or move it to the task through a channel send"));
+            return K::Plain;
+        }
         if d < self.barrier && !matches!(l.kind, K::Plain) {
             self.err_hint("E_CAPTURE", span, format!("'{n}' is a resource or borrow and cannot be captured by a lambda or local function"), Some("pass it as an argument"));
             return K::Plain;
@@ -492,6 +503,32 @@ impl<'a> A<'a> {
                 K::Plain
             }
             k => k.clone(),
+        }
+    }
+
+    fn task_scope(&mut self, f: impl FnOnce(&mut Self) -> K) -> K {
+        let saved = (self.barrier, self.task, self.in_catch, self.st.dead);
+        self.barrier = self.st.scopes.len();
+        self.task = Some(self.barrier);
+        self.in_catch = 0;
+        self.st.scopes.push(vec![]);
+        let k = f(self);
+        self.end_scope(Span::default());
+        (self.barrier, self.task, self.in_catch, self.st.dead) = saved;
+        k
+    }
+
+    fn res_of_type(&self, t: &Type) -> Option<String> {
+        match t {
+            Type::Con(n, a) if a.is_empty() && self.res.contains_key(n) => Some(n.clone()),
+            _ => None,
+        }
+    }
+
+    fn chan_item(&self, e: &Expr) -> Option<String> {
+        match self.expr_types.get(&crate::expr_key(e)) {
+            Some(Type::Con(c, a)) if c == "Chan" && a.len() == 1 => self.res_of_type(&a[0]),
+            _ => None,
         }
     }
 
@@ -660,7 +697,19 @@ impl<'a> A<'a> {
                 K::Plain
             }
             ExprKind::Name(n) => self.name(n, e.span, u),
-            ExprKind::Field(x, f) if self.user_methods.contains(&(e.span.start, e.span.end)) => match self.user_fn(f) {
+            ExprKind::Method { recv, args, name, .. } if name == "send" && args.len() == 1 && self.chan_item(recv).is_some() => {
+                self.expr(recv, Use::Read);
+                if let K::Res(t) = self.expr(&args[0], Use::Move)
+                    && !self.droppable(&t) {
+                        self.err_hint("E_RES_ESCAPE", args[0].span, format!("linear {t} cannot be sent: a channel may never deliver it"), Some("give the type a destructor, or send plain data"));
+                    }
+                K::Plain
+            }
+            ExprKind::Method { recv, name, .. } | ExprKind::Field(recv, name) if name == "recv" && self.chan_item(recv).is_some() => {
+                self.expr(recv, Use::Read);
+                self.err_hint("E_RES_ESCAPE", e.span, "receiving a resource into an Opt is not supported".into(), Some("use 'for x in c' to receive resources"));
+                K::Plain
+            }            ExprKind::Field(x, f) if self.user_methods.contains(&(e.span.start, e.span.end)) => match self.user_fn(f) {
                 Some(fd) => self.call_user(&fd, &[&**x], true, e.span),
                 None => K::Plain,
             },
@@ -784,7 +833,14 @@ impl<'a> A<'a> {
                     _ => K::Plain,
                 }
             }
-            ExprKind::List(xs) | ExprKind::Tuple(xs) | ExprKind::Par(xs) => {
+            ExprKind::Par(xs) => {
+                for x in xs {
+                    let k = self.task_scope(|a| a.expr(x, Use::Move));
+                    self.escape(&k, x.span, "returned from a par task");
+                }
+                K::Plain
+            }
+            ExprKind::List(xs) | ExprKind::Tuple(xs) => {
                 for x in xs {
                     let k = self.expr(x, Use::Move);
                     self.escape(&k, x.span, "stored in a list or tuple");
@@ -1069,11 +1125,20 @@ impl<'a> A<'a> {
                 }
                 K::Plain
             }
+            Stmt::For(p, Expr { kind: ExprKind::Par(src), .. }, body) if src.len() == 1 => {
+                self.expr(&src[0], Use::Read);
+                self.task_scope(|a| {
+                    a.bind_pat(p, &K::Plain, false, body.span);
+                    a.expr(body, Use::Discard)
+                });
+                K::Plain
+            }
             Stmt::For(p, it, body) => {
                 self.expr(it, Use::Read);
+                let item = self.chan_item(it).map_or(K::Plain, K::Res);
                 self.loop_body(&mut |a: &mut Self| {
                     a.st.scopes.push(vec![]);
-                    a.bind_pat(p, &K::Plain, false, body.span);
+                    a.bind_pat(p, &item, false, body.span);
                     a.expr(body, Use::Discard);
                     a.end_scope(body.span);
                 });

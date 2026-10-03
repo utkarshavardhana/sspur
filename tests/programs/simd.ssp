@@ -1,0 +1,78 @@
+fn ints(n: Int) -> List[Int]
+= (0..n).map(i => (i * 7919) % 10007 - 5000)
+
+fn floats(n: Int) -> List[F64]
+= (0..n).map(i => ((i * 7919) % 10007).to_f64 / 64.0 - 70.0)
+
+fn sq_sum(xs: List[Int]) -> Int
+= xs.map(x => x * x).sum
+
+fn affine_pos(xs: List[Int]) -> Int
+= xs.map(x => 3 * x + 1).filter(y => y > 0).sum
+
+fn count_big(xs: List[Int]) -> Int
+= xs.filter(x => x > 100).map(x => x - 100).filter(y => y % 2 == 0).len
+
+fn shifted(xs: List[Int]) -> List[Int]
+= xs.map(x => x * 5 - 2).map(y => y + 1)
+
+fn fdot(a: List[F64], b: List[F64]) -> F64
+= (0..a.len).map(i => a[i] * b[i]).sum
+
+fn saxpy(k: F64, xs: List[F64], ys: List[F64]) -> List[F64]
+= (0..xs.len).map(i => k * xs[i] + ys[i])
+
+fn fpos_sum(xs: List[F64]) -> F64
+= xs.filter(x => x > 0.0).sum
+
+fn fscaled_sum(xs: List[Int]) -> F64
+= xs.map(x => (x * 3).to_f64 * 0.5).sum
+
+fn spike_sum(n: Int, k: Int, v: Int) -> Int
+= (0..n).map(i => if i == k then v else 1).sum
+
+fn ramp_sum(n: Int, k: Int, v: Int) -> Int
+= (0..n).map(i => if i >= k then v else 0).sum
+
+fn bump(n: Int, k: Int, v: Int) -> Int
+= (0..n).map(i => if i == k then v else i).map(x => x + 1).sum
+
+fn masked(n: Int, k: Int) -> Int
+= (0..n).filter(i => i != k).map(i => if i == k then 9223372036854775807 else i).map(x => x + 1).sum
+
+fn negs(n: Int, k: Int) -> Int
+= (0..n).map(i => if i == k then -9223372036854775807 - 1 else i).map(x => -x).len
+
+fn tripled(n: Int, k: Int, v: Int) -> Int
+= (0..n).map(i => if i == k then v else i).map(x => x * 3).sum
+
+fn idx_sum(xs: List[Int], n: Int) -> Int
+= (0..n).map(i => xs[i] + 1).sum
+
+fn plain_sum(xs: List[Int]) -> Int
+= xs.sum
+
+fn main() -> Unit ! log
+= do
+  xs = ints(1000)
+  log("sq {sq_sum(xs)} affine {affine_pos(xs)} big {count_big(xs)}")
+  log("dot {fdot(floats(1000), floats(1000))}")
+
+test squares = sq_sum(ints(1000)) == ints(1000).map(x => x * x).sum and sq_sum([3037000499, 1]) == 9223372030926249002
+test affine = affine_pos(ints(5000)) == ints(5000).map(x => 3 * x + 1).filter(y => y > 0).sum
+test counting = count_big(ints(3001)) == ints(3001).filter(x => x > 100 and (x - 100) % 2 == 0).len
+test collect = shifted(ints(130))[129] == ints(130)[129] * 5 - 1 and shifted(ints(130)).len == 130
+test dot = fdot(floats(777), floats(777)) == floats(777).map(x => x * x).sum
+test saxpy_ok = saxpy(2.5, floats(300), floats(300))[299] == 2.5 * floats(300)[299] + floats(300)[299]
+test fpos = fpos_sum(floats(999)) == floats(999).filter(x => x > 0.0).sum and fpos_sum([-1.0, -0.0, 2.5]) == 2.5
+test fscaled = fscaled_sum(ints(500)) == ints(500).map(x => (x * 3).to_f64 * 0.5).sum
+test exact_max = spike_sum(64, 63, 9223372036854775807 - 63) == 9223372036854775807
+test exact_min = ramp_sum(130, 128, -4611686018427387904) == -9223372036854775807 - 1
+test big_values = spike_sum(200, 100, 4611686018427387904) == 4611686018427388103
+test ramp_ok = ramp_sum(200, 199, 4611686018427387904) == 4611686018427387904
+test bump_ok = bump(200, 64, 1000) == (0..200).map(i => i + 1).sum - 65 + 1001
+test masked_ok = masked(200, 64) == (0..200).filter(i => i != 64).map(i => i + 1).sum
+test negs_ok = negs(200, -1) == 200
+test tripled_ok = tripled(200, 127, -3074457345618258602) == -9223372036854775806 + (0..200).filter(i => i != 127).map(i => i * 3).sum
+test idx_ok = idx_sum(ints(300), 300) == ints(300).sum + 300
+test plain = plain_sum(ints(1000)) == ints(1000).sum and plain_sum([9223372036854775807, -1, 1]) == 9223372036854775807

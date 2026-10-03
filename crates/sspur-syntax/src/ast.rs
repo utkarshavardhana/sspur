@@ -26,6 +26,8 @@ pub enum Def {
     Fn(FnDef),
     Test(TestDef),
     Effect(EffectDef),
+    Store(StoreDef),
+    Svc(SvcDef),
 }
 
 impl Def {
@@ -35,6 +37,8 @@ impl Def {
             Def::Fn(f) => &f.name,
             Def::Test(t) => &t.name,
             Def::Effect(e) => &e.name,
+            Def::Store(s) => &s.name,
+            Def::Svc(s) => &s.name,
         }
     }
 
@@ -44,6 +48,8 @@ impl Def {
             Def::Fn(f) => f.span,
             Def::Test(t) => t.span,
             Def::Effect(e) => e.span,
+            Def::Store(s) => s.span,
+            Def::Svc(s) => s.span,
         }
     }
 }
@@ -122,6 +128,13 @@ pub struct FnDef {
     pub body: Expr,
     pub span: Span,
     pub sig_span: Span,
+    pub ext: Option<Extern>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Extern {
+    pub lib: Option<String>,
+    pub symbol: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -137,6 +150,36 @@ pub struct OpSig {
     pub name: String,
     pub params: Vec<Param>,
     pub ret: Option<Ty>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoreDef {
+    pub name: String,
+    pub kind: String,
+    pub key: Ty,
+    pub val: Ty,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SvcDef {
+    pub name: String,
+    pub eps: Vec<Endpoint>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Endpoint {
+    pub method: String,
+    pub path: String,
+    pub handler: String,
+    pub span: Span,
+}
+
+impl Endpoint {
+    pub fn path_params(&self) -> Vec<String> {
+        self.path.split('/').filter_map(|s| s.strip_prefix('{').and_then(|s| s.strip_suffix('}'))).map(str::to_string).collect()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

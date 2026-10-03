@@ -248,7 +248,7 @@ fn count_spans(m: &Module) -> HashSet<(u32, u32, u8)> {
                 f.pres.iter().chain(&f.posts).chain(&f.examples).chain([&f.body]).for_each(&mut visit);
             }
             Def::Test(t) => visit(&t.body),
-            Def::Effect(_) => {}
+            Def::Effect(_) | Def::Store(_) | Def::Svc(_) => {}
             Def::Type(t) => match &t.body {
                 TypeBody::Alias(_, Some(r)) => visit(r),
                 TypeBody::Record(fs) => fs.iter().filter_map(|f| f.refine.as_ref()).for_each(&mut visit),

@@ -40,6 +40,8 @@ impl<'a> Ctx<'a> {
             Def::Fn(_) => "fn",
             Def::Test(_) => "test",
             Def::Effect(_) => "effect",
+            Def::Store(_) => "store",
+            Def::Svc(_) => "svc",
         }
     }
 
@@ -76,7 +78,7 @@ impl<'a> Ctx<'a> {
                         .module
                         .defs
                         .iter()
-                        .map(|d| json!({"name": d.name(), "kind": Self::kind(d), "hash": short(&self.loaded.hashes[d.name()]), "sig": match d { Def::Fn(f) => printer::print_sig(f), Def::Type(_) | Def::Effect(_) => printer::print_def(d), Def::Test(_) => String::new() }}))
+                        .map(|d| json!({"name": d.name(), "kind": Self::kind(d), "hash": short(&self.loaded.hashes[d.name()]), "sig": match d { Def::Fn(f) => printer::print_sig(f), Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Svc(_) => printer::print_def(d), Def::Test(_) => String::new() }}))
                         .collect();
                     json!(items)
                 }
@@ -171,8 +173,9 @@ impl<'a> Ctx<'a> {
                 match cd {
                     Def::Type(_) => parts.push((c.clone(), "type", printer::print_def(cd))),
                     Def::Effect(_) => parts.push((c.clone(), "effect", printer::print_def(cd))),
+                    Def::Store(_) => parts.push((c.clone(), "store", printer::print_def(cd))),
                     Def::Fn(_) => parts.push((c.clone(), "sig", Self::sig_text(cd))),
-                    Def::Test(_) => {}
+                    Def::Test(_) | Def::Svc(_) => {}
                 }
             }
         }

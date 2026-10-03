@@ -24,7 +24,7 @@ test take_missing = catch take([], "a", 1) == []
 `Int` (i64), `F64`, `Bool`, `Str`, `Unit`, `List[T]`, `Opt[T]`, `Res[T, E]`, `Map[K, V]`, tuples `(A, B)`, functions `A -> B`, `(A, B) -> C ! e`. Records `{f: T}`; sums `A | B{f: T}` (variant names unique program-wide); `where` refinements (`_` is the value) checked at run time; newtype `new Str` (`Id("a")`, `.raw`). No implicit conversions (`n.to_f64`). `==` and `<` compare any values structurally.
 
 ## Functions
-Return type required unless `Unit`. Effects after `!`: `fail[E]` (`raise`, or calling a failing fn), `log` (`log(s)`), `div` (`while`). Undeclared effects are errors. Optional `pre`, `post` (`r` is the result). Body: one expression, or `do` + indented block whose last line is the result. No overloading or default args. `x.f(a)` means `f(x, a)`; `x.f` is a field, else a zero-arg call. A fn name is a value: `xs.map(show)`.
+Return type required unless `Unit`. Effects after `!`: `fail[E]` (`raise`, or calling a failing fn), `log` (`log(s)`), `div` (`while`), `conc` (atomics, channels). Undeclared effects are errors. Optional `pre`, `post` (`r` is the result). Body: one expression, or `do` + indented block whose last line is the result. No overloading or default args. `x.f(a)` means `f(x, a)`; `x.f` is a field, else a zero-arg call. A fn name is a value: `xs.map(show)`.
 
 Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `for i in 0..n` (excludes n) + indented body, `while c` + body, `return e`, local `fn`. `if c then e` with no `else` is allowed for Unit or `raise`.
 
@@ -32,6 +32,7 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `for
 - `if c then a else b`; `then do` / `else do` + indented block.
 - `match e` then arms on following lines: `| Pat => e`, `| Pat if cond => e`. Patterns: `_`, name, literal, tuple, `Ctor`, `Ctor{f, g: pat}`, `some(p)`, `none`, `ok(p)`, `err(p)`. Must be exhaustive.
 - Effects: `effect ask() -> Int` declares an operation; callers declare `! ask`. `handle e` + arms `| ask() => resume(21)` handle it (each arm resumes at most once; optional `| return(r) =>`; an arm that doesn't resume ends the `handle`). A fn with `! yield[T]` calling `yield(x)` is a generator; `for v in gen()` consumes it.
+- Concurrency: `par(a, b)` runs tasks and returns `(a, b)`; `for i in par(xs)` + body runs one task per element; both join. `atomic(0)`: `.load .store(v) .add(d) .cas(old, new)`. `chan()`: `.send(x)`, `.recv` (Opt, none when closed), `.close`, `for x in c`. These need `! conc`. Tasks can't assign outer vars, use outer lambdas/local fns, `log` or `return`; share data via atomics/channels.
 - Errors: `raise Ctor{..}`. `catch e` + arms like match handles them; a catch over every variant removes `fail[E]`.
 - Records `Item{sku: "a", qty: 1}`, shorthand `Item{sku, qty}`; update `x with qty := 2, a.b := 3, xs[0] := v`.
 - Lambdas `x => e`, `(a, b) => e`, single expression. `_` makes the innermost call argument a lambda: `xs.map(_.qty * _.p)` is `x => x.qty * x.p`, `sort_by((-_.n, _.name))`; in `f(g(_.a))` it binds inside `g`, so write `x => f(g(x.a))`.
@@ -46,7 +47,12 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `for
 - Map (immutable): `empty_map() get(k) put(k, v) remove(k) has(k) keys values items len`.
 - Int `abs to_f64`; F64 `abs round floor sqrt`; any `.str`; globals `min(a, b) max(a, b) log(s)`.
 
+## C
+`extern fn cbrt(x: F64) -> F64 ! ffi from "m"` (no body; `as "sym"` renames). Widths `I8..I32 U8..U64 F32` exist only in extern signatures (callers pass Int/F64); also `Str`, `Opt[Str]`, `List[U8]`. Callers declare `ffi`. `sspur bind h.h` writes externs; `sspur export-c f.ssp -o libf` builds a C library and header.
+## Services
+`store S = table[K, V]` (K: Str, Int or newtype). `db.get(S, k)` (Opt[V]), `db.scan(S)` (List[V]) need `! db.read[S]`; `db.put(S, k, v)`, `db.del(S, k)` (Bool) need `! db.write[S]`. `svc name` + lines `ep get "/items/{id}" = fname`: `{id}` binds param id, one other param is the JSON body. `Opt` none and `raise NotFound{..}` are 404.
+
 ## CLI
 - `./sspur src` prints the codebase. `./sspur q body|sig|callers NAME` print one item.
 - `./sspur edit --test -e '<definitions>'` (one single-quoted, multi-line argument; or a file, or stdin): each definition replaces the one with its name or is added. Lines `rename OLD NEW` (a fn, type, test or constructor, with all uses) and `remove NAME` may come first. Atomic: if anything fails to typecheck nothing changes and errors print as `def:line:col CODE msg`. `--test` then runs every test and prints failures and `N passed, M failed`, so no separate test run is needed. Put all changes of the task in one edit.
-- `./sspur test`, `./sspur check`.
+- `./sspur test`, `./sspur check`, `./sspur deploy local|plan file`.

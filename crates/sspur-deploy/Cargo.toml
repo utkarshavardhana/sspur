@@ -1,0 +1,11 @@
+[package]
+name = "sspur-deploy"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sspur-syntax.workspace = true
+sspur-check.workspace = true
+sspur-native.workspace = true
+blake3.workspace = true
+serde_json.workspace = true

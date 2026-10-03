@@ -223,6 +223,15 @@ pub fn strip_spans(m: &mut Module) {
                 t.span = z;
                 strip_expr(&mut t.body);
             }
+            Def::Store(st) => {
+                st.span = z;
+                strip_ty(&mut st.key);
+                strip_ty(&mut st.val);
+            }
+            Def::Svc(sv) => {
+                sv.span = z;
+                sv.eps.iter_mut().for_each(|e| e.span = z);
+            }
         }
     }
 }

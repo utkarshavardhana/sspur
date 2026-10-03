@@ -1,6 +1,8 @@
 #![allow(clippy::mutable_key_type)]
 mod builtins;
+mod ffi;
 pub mod fuzz;
+mod sched;
 pub mod value;
 
 use sspur_syntax::*;
@@ -96,6 +98,7 @@ pub struct Interp {
     moves: HashSet<(u32, u32)>,
     inplace: HashSet<(u32, u32)>,
     heap: RefCell<Vec<Option<Vec<Value>>>>,
+    sched: sched::Sched,
 }
 
 const MAX_DEPTH: u32 = 20_000;
@@ -138,6 +141,7 @@ impl Interp {
             moves: HashSet::new(),
             inplace: HashSet::new(),
             heap: RefCell::new(vec![None]),
+            sched: Default::default(),
         };
         for d in &m.defs {
             match d {
@@ -153,6 +157,7 @@ impl Interp {
                     it.add_type(t)
                 }
                 Def::Effect(e) => it.ops.extend(e.ops.iter().map(|o| o.name.clone())),
+                Def::Store(_) | Def::Svc(_) => {}
             }
         }
         it
@@ -424,6 +429,9 @@ impl Interp {
     }
 
     fn call_fn_inner(&self, f: &FnDef, args: Vec<Value>, parent: &Rc<Env>) -> R {
+        if f.ext.is_some() {
+            return ffi::call(f, &args);
+        }
         let env = Env::child(parent);
         let r = self.call_body(f, args, &env);
         self.release(&env, r)
@@ -825,7 +833,7 @@ impl Interp {
             },
             ExprKind::Unary(UnOp::Not, x) => Ok(Value::Bool(!self.truthy(x, env)?)),
             ExprKind::Range(a, b) => match (self.eval(a, env)?, self.eval(b, env)?) {
-                (Value::Int(a), Value::Int(b)) if b as i128 - a as i128 > 1 << 32 => trap("out of memory"),
+                (Value::Int(a), Value::Int(b)) if b as i128 - a as i128 > 1 << 26 => trap("out of memory"),
                 (Value::Int(a), Value::Int(b)) => Ok(Value::list((a..b).map(Value::Int).collect())),
                 _ => trap("range bounds must be Int"),
             },
@@ -898,7 +906,8 @@ impl Interp {
                 }
             }
             ExprKind::List(xs) => Ok(Value::list(self.eval_args(xs, env)?)),
-            ExprKind::Tuple(xs) | ExprKind::Par(xs) => Ok(Value::Tuple(Rc::new(self.eval_args(xs, env)?))),
+            ExprKind::Tuple(xs) => Ok(Value::Tuple(Rc::new(self.eval_args(xs, env)?))),
+            ExprKind::Par(xs) => Ok(Value::Tuple(Rc::new(self.run_tasks(xs.len(), &|k| self.eval(&xs[k], &Env::child(env)))?))),
             ExprKind::Raise(x) => Err(Ctrl::Raise(self.eval(x, env)?)),
             ExprKind::Return(x) => Err(Ctrl::Return(self.eval(x, env)?)),
             ExprKind::Table(_) => trap("a rule table can only be the body of a rule"),
@@ -1026,8 +1035,33 @@ impl Interp {
                     Err(c) => Err(c),
                 }
             }
+            Stmt::For(p, it, body) if matches!(&it.kind, ExprKind::Par(xs) if xs.len() == 1) => {
+                let ExprKind::Par(src) = &it.kind else { unreachable!() };
+                let Value::List(xs) = self.eval(&src[0], env)? else { return trap("for expects a List") };
+                self.run_tasks(xs.len(), &|k| {
+                    let inner = Env::child(env);
+                    if self.bind_pat(p, &xs[k], &inner) {
+                        self.eval(body, &inner)?;
+                    }
+                    Ok(Value::Unit)
+                })?;
+                Ok(Value::Unit)
+            }
             Stmt::For(p, it, body) => {
-                let Value::List(xs) = self.eval(it, env)? else { return trap("for expects a List") };
+                let xs = match self.eval(it, env)? {
+                    Value::List(xs) => xs,
+                    Value::Chan(c) => {
+                        while let Some(x) = self.chan_recv(&c)? {
+                            let inner = Env::child(env);
+                            if self.bind_pat(p, &x, &inner) {
+                                let r = self.eval(body, &inner);
+                                self.release(&inner, r)?;
+                            }
+                        }
+                        return Ok(Value::Unit);
+                    }
+                    _ => return trap("for expects a List"),
+                };
                 for x in xs.iter() {
                     let inner = Env::child(env);
                     if self.bind_pat(p, x, &inner) {

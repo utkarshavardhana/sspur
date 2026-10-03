@@ -10,6 +10,8 @@ borrow_scalar_conflict E_BORROW_CONFLICT
 borrow_temporary E_BORROW_PLACE
 capture_borrow E_CAPTURE
 capture_res E_CAPTURE
+chan_recv_res E_RES_ESCAPE
+chan_send_linear E_RES_ESCAPE
 destructor_keeps_fields E_RES_LEAK
 destructor_moves_self E_DROP_SELF
 destructure_droppable E_RES_DESTRUCTURE
@@ -38,6 +40,10 @@ move_in_loop E_USE_MOVED
 move_out_of_borrow E_MOVE_OUT_OF_BORROW
 move_while_loop E_USE_MOVED
 mut_borrow_immutable E_BORROW_IMMUTABLE
+par_for_share E_PAR_SHARE
+par_move_res E_PAR_SHARE
+par_share_borrow E_PAR_SHARE
+par_share_res E_PAR_SHARE
 profile_borrow E_PROFILE
 profile_ptr E_PROFILE
 profile_res E_PROFILE

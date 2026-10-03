@@ -1,0 +1,17 @@
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn pull(c: Chan[File]) -> Int ! conc
+= match c.recv
+  | some(f) => 1
+  | none => 0

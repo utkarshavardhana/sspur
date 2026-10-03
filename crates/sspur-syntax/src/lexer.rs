@@ -49,6 +49,10 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SyntaxError> {
                 i = next + 1;
                 continue;
             }
+            if bytes[next..].starts_with(b"//") {
+                i = next + bytes[next..].iter().position(|&b| b == b'\n').unwrap_or(bytes.len() - next);
+                continue;
+            }
             if depth == 0 && !out.is_empty() {
                 out.push(Token { tok: Tok::Newline(indent), span: Span::new(next, next) });
             } else if depth > 0 {
@@ -72,6 +76,11 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SyntaxError> {
         let c = bytes[i];
         match c {
             b' ' | b'\t' | b'\r' => i += 1,
+            b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
             b'\n' => {
                 i += 1;
                 at_line_start = true;

@@ -1,4 +1,5 @@
 use super::prove::Fact;
+use super::simd::{VBody, VLoop};
 use super::*;
 use std::collections::BTreeSet;
 
@@ -53,6 +54,28 @@ struct Scan {
 struct Plan {
     deferred: bool,
     par: Option<Scan>,
+    vec: bool,
+}
+
+fn vloop<'s>(end: &End, worker: bool, vb: &'s VBody, i: &'s str, head: &'s str, seq: &'s str) -> VLoop<'s> {
+    let xf = &vb.xf;
+    let range = if vb.small { String::new() } else { format!("vf_ |= mk_ & ((uint64_t){xf} + (1ULL << 56) >= (1ULL << 57)); ") };
+    let guard = || "acc_ >= -(1LL << 62) && acc_ <= (1LL << 62)".to_string();
+    let (init, step, commit, guard, direct) = match end {
+        End::Sum if worker => (
+            "int64_t vp_ = 0, vn_ = 0; ".into(),
+            format!("int64_t vx_ = {xf} & -(int64_t)mk_; vp_ += vx_ > 0 ? vx_ : 0; vn_ += vx_ < 0 ? vx_ : 0; {range}"),
+            "mn_ = acc_ + vn_ < mn_ ? acc_ + vn_ : mn_; mx_ = acc_ + vp_ > mx_ ? acc_ + vp_ : mx_; acc_ += vp_ + vn_; ".into(),
+            guard(),
+            None,
+        ),
+        End::Sum => ("uint64_t vs_ = 0; ".into(), format!("vs_ += (uint64_t){xf} & -mk_; {range}"), "acc_ += (int64_t)vs_; ".into(), guard(), None),
+        End::Len => ("int64_t vs_ = 0; ".into(), "vs_ += mk_; ".into(), "acc_ += vs_; ".into(), String::new(), Some("acc_ += mk_; ".into())),
+        End::Collect if worker => (String::new(), format!("pc_->d[{i}] = {xf}; "), String::new(), String::new(), Some(format!("pc_->d[{i}] = {xf}; "))),
+        End::Collect => (String::new(), format!("d_[k_ + ({i} - vb_)] = {xf}; "), "k_ += ve_ - vb_; ".into(), String::new(), Some(format!("d_[k_++] = {xf}; "))),
+    };
+    let direct = direct.filter(|_| !vb.flagged && vb.pre.is_empty());
+    VLoop { i, head, seq, vb, init, step, commit, guard, direct }
 }
 
 impl Cx<'_> {
@@ -113,7 +136,14 @@ impl Cx<'_> {
         if stages.len() < 2 && matches!(end, End::Collect) && par.is_none() {
             return None;
         }
-        Some(self.fused_code(cur, et0, &stages, end, t, Plan { deferred, par }))
+        let vec = stages.iter().all(|(_, f, _)| self.vstage(f))
+            && (matches!(cur.kind, ExprKind::Range(..)) || list_of_scalar(&src_t))
+            && match end {
+                End::Sum => is(t, "Int"),
+                End::Len => true,
+                End::Collect => stages.iter().all(|(k, _, _)| *k == "map") && elem(t, "List").is_some_and(|e| scalar(&e)),
+            };
+        Some(self.fused_code(cur, et0, &stages, end, t, Plan { deferred, par, vec }))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -404,19 +434,24 @@ impl Cx<'_> {
                 let (av, bv) = (self.expr(a)?, self.expr(b)?);
                 riv = Some((self.range(a).0, self.range(b).1 - 1));
                 self.for_range_facts(&x, a, b);
-                (format!("int64_t s_ = {av}; int64_t e_ = {bv}; int64_t {n} = e_ > s_ ? e_ - s_ : 0; "), format!("int64_t {x} = s_ + {i}; "))
+                (format!("int64_t s_ = {av}; int64_t re_ = {bv}; int64_t {n} = re_ > s_ ? re_ - s_ : 0; "), format!("int64_t {x} = s_ + {i}; "))
             }
             _ => {
                 let lv = self.expr(src)?;
                 (format!("__auto_type {l} = {lv}; int64_t {n} = {l}.len; "), format!("__auto_type {x} = {l}.data[{i}]; "))
             }
         };
-        let r = self.stage_body(stages, x, et0.clone());
+        let r = self.stage_body(stages, x.clone(), et0.clone());
+        let vb = match (&r, plan.vec) {
+            (Ok(_), true) if riv.is_some() => self.vec_body(stages, &x, &et0, &x, "s_ + vb_", "s_ + ve_ - 1"),
+            (Ok(_), true) => self.vec_body(stages, &x, &et0, "", "", ""),
+            _ => None,
+        };
         self.know.facts.truncate(mark);
         let (body, xf) = r?;
         let float = is(t, "F64");
         let (decl, step, fin) = match end {
-            End::Sum if float => ("double acc_ = 0.0; ".to_string(), format!("acc_ += {xf}; "), "acc_; ".to_string()),
+            End::Sum if float => ("double acc_ = -0.0; int any_ = 0; ".to_string(), format!("acc_ += {xf}; any_ = 1; "), "any_ ? acc_ : 0.0; ".to_string()),
             End::Sum if plan.deferred => (
                 "int64_t acc_ = 0; int ov_ = 0; ".to_string(),
                 format!("if (UNLIKELY(__builtin_add_overflow(acc_, {xf}, &acc_))) ov_ = 1; "),
@@ -431,19 +466,27 @@ impl Cx<'_> {
                 (format!("RawL r_ = raw_alloc({n}, sizeof({oc})); {oc}* d_ = ({oc}*)r_.data; int64_t k_ = 0; "), format!("d_[k_++] = {xf}; "), format!("r_.hdr[1] = k_; ({lc}){{k_, d_, r_.hdr}}; "))
             }
         };
+        let seq = format!("{body}{step}");
+        let vl = vb.as_ref().map(|vb| vloop(&end, false, vb, &i, &head, &seq));
+        let lp = |lo: &str, hi: &str| match &vl {
+            Some(v) => v.emit(lo, hi),
+            None => format!("for (int64_t {i} = {lo}; {i} < {hi}; {i}++) {{ {head}{seq}}} "),
+        };
+        let decl = if vl.is_some() { format!("{decl}int64_t vm_ = 0; ") } else { decl };
         let Some(scan) = plan.par else {
-            return Ok(format!("({{ {setup}{decl}for (int64_t {i} = 0; {i} < {n}; {i}++) {{ {head}{body}{step}}} {fin}}})"));
+            return Ok(format!("({{ {setup}{decl}{}{fin}}})", lp("0", &n)));
         };
         let snap = self.snapshot();
-        let worker = match self.par_worker(src, riv, stages, &et0, &end, &scan, &l, t) {
+        let worker = match self.par_worker(src, riv, stages, &et0, &end, &scan, &l, t, plan.vec) {
             Ok(w) => w,
             Err(_) => {
                 let keep = (std::mem::take(&mut self.know), std::mem::take(&mut self.catch_stack), std::mem::take(&mut self.in_progress));
                 self.restore(snap);
                 (self.know, self.catch_stack, self.in_progress) = keep;
-                return Ok(format!("({{ {setup}{decl}for (int64_t {i} = 0; {i} < {n}; {i}++) {{ {head}{body}{step}}} {fin}}})"));
+                return Ok(format!("({{ {setup}{decl}{}{fin}}})", lp("0", &n)));
             }
         };
+        let warm = lp("i0_", "h_");
         let (id, init) = worker;
         let (minn, b0) = if scan.heavy { (16, 1) } else if scan.calls { (1024, 64) } else { (4096, 256) };
         let guard = if plan.deferred { "!ov_ && " } else { "" };
@@ -456,8 +499,7 @@ impl Cx<'_> {
             "({{ {setup}{decl}int64_t i0_ = 0; int64_t m_ = {n}; uint64_t t0_ = 0; \
 if (UNLIKELY({n} >= {minn})) {{ if (UNLIKELY(!par_nt)) par_init(); if (par_nt > 1) {{ m_ = {b0}; t0_ = par_now(); }} }} \
 for (;;) {{ int64_t h_ = {n} - i0_ > m_ ? i0_ + m_ : {n}; \
-for (int64_t {i} = i0_; {i} < h_; {i}++) {{ {head}{body}{step}}} \
-i0_ = h_; if (LIKELY_(i0_ >= {n})) break; m_ *= 2; uint64_t el_ = par_now() - t0_; \
+{warm}i0_ = h_; if (LIKELY_(i0_ >= {n})) break; m_ *= 2; uint64_t el_ = par_now() - t0_; \
 if (el_ >= 20000) {{ m_ = {n}; if ({guard}(double)el_ * (double)({n} - i0_) >= 1e5 * (double)i0_) {{ \
 struct {id}_c pcx_ = {{ {init} }}; int64_t nc_ = par_run({id}, &pcx_, i0_, {n}); \
 if (nc_) {{ int64_t pc_; {combine}par_release(); }} }} }} }} {fin}}})"
@@ -465,18 +507,20 @@ if (nc_) {{ int64_t pc_; {combine}par_release(); }} }} }} }} {fin}}})"
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn par_worker(&mut self, src: &Expr, riv: Option<Iv>, stages: &[(&str, &Expr, &Expr)], et0: &Type, end: &End, scan: &Scan, l: &str, t: &Type) -> G<(String, String)> {
+    fn par_worker(&mut self, src: &Expr, riv: Option<Iv>, stages: &[(&str, &Expr, &Expr)], et0: &Type, end: &End, scan: &Scan, l: &str, t: &Type, vec: bool) -> G<(String, String)> {
         let id = self.fresh("pw");
         let mut fields = String::new();
         let mut init = Vec::new();
         let mut scope = HashMap::new();
+        let mut locals = String::new();
         for (k, c) in scan.caps.iter().enumerate() {
             let ExprKind::Name(name) = &c.kind else { return Err("bad capture".into()) };
             let ct = self.ty(c)?;
             let v = self.expr(c)?;
             write!(fields, "{} f{k}; ", self.cty(&ct)?).unwrap();
             init.push(format!(".f{k} = {v}"));
-            scope.insert(name.clone(), (format!("pc_->f{k}"), ct));
+            write!(locals, "__auto_type pf{k}_ = pc_->f{k}; (void)pf{k}_; ").unwrap();
+            scope.insert(name.clone(), (format!("pf{k}_"), ct));
         }
         let x = self.fresh("x");
         let head = if riv.is_some() {
@@ -506,7 +550,12 @@ if (nc_) {{ int64_t pc_; {combine}par_release(); }} }} }} }} {fin}}})"
         if let Some(iv) = riv {
             self.know.facts.push(Fact::Range(x.clone(), iv));
         }
-        let r = self.stage_body(stages, x, et0.clone());
+        let r = self.stage_body(stages, x.clone(), et0.clone());
+        let vb = match (&r, vec) {
+            (Ok(_), true) if riv.is_some() => self.vec_body(stages, &x, et0, &x, "pc_->s + vb_", "pc_->s + ve_ - 1"),
+            (Ok(_), true) => self.vec_body(stages, &x, et0, "", "", ""),
+            _ => None,
+        };
         let decls = std::mem::replace(&mut self.fn_decls, saved_decls);
         self.scopes = saved_scopes;
         self.know = saved_know;
@@ -523,12 +572,17 @@ if (nc_) {{ int64_t pc_; {combine}par_release(); }} }} }} }} {fin}}})"
             End::Len => "acc_++; ".into(),
             End::Collect => format!("pc_->d[i_] = {xf}; "),
         };
+        let seq = format!("{body}{step}");
+        let lp = match &vb {
+            Some(vb) => format!("int64_t vm_ = 0; {}", vloop(end, true, vb, "i_", &head, &seq).emit("lo_", "hi_")),
+            None => format!("for (int64_t i_ = lo_; i_ < hi_; i_++) {{ {head}{seq}}} "),
+        };
         writeln!(self.protos, "struct {id}_c {{ {fields}}};").unwrap();
         writeln!(
             self.lambdas,
-            "#define RRT {rr}\n#define FIDX {}\nstatic int {id}(void* cv_, int64_t lo_, int64_t hi_, ParRes* pr_) {{ struct {id}_c* pc_ = (struct {id}_c*)cv_; Status st_; memset(&st_, 0, sizeof st_); Status* st = &st_; int64_t depth = pc_->depth; (void)depth; \
+            "#define RRT {rr}\n#define FIDX {}\nstatic int {id}(void* cv_, int64_t lo_, int64_t hi_, ParRes* pr_) {{ struct {id}_c* pc_ = (struct {id}_c*)cv_; Status st_; memset(&st_, 0, sizeof st_); Status* st = &st_; int64_t depth = pc_->depth; (void)depth; {locals}\
 jmp_buf jb_; jmp_buf* sv_ = sspur_jb; sspur_jb = &jb_; if (setjmp(jb_)) {{ sspur_jb = sv_; return 0; }} \
-int64_t acc_ = 0, mn_ = 0, mx_ = 0; for (int64_t i_ = lo_; i_ < hi_; i_++) {{ {head}{body}{step}}} \
+int64_t acc_ = 0, mn_ = 0, mx_ = 0; {lp}\
 sspur_jb = sv_; pr_->acc = acc_; pr_->mn = mn_; pr_->mx = mx_; return 1; }}\n#undef RRT\n#undef FIDX",
             self.fidx
         )

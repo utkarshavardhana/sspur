@@ -32,7 +32,9 @@ pub(crate) const T_REPEAT: i64 = 13;
 pub(crate) const T_RAISE: i64 = 100;
 pub(crate) const T_GUESS: i64 = 14;
 pub(crate) const T_OOM: i64 = 15;
-pub(crate) const T_ALLOC: i64 = 16;
+pub(crate) const T_ALLOC: i64 = 18;
+const T_DEADLOCK: i64 = 16;
+const T_CLOSED: i64 = 17;
 
 #[repr(C)]
 struct Status {
@@ -317,6 +319,8 @@ impl Compiled {
             (T_REPEAT, _) => "repeat count must be >= 0".into(),
             (T_OOM, _) => "out of memory".into(),
             (T_ALLOC, _) => format!("invalid allocation size {}", st.clause),
+            (T_DEADLOCK, _) => "deadlock: every task is blocked on recv".into(),
+            (T_CLOSED, _) => "send on a closed channel".into(),
             (T_GUESS, _) => format!("guess confidence {} is outside [0, 1]", f64::from_bits(st.value as u64)),
             (T_MSG, _) if !st.rbuf.is_null() => {
                 let bytes = unsafe { std::slice::from_raw_parts(st.rbuf as *const u8, st.rlen as usize) };
@@ -450,6 +454,9 @@ fn kind_name(k: &ExprKind) -> &'static str {
 }
 
 fn local_check(f: &FnDef, fns: &HashSet<String>) -> Result<(), String> {
+    if f.ext.is_some() {
+        return Err("is extern".into());
+    }
     if !f.tparams.is_empty() {
         return Err("is generic".into());
     }

@@ -1,0 +1,42 @@
+profile sys
+
+res type Job = {id: Int, price: Int} drop finish
+
+fn finish(j: Job)
+= ()
+
+fn value(j: &Job) -> Int
+= j.price * 2 + j.id
+
+fn produce(c: Chan[Job], n: Int) -> Unit ! conc
+= do
+  for i in 0..n
+    c.send(Job{id: i, price: i * 3})
+  c.close
+
+fn work(c: Chan[Job]) -> Int ! conc
+= do
+  var total = 0
+  for j in c
+    total := total + value(&j)
+  total
+
+fn run(n: Int) -> Int ! conc
+= do
+  c = chan()
+  (_, t) = par(produce(c, n), work(c))
+  t
+
+fn handoff() -> Int ! conc
+= do
+  c = chan()
+  c.send(Job{id: 7, price: 1})
+  c.close
+  (a, b) = par(work(c), 5)
+  a + b
+
+fn main() -> Unit ! log, conc
+= log("jobs {run(10)} {handoff()}")
+
+test r = run(4) == 42
+test h = handoff() == 14

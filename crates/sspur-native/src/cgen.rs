@@ -7,10 +7,14 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
 
+mod conc;
+pub mod export;
+mod ffi;
 mod fuse;
 mod lower;
 mod own;
 mod prove;
+mod simd;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
 type G<T = String> = Result<T, String>;
@@ -30,6 +34,8 @@ typedef struct { int64_t code, func, clause, value, limit; int64_t* rbuf; int64_
 static _Thread_local jmp_buf* sspur_jb;
 static void __attribute__((noinline, cold, noreturn)) sspur_trap(Status* st, int64_t c, int64_t f, int64_t cl, int64_t v) { st->code = c; st->func = f; st->clause = cl; st->value = v; longjmp(*sspur_jb, 1); }
 #define TRAPV(c, cl, val) sspur_trap(st, (c), FIDX, (cl), (int64_t)(val))
+static int64_t ss_live;
+#define SS_MT() UNLIKELY(__atomic_load_n(&ss_live, __ATOMIC_RELAXED))
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
@@ -79,7 +85,7 @@ static void* par_loop(void* a) {
     pthread_mutex_unlock(&par_mu);
     return 0;
 }
-static void __attribute__((noinline, cold)) par_init(void) {
+static void par_init_once(void) {
     const char* e = getenv("SSPUR_THREADS");
     long n = e && *e ? strtol(e, 0, 10) : sysconf(_SC_NPROCESSORS_ONLN);
     if (n < 1) n = 1;
@@ -90,6 +96,7 @@ static void __attribute__((noinline, cold)) par_init(void) {
     pthread_attr_destroy(&at);
     par_nt = k;
 }
+static void __attribute__((noinline, cold)) par_init(void) { static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, par_init_once); }
 static __attribute__((destructor)) void par_fini(void) {
     if (par_nt <= 1 || __atomic_load_n(&par_busy, __ATOMIC_ACQUIRE)) return;
     pthread_mutex_lock(&par_mu); par_quit = 1; pthread_cond_broadcast(&par_cv); pthread_mutex_unlock(&par_mu);
@@ -125,12 +132,27 @@ static int64_t __attribute__((noinline)) par_run(ParFn fn, void* cx, int64_t bas
     return r;
 }
 static inline void par_release(void) { __atomic_store_n(&par_busy, 0, __ATOMIC_RELEASE); }
+static int sum_i64(const int64_t* d, int64_t n, int64_t* out) {
+    int64_t acc = 0, miss = 0;
+    for (int64_t i = 0; i < n; i += 64) {
+        int64_t e = n - i > 64 ? i + 64 : n;
+        if (LIKELY_(miss < 8 + (i >> 9) && acc >= -(1LL << 62) && acc <= (1LL << 62))) {
+            uint64_t s = 0, f = 0;
+            for (int64_t j = i; j < e; j++) { s += (uint64_t)d[j]; f |= (uint64_t)d[j] + (1ULL << 56) >= (1ULL << 57); }
+            if (LIKELY_(!f)) { acc += (int64_t)s; continue; }
+            miss++;
+        }
+        for (int64_t j = i; j < e; j++) if (UNLIKELY(__builtin_add_overflow(acc, d[j], &acc))) return 1;
+    }
+    *out = acc;
+    return 0;
+}
 #include <sys/mman.h>
 #include <setjmp.h>
 #include <time.h>
 #define GC_SHIFT 16
 #define GC_PAGE ((size_t)1 << GC_SHIFT)
-#define GC_REGION ((size_t)16 << 30)
+#define GC_REGION ((size_t)8 << 30)
 #define GC_NCLS 35
 static const uint32_t gc_sizes[GC_NCLS] = {16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 448, 512, 640, 768, 1024, 1280, 1536, 2048, 2560, 3072, 4096, 5120, 6144, 8192, 10240, 12288, 16384, 32768};
 typedef struct GcPage { uint8_t kind, atomic, cls, swept; uint32_t obj, nobj, bump, live; size_t head, npages; void* free; uint64_t freebits[64], mark[64]; } GcPage;
@@ -310,9 +332,9 @@ static void* gc_alloc_large(size_t n, int atomic) {
     gc_since += np << GC_SHIFT;
     return gc_lo + (i << GC_SHIFT);
 }
-static void* __attribute__((noinline)) gc_alloc_slow(size_t n, int atomic) {
+static void* gc_alloc_slow1(size_t n, int atomic) {
     if (!gc_ready) gc_init();
-    if (n > 32768) { if (gc_since > gc_threshold && gc_depth > 0) gc_collect(); return gc_alloc_large(n, atomic); }
+    if (n > 32768) { if (gc_since > gc_threshold && gc_depth > 0 && !ss_live) gc_collect(); return gc_alloc_large(n, atomic); }
     int cls = gc_class_of[(n + 7) >> 3];
     for (;;) {
         GcCursor* k = &gc_cur[atomic][cls];
@@ -327,7 +349,7 @@ static void* __attribute__((noinline)) gc_alloc_slow(size_t n, int atomic) {
             return f;
         }
         gc_flush_one(atomic, cls);
-        if (gc_since > gc_threshold && gc_depth > 0) { gc_collect(); continue; }
+        if (gc_since > gc_threshold && gc_depth > 0 && !ss_live) { gc_collect(); continue; }
         if (gc_partial_n[atomic][cls]) {
             size_t pi = gc_partial[atomic][cls][--gc_partial_n[atomic][cls]];
             GcPage* m = gc_meta[pi];
@@ -341,8 +363,16 @@ static void* __attribute__((noinline)) gc_alloc_slow(size_t n, int atomic) {
         gc_new_page(atomic, cls);
     }
 }
+static pthread_mutex_t gc_mu = PTHREAD_MUTEX_INITIALIZER;
+static void* __attribute__((noinline)) gc_alloc_slow(size_t n, int atomic) {
+    if (!SS_MT()) return gc_alloc_slow1(n, atomic);
+    pthread_mutex_lock(&gc_mu);
+    void* r = gc_alloc_slow1(n, atomic);
+    pthread_mutex_unlock(&gc_mu);
+    return r;
+}
 static inline __attribute__((always_inline)) void* gc_alloc(size_t n, int atomic) {
-    if (n && n <= 32768) {
+    if (n && n <= 32768 && !SS_MT()) {
         int cls = gc_class_of[(n + 7) >> 3];
         GcCursor* k = &gc_cur[atomic][cls];
         uint32_t sz = gc_sizes[cls];
@@ -365,7 +395,7 @@ static inline void* sspur_alloc(size_t n) { return gc_alloc(n, 0); }
 static inline void* sspur_alloc_atomic(size_t n) { return gc_alloc(n, 1); }
 typedef struct { int64_t len; void* data; int64_t* hdr; } RawL;
 static RawL raw_alloc_a(int64_t cap, size_t es, int atomic) {
-    if (UNLIKELY(cap > ((int64_t)1 << 32))) sspur_trap((Status*)gc_root_ptr, 15, 0, 0, 0);
+    if (UNLIKELY(cap > (((int64_t)1 << 31) / (int64_t)es))) sspur_trap((Status*)gc_root_ptr, 15, 0, 0, 0);
     if (cap < 4) cap = 4;
     int64_t* h = (int64_t*)gc_alloc(32 + (size_t)cap * es, atomic);
     h[0] = cap; h[1] = 0; h[2] = atomic; h[3] = 0;
@@ -373,15 +403,16 @@ static RawL raw_alloc_a(int64_t cap, size_t es, int atomic) {
 }
 static RawL raw_alloc(int64_t cap, size_t es) { return raw_alloc_a(cap, es, 0); }
 static inline int64_t raw_offset(RawL l, size_t es) { return ((char*)l.data - (char*)(l.hdr + 4)) / (int64_t)es; }
+static int raw_claim(RawL l, int64_t extra, size_t es) { int64_t e = raw_offset(l, es) + l.len; return __atomic_compare_exchange_n(&l.hdr[1], &e, e + extra, 0, __ATOMIC_ACQ_REL, __ATOMIC_RELAXED); }
 static inline __attribute__((always_inline)) RawL raw_reserve(RawL l, int64_t extra, size_t es) {
-    if (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0]) return l;
+    if (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0] && (!SS_MT() || raw_claim(l, extra, es))) return l;
     RawL n = raw_alloc_a((l.len + extra) * 2, es, l.hdr ? (int)l.hdr[2] : 0);
     if (l.len) memcpy(n.data, l.data, (size_t)l.len * es);
     n.len = l.len; n.hdr[1] = l.len;
     return n;
 }
 static RawL raw_reserve_exact(RawL l, int64_t extra, size_t es) {
-    if (extra <= 0 || (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0])) return l;
+    if (extra <= 0 || (l.hdr && raw_offset(l, es) + l.len == l.hdr[1] && l.hdr[1] + extra <= l.hdr[0] && (!SS_MT() || raw_claim(l, extra, es)))) return l;
     RawL n = raw_alloc_a(l.len + extra, es, l.hdr ? (int)l.hdr[2] : 0);
     if (l.len) memcpy(n.data, l.data, (size_t)l.len * es);
     n.len = l.len; n.hdr[1] = l.len;
@@ -426,12 +457,107 @@ static RawL raw_sorted(RawL l, size_t es, int (*cmp)(const void*, const void*)) 
     if (c.len > 1) raw_msort((char*)c.data, c.len, es, cmp, (char*)sspur_alloc((size_t)c.len * es));
     return c;
 }
+typedef struct SsTask { void (*run)(struct SsTask*); void* clo; void* out; int64_t idx; Status st; int64_t depth; int64_t fail; struct SsGroup* g; pthread_t th; int started; } SsTask;
+typedef struct SsGroup { int64_t remaining; int waiting; pthread_cond_t cv; } SsGroup;
+typedef struct SsWait { struct SsWait* prev; struct SsWait* next; void* ch; int woken, dead; pthread_cond_t cv; } SsWait;
+typedef struct { int64_t v, id; } SsAtom;
+typedef struct { int64_t id, es, head, len, cap, closed; char* buf; } SsChan;
+static pthread_mutex_t ss_mu = PTHREAD_MUTEX_INITIALIZER;
+static int64_t ss_blocked, ss_joining, ss_ids;
+static SsWait ss_wq = {&ss_wq, &ss_wq, 0, 0, 0};
+static void ss_set_live(int64_t d) { __atomic_store_n(&ss_live, ss_live + d, __ATOMIC_RELAXED); }
+static void ss_wake(SsWait* w, int dead) { w->prev->next = w->next; w->next->prev = w->prev; ss_blocked--; w->woken = 1; w->dead = dead; pthread_cond_signal(&w->cv); }
+static void ss_check(void) { if (ss_blocked > 0 && ss_blocked + ss_joining == ss_live + 1) while (ss_wq.next != &ss_wq) ss_wake(ss_wq.next, 1); }
+static void* ss_thread(void* a) {
+    SsTask* t = (SsTask*)a;
+    t->run(t);
+    pthread_mutex_lock(&ss_mu);
+    SsGroup* g = t->g;
+    if (--g->remaining == 0 && g->waiting) { g->waiting = 0; ss_joining--; pthread_cond_signal(&g->cv); }
+    ss_set_live(-1);
+    ss_check();
+    pthread_mutex_unlock(&ss_mu);
+    return 0;
+}
+static int64_t __attribute__((noinline)) ss_par(SsTask* ts, int64_t n, Status* st, int64_t depth) {
+    if (n <= 0) return 0;
+    SsGroup g; g.remaining = n - 1; g.waiting = 0; pthread_cond_init(&g.cv, 0);
+    for (int64_t i = 0; i < n; i++) { memset(&ts[i].st, 0, sizeof(Status)); ts[i].st.limit = st->limit; ts[i].depth = depth; ts[i].fail = 0; ts[i].g = &g; ts[i].started = 0; }
+    if (n > 1) {
+        pthread_mutex_lock(&ss_mu); ss_set_live(n - 1); pthread_mutex_unlock(&ss_mu);
+        pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setstacksize(&at, (size_t)1 << 29);
+        for (int64_t i = 1; i < n; i++) {
+            if (pthread_create(&ts[i].th, &at, ss_thread, &ts[i]) == 0) { ts[i].started = 1; continue; }
+            ts[i].fail = 1; ts[i].st.code = 15;
+            pthread_mutex_lock(&ss_mu); g.remaining--; ss_set_live(-1); pthread_mutex_unlock(&ss_mu);
+        }
+        pthread_attr_destroy(&at);
+    }
+    jmp_buf* saved = sspur_jb;
+    ts[0].run(&ts[0]);
+    sspur_jb = saved;
+    pthread_mutex_lock(&ss_mu);
+    if (g.remaining > 0) { g.waiting = 1; ss_joining++; ss_check(); while (g.waiting) pthread_cond_wait(&g.cv, &ss_mu); }
+    pthread_mutex_unlock(&ss_mu);
+    for (int64_t i = 1; i < n; i++) if (ts[i].started) pthread_join(ts[i].th, 0);
+    pthread_cond_destroy(&g.cv);
+    int64_t pick = -1;
+    for (int64_t i = 0; i < n && pick < 0; i++) if (ts[i].fail && ts[i].st.code != 16) pick = i;
+    for (int64_t i = 0; i < n && pick < 0; i++) if (ts[i].fail) pick = i;
+    for (int64_t i = 0; i < n; i++) if (i != pick && ts[i].st.rbuf) free(ts[i].st.rbuf);
+    if (pick < 0) return 0;
+    Status* c = &ts[pick].st;
+    if (ts[pick].fail == 2) { st->err = c->err; st->err_type = c->err_type; return 100; }
+    st->code = c->code; st->func = c->func; st->clause = c->clause; st->value = c->value; st->rbuf = c->rbuf; st->rlen = c->rlen;
+    longjmp(*sspur_jb, 1);
+}
+static SsAtom* ss_atomic(int64_t v) { SsAtom* a = (SsAtom*)sspur_alloc_atomic(sizeof(SsAtom)); a->v = v; a->id = __atomic_add_fetch(&ss_ids, 1, __ATOMIC_RELAXED); return a; }
+static SsChan* ss_chan(int64_t es) { SsChan* c = (SsChan*)sspur_alloc(sizeof(SsChan)); memset(c, 0, sizeof(SsChan)); c->es = es ? es : 1; c->id = __atomic_add_fetch(&ss_ids, 1, __ATOMIC_RELAXED); return c; }
+static void ss_send(SsChan* c, const void* v, Status* st) {
+    pthread_mutex_lock(&ss_mu);
+    if (c->closed) { pthread_mutex_unlock(&ss_mu); sspur_trap(st, 17, 0, 0, 0); }
+    if (c->len == c->cap) {
+        int64_t nc = c->cap ? c->cap * 2 : 8;
+        char* nb = (char*)sspur_alloc((size_t)(nc * c->es));
+        for (int64_t i = 0; i < c->len; i++) memcpy(nb + i * c->es, c->buf + ((c->head + i) % c->cap) * c->es, (size_t)c->es);
+        c->buf = nb; c->head = 0; c->cap = nc;
+    }
+    memcpy(c->buf + ((c->head + c->len) % c->cap) * c->es, v, (size_t)c->es);
+    c->len++;
+    for (SsWait* w = ss_wq.next; w != &ss_wq; w = w->next) if (w->ch == c) { ss_wake(w, 0); break; }
+    pthread_mutex_unlock(&ss_mu);
+}
+static int64_t ss_recv(SsChan* c, void* out, Status* st) {
+    pthread_mutex_lock(&ss_mu);
+    for (;;) {
+        if (c->len) { memcpy(out, c->buf + c->head * c->es, (size_t)c->es); c->head = (c->head + 1) % c->cap; c->len--; pthread_mutex_unlock(&ss_mu); return 1; }
+        if (c->closed) { pthread_mutex_unlock(&ss_mu); return 0; }
+        SsWait w; w.ch = c; w.woken = 0; w.dead = 0; pthread_cond_init(&w.cv, 0);
+        w.prev = ss_wq.prev; w.next = &ss_wq; ss_wq.prev->next = &w; ss_wq.prev = &w; ss_blocked++;
+        ss_check();
+        while (!w.woken) pthread_cond_wait(&w.cv, &ss_mu);
+        pthread_cond_destroy(&w.cv);
+        if (w.dead) { pthread_mutex_unlock(&ss_mu); sspur_trap(st, 16, 0, 0, 0); }
+    }
+}
+static void ss_close(SsChan* c) {
+    pthread_mutex_lock(&ss_mu);
+    c->closed = 1;
+    for (SsWait* w = ss_wq.next; w != &ss_wq;) { SsWait* nx = w->next; if (w->ch == c) ss_wake(w, 0); w = nx; }
+    pthread_mutex_unlock(&ss_mu);
+}
+static inline int64_t ss_add(SsAtom* a, int64_t d, Status* st) {
+    int64_t o = __atomic_load_n(&a->v, __ATOMIC_SEQ_CST), r;
+    do { if (UNLIKELY(__builtin_add_overflow(o, d, &r))) sspur_trap(st, 1, 0, 0, 0); } while (!__atomic_compare_exchange_n(&a->v, &o, r, 1, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+    return 0;
+}
+static inline int64_t ss_cas(SsAtom* a, int64_t e, int64_t v) { return __atomic_compare_exchange_n(&a->v, &e, v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); }
 #define TO_RAW(l) ((RawL){(l).len, (void*)(l).data, (l).hdr})
 static inline int64_t dbits(double x) { int64_t b; memcpy(&b, &x, 8); return b; }
 static inline double bitsd(int64_t b) { double x; memcpy(&x, &b, 8); return x; }
 static inline int64_t dkey(double x) { int64_t b = dbits(x); b ^= (int64_t)(((uint64_t)(b >> 63)) >> 1); return b; }
 static uint64_t sspur_prio_state = 0x9E3779B97F4A7C15ULL;
-static inline uint64_t sspur_prio(void) { uint64_t z = (sspur_prio_state += 0x9E3779B97F4A7C15ULL); z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL; z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL; return z ^ (z >> 31); }
+static inline uint64_t sspur_prio(void) { uint64_t z = SS_MT() ? __atomic_add_fetch(&sspur_prio_state, 0x9E3779B97F4A7C15ULL, __ATOMIC_RELAXED) : (sspur_prio_state += 0x9E3779B97F4A7C15ULL); z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL; z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL; return z ^ (z >> 31); }
 static inline uint64_t hmix(uint64_t h) { h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL; h ^= h >> 33; return h; }
 static inline uint64_t hash_I(int64_t v) { return hmix((uint64_t)v); }
 static inline int cmp_I(int64_t a, int64_t b) { return (a > b) - (a < b); }
@@ -459,6 +585,12 @@ static void buf_push(Buf* b, int64_t w) {
     b->data[b->len++] = w;
 }
 void sspur_buf_free(int64_t* p) { free(p); }
+typedef int64_t (*SspurDb)(int64_t op, const char* store, const int64_t* k, int64_t kn, const int64_t* v, int64_t vn, int64_t** out, int64_t* on);
+SspurDb sspur_db;
+static void db_fail(Status* st, int64_t* m, int64_t n) {
+    if (!m) { const char* t = "db effects need a deploy host: run the service with 'sspur deploy local'"; n = (int64_t)strlen(t); m = (int64_t*)malloc((size_t)n); memcpy(m, t, (size_t)n); }
+    st->rbuf = m; st->rlen = n;
+}
 typedef struct { int64_t len; const char* p; } Str;
 typedef struct {
     int64_t (*fmt_f64)(double x, char* out);
@@ -653,7 +785,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (src, mut plan) = generate(m, check)?;
+    let (src, mut plan) = generate(m, check, None)?;
     plan.skipped.retain(|n, _| lower::original_name(n) == n);
     if let Some((_, _, why)) = &lowered {
         for (n, reason) in plan.skipped.iter_mut() {
@@ -662,7 +794,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
             }
         }
     }
-    let lib = build(&src, opt)?;
+    let lib = build(&src, opt, &plan.links)?;
     let library = unsafe { libloading::Library::new(&lib) }.map_err(|e| format!("cannot load {}: {e}", lib.display()))?;
     let mut scalar = HashMap::new();
     let mut rich = HashMap::new();
@@ -691,16 +823,46 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
     Ok(assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines, free, plan.err_types))
 }
 
+pub struct CProgram {
+    pub src: String,
+    pub fns: BTreeMap<String, (Vec<Type>, Type)>,
+    pub skipped: BTreeMap<String, String>,
+    pub err_types: Vec<Type>,
+    pub refines: Vec<(String, String, Type)>,
+}
+
+pub fn c_program(m: &Module, check: &CheckOutput) -> Result<CProgram, String> {
+    let lowered = lower::lower(m, check);
+    let (m, check) = match &lowered {
+        Some((lm, lc, _)) => (lm, lc),
+        None => (m, check),
+    };
+    let (src, plan) = generate(m, check, None)?;
+    let fns = plan.fns.into_iter().map(|(n, (p, r, _))| (n, (p, r))).collect();
+    Ok(CProgram { src, fns, skipped: plan.skipped, err_types: plan.err_types, refines: plan.refines })
+}
+
 pub fn c_source(m: &Module, check: &CheckOutput) -> String {
     let lowered = lower::lower(m, check);
     let (m, check) = match &lowered {
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    match generate(m, check) {
+    match generate(m, check, None) {
         Ok((src, _)) => src,
         Err(e) => format!("/* {e} */\n"),
     }
+}
+
+pub fn export_c(m: &Module, check: &CheckOutput, prefix: &str) -> Result<export::Export, String> {
+    let lowered = lower::lower(m, check);
+    let (m, check) = match &lowered {
+        Some((lm, lc, _)) => (lm, lc),
+        None => (m, check),
+    };
+    let (source, plan) = generate(m, check, Some(prefix))?;
+    let w = plan.export.ok_or("no export plan")?;
+    Ok(export::Export { source, header: w.header, exported: w.exported, skipped: w.skipped, links: plan.links })
 }
 
 struct Plan {
@@ -708,9 +870,11 @@ struct Plan {
     fns: BTreeMap<String, (Vec<Type>, Type, bool)>,
     skipped: BTreeMap<String, String>,
     refines: Vec<(String, String, Type)>,
+    links: Vec<String>,
+    export: Option<export::Wrappers>,
 }
 
-fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
+fn generate(m: &Module, check: &CheckOutput, export: Option<&str>) -> Result<(String, Plan), String> {
     let defs: Vec<&FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f) } else { None }).collect();
     let index: HashMap<String, usize> = defs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
     let mut skipped = BTreeMap::new();
@@ -745,6 +909,15 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
         .collect();
     let generic_defs: HashMap<String, FnDef> = defs.iter().filter(|f| !f.tparams.is_empty()).map(|f| (f.name.clone(), (*f).clone())).collect();
     let smt = sspur_smt::Oracle::new(m, check);
+    let mut links: Option<Vec<String>> = None;
+    for f in defs.iter().filter(|f| f.ext.is_some()) {
+        let l = links.get_or_insert_with(Vec::new);
+        for a in f.ext.as_ref().and_then(|x| x.lib.as_deref()).map(sspur_syntax::ffi::link_args).unwrap_or_default() {
+            if !l.contains(&a) {
+                l.push(a);
+            }
+        }
+    }
     loop {
         let mut cx = Cx::new(check, &ok, &alias_refines, &field_refines, &smt);
         cx.sys = m.profile.as_deref() == Some("sys");
@@ -760,7 +933,8 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
                 continue;
             };
             let snapshot = cx.snapshot();
-            match cx.function(f, &params, &ret, index[&f.name], &f.name) {
+            let r = if f.ext.is_some() { cx.extern_fn(f, &params, &ret, index[&f.name]) } else { cx.function(f, &params, &ret, index[&f.name], &f.name) };
+            match r {
                 Ok(code) => {
                     bodies.push_str(&code);
                     let scalar = !f.effects.iter().any(|e| e.name == "fail") && params.iter().chain([&ret]).all(|t| matches!(t, Type::Con(n, a) if a.is_empty() && matches!(n.as_str(), "Int" | "Bool" | "Unit")));
@@ -792,10 +966,20 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
                 if params.iter().chain([&ret]).any(has_fn) || sys_sig(f, check) {
                     continue;
                 }
+                if params.iter().chain([&ret]).any(|t| conc::opaque(&cx.layouts, t)) {
+                    continue;
+                }
                 entries.push_str(&cx.entries(&f.name, &params, &ret, scalar)?);
             }
             entries.push_str(&cx.enc_err_fn()?);
+            let exported = match export {
+                Some(p) => Some(cx.export_wrappers(p, &defs, &index, &plan_fns, &skipped)?),
+                None => None,
+            };
             let mut src = String::from(PRELUDE);
+            if links.is_some() || export.is_some() {
+                src.push_str(ffi::FFI_PRELUDE);
+            }
             src.push_str(&cx.fwd);
             src.push_str(&cx.defs);
             src.push_str(&cx.protos);
@@ -813,9 +997,12 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
             src.push_str(&bodies);
             src.push_str(&entries);
             src.push_str(&cx.helpers_late);
-            plan_fns.retain(|n, (p, r, _)| !p.iter().chain([&*r]).any(has_fn) && !cx.all_fns.get(n).is_some_and(|f| sys_sig(f, check)));
+            if let Some(w) = &exported {
+                src.push_str(&w.c);
+            }
+            plan_fns.retain(|n, (p, r, _)| !p.iter().chain([&*r]).any(|t| has_fn(t) || conc::opaque(&cx.layouts, t)) && !cx.all_fns.get(n).is_some_and(|f| sys_sig(f, check)));
             let src = cx.atomize(&src);
-            let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone() };
+            let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone(), links: links.unwrap_or_default(), export: exported };
             return Ok((src, plan));
         }
         for (n, e) in failed {
@@ -834,7 +1021,7 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
 }
 
 fn precheck(f: &FnDef) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "unsafe") && !f.tparams.iter().any(|p| p.name == e.name)) {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())
@@ -845,8 +1032,8 @@ fn cache_dir() -> PathBuf {
     base.join("native")
 }
 
-fn build(src: &str, opt: &str) -> Result<PathBuf, String> {
-    let key = blake3::hash(format!("{opt}\n{src}").as_bytes()).to_hex().to_string();
+fn build(src: &str, opt: &str, links: &[String]) -> Result<PathBuf, String> {
+    let key = blake3::hash(format!("{opt}{}\n{src}", links.iter().map(|l| format!(" {l}")).collect::<String>()).as_bytes()).to_hex().to_string();
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let lib = dir.join(format!("{}.{}", &key[..32], std::env::consts::DLL_EXTENSION));
@@ -857,7 +1044,7 @@ fn build(src: &str, opt: &str) -> Result<PathBuf, String> {
     std::fs::write(&c, src).map_err(|e| e.to_string())?;
     let tmp = lib.with_extension("tmp");
     let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
-    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w", "-o"]).arg(&tmp).arg(&c).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w", "-o"]).arg(&tmp).arg(&c).args(links).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
         return Err(format!("{cc} failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
     }
@@ -970,6 +1157,7 @@ struct Cx<'a> {
     sys: bool,
     flags: HashMap<String, String>,
     borrow_res: HashSet<String>,
+    vec: Option<simd::Vecx>,
 }
 
 impl<'a> Cx<'a> {
@@ -1030,6 +1218,7 @@ impl<'a> Cx<'a> {
             sys: false,
             flags: HashMap::new(),
             borrow_res: HashSet::new(),
+            vec: None,
         }
     }
 
@@ -1088,6 +1277,8 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if matches!(n.as_str(), "Secret" | "Pii" | "Untrusted") => format!("W{}_{}", &n[..1], self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Guess" => format!("G_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Ptr" => format!("P_{}", self.mangle(&a[0])?),
+            Type::Con(n, a) if n == "Atomic" => format!("AT_{}", self.mangle(&a[0])?),
+            Type::Con(n, a) if n == "Chan" => format!("CH_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n) => format!("N_{n}"),
             Type::Con(n, a) if self.layouts.records.contains_key(n) || self.layouts.sums.contains_key(n) => {
                 let kind = if self.layouts.records.contains_key(n) { "R" } else { "S" };
@@ -1191,6 +1382,8 @@ impl<'a> Cx<'a> {
             Type::Con(n, _) if n == "F64" => Ok("double".into()),
             Type::Con(n, _) if n == "Str" => Ok("Str".into()),
             Type::Con(n, _) if n == "Ptr" => Ok("int64_t".into()),
+            Type::Con(n, _) if n == "Atomic" => Ok("SsAtom*".into()),
+            Type::Con(n, _) if n == "Chan" => Ok("SsChan*".into()),
             Type::Con(n, a) if n == "List" => {
                 self.fwd_decl(&m);
                 if self.complete.insert(m.clone()) {
@@ -1351,6 +1544,7 @@ impl<'a> Cx<'a> {
                 let ec = self.helper_cmp(&a[0])?;
                 write!(body, "int64_t n = a.len < b.len ? a.len : b.len; for (int64_t i = 0; i < n; i++) {{ int c = {ec}(a.data[i], b.data[i]); if (c) return c; }} return cmp_I(a.len, b.len);").unwrap();
             }
+            Type::Con(n, _) if n == "Atomic" || n == "Chan" => body.push_str("return cmp_I(a->id, b->id);"),
             Type::Con(n, a) if n == "Guess" => {
                 let ec = self.helper_cmp(&a[0])?;
                 write!(body, "int c = {ec}(a.v, b.v); if (c) return c; return cmp_D(a.conf, b.conf);").unwrap();
@@ -1865,7 +2059,7 @@ impl<'a> Cx<'a> {
     }
 
     fn may_raise(&self, name: &str) -> bool {
-        self.fn_def(name).is_none_or(|f| f.effects.iter().any(|e| !matches!(e.name.as_str(), "log" | "div" | "unsafe")))
+        self.fn_def(name).is_none_or(|f| f.effects.iter().any(|e| !matches!(e.name.as_str(), "log" | "div" | "conc" | "unsafe")))
     }
 
     fn fn_def(&self, name: &str) -> Option<&FnDef> {
@@ -2045,6 +2239,9 @@ impl<'a> Cx<'a> {
     }
 
     fn checked(&mut self, op: BinOp, x: &str, y: &str, ra: Iv, rb: Iv) -> String {
+        if let Some(v) = self.vchecked(op, x, y, ra, rb) {
+            return v;
+        }
         if iv_safe(op, ra, rb) {
             return format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; a_ {} b_; }})", op.symbol());
         }
@@ -2130,6 +2327,10 @@ impl<'a> Cx<'a> {
                     return self.call_closure(&fv, &ft, vals);
                 }
                 let ExprKind::Name(n) = &f.kind else { unreachable!() };
+                if !self.check.fn_types.contains_key(n)
+                    && let Some(code) = self.conc_global(n, args, &t)? {
+                        return Ok(code);
+                    }
                 match n.as_str() {
                     "empty_map" => Ok(format!("(({}){{0}})", self.cty(&t)?)),
                     "secret" | "pii" | "untrusted" => self.expr(&args[0]),
@@ -2181,7 +2382,11 @@ impl<'a> Cx<'a> {
             }
             ExprKind::Index(a, i) => {
                 let (av, iv) = (self.expr(a)?, self.expr(i)?);
-                if self.index_safe(a, i) || self.smt.proves(e, "index") {
+                if self.vec.is_some() {
+                    if let Some(s) = self.vindex(a, i, &av, &iv) {
+                        return Ok(s);
+                    }
+                } else if self.index_safe(a, i) || self.smt.proves(e, "index") {
                     return Ok(format!("(({av}).data[{iv}])"));
                 }
                 Ok(format!("({{ __auto_type l_ = {av}; int64_t i_ = {iv}; if (UNLIKELY(i_ < 0 || i_ >= l_.len)) TRAPV({T_INDEX}, l_.len, i_); l_.data[i_]; }})"))
@@ -2204,7 +2409,7 @@ impl<'a> Cx<'a> {
                 }
                 if is(&at, "Int") {
                     let (ra, rb) = (self.range(a), self.range(b));
-                    if *op != BinOp::Pow && !iv_safe(*op, ra, rb) && self.smt.proves(e, "arith") {
+                    if self.vec.is_none() && *op != BinOp::Pow && !iv_safe(*op, ra, rb) && self.smt.proves(e, "arith") {
                         return Ok(format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; a_ {} b_; }})", op.symbol()));
                     }
                     return Ok(self.checked(*op, &x, &y, ra, rb));
@@ -2228,7 +2433,13 @@ impl<'a> Cx<'a> {
             }
             ExprKind::Unary(UnOp::Neg, x) => {
                 let v = self.expr(x)?;
-                if is(&t, "F64") || self.range(x).0 > FULL.0 || self.smt.proves(e, "neg") {
+                if is(&t, "F64") {
+                    return Ok(format!("(-({v}))"));
+                }
+                let proven = self.range(x).0 > FULL.0;
+                if let Some(s) = self.vneg(&v, proven) {
+                    Ok(s)
+                } else if proven || self.smt.proves(e, "neg") {
                     Ok(format!("(-({v}))"))
                 } else {
                     Ok(format!("({{ int64_t t_ = {v}; if (UNLIKELY(t_ == INT64_MIN)) TRAPV({T_OVERFLOW}, 0, 0); -t_; }})"))
@@ -2239,7 +2450,7 @@ impl<'a> Cx<'a> {
             ExprKind::Range(a, b) => {
                 let (av, bv) = (self.expr(a)?, self.expr(b)?);
                 let lc = self.cty(&t)?;
-                Ok(format!("({{ int64_t s_ = {av}; int64_t e_ = {bv}; int64_t n_ = e_ > s_ ? e_ - s_ : 0; RawL r_ = raw_alloc(n_, 8); int64_t* d_ = (int64_t*)r_.data; for (int64_t i_ = 0; i_ < n_; i_++) d_[i_] = s_ + i_; r_.len = n_; r_.hdr[1] = n_; ({lc}){{n_, d_, r_.hdr}}; }})"))
+                Ok(format!("({{ int64_t s_ = {av}; int64_t re_ = {bv}; int64_t n_ = re_ > s_ ? re_ - s_ : 0; RawL r_ = raw_alloc(n_, 8); int64_t* d_ = (int64_t*)r_.data; for (int64_t i_ = 0; i_ < n_; i_++) d_[i_] = s_ + i_; r_.len = n_; r_.hdr[1] = n_; ({lc}){{n_, d_, r_.hdr}}; }})"))
             }
             ExprKind::If(c, a, b) => {
                 let cv = self.expr(c)?;
@@ -2296,7 +2507,8 @@ impl<'a> Cx<'a> {
                 write!(s, "r_.hdr[1] = {n}; ({lc}){{{n}, d_, r_.hdr}}; }})", n = xs.len()).unwrap();
                 Ok(s)
             }
-            ExprKind::Tuple(xs) | ExprKind::Par(xs) => {
+            ExprKind::Par(xs) => self.par_tasks(xs, &t),
+            ExprKind::Tuple(xs) => {
                 let tc = self.cty(&t)?;
                 let mut s = String::from("({ ");
                 let mut names = Vec::new();
@@ -2398,6 +2610,8 @@ impl<'a> Cx<'a> {
             _ if is(t, "F64") => "sb_f64(b, v);".to_string(),
             _ if is(t, "Str") => "if (q) sb_strq(b, v); else sb_put(b, v.p, v.len);".to_string(),
             Type::Con(n, _) if n == "Ptr" => "(void)v; sb_put(b, \"<ptr>\", 5);".to_string(),
+            Type::Con(n, _) if n == "Atomic" => "sb_put(b, \"<atomic>\", 8);".to_string(),
+            Type::Con(n, _) if n == "Chan" => "sb_put(b, \"<chan>\", 6);".to_string(),
             Type::Con(n, a) if n == "List" => {
                 let e = self.helper_show(&a[0])?;
                 format!("sb_put(b, \"[\", 1); for (int64_t i = 0; i < v.len; i++) {{ if (i) sb_put(b, \", \", 2); {e}(b, v.data[i], 1); }} sb_put(b, \"]\", 1);")
@@ -2602,7 +2816,7 @@ impl<'a> Cx<'a> {
             }
             "repeat" => {
                 let n = arg(self, 0)?;
-                format!("({{ Str s_ = {r}; int64_t n_ = {n}; if (UNLIKELY(n_ < 0)) TRAPV({T_REPEAT}, 0, 0); if (UNLIKELY(s_.len && n_ > (((int64_t)1 << 32) / s_.len))) TRAPV(15, 0, 0); str_repeat(s_, n_); }})")
+                format!("({{ Str s_ = {r}; int64_t n_ = {n}; if (UNLIKELY(n_ < 0)) TRAPV({T_REPEAT}, 0, 0); if (UNLIKELY(s_.len && n_ > (((int64_t)1 << 28) / s_.len))) TRAPV(15, 0, 0); str_repeat(s_, n_); }})")
             }
             "is_alpha" => format!("({{ Str s_ = {r}; host_.str_class(1, s_.p, s_.len); }})"),
             "split" | "chars" | "words" => {
@@ -2751,6 +2965,7 @@ impl<'a> Cx<'a> {
                 let e = self.helper_hash(&a[0])?;
                 write!(body, "for (int64_t i = 0; i < v.len; i++) h = hmix(h * 31 + {e}(v.data[i])); h = hmix(h ^ (uint64_t)v.len);").unwrap();
             }
+            Type::Con(n, _) if n == "Atomic" || n == "Chan" => body.push_str("h = hash_I(v->id);"),
             Type::Con(n, a) if n == "Opt" => {
                 let e = self.helper_hash(&a[0])?;
                 write!(body, "h = v.some ? hmix(11 + {e}(v.v)) : 3;").unwrap();
@@ -2874,7 +3089,35 @@ impl<'a> Cx<'a> {
         Ok(s)
     }
 
+    fn db_call(&mut self, name: &str, args: &[Expr], t: &Type) -> G {
+        let ExprKind::Name(store) = &args[0].kind else { return Err("has a db operation without a store".into()) };
+        let op = match name {
+            "get" => 1,
+            "put" => 2,
+            "del" => 3,
+            _ => 4,
+        };
+        let mut s = String::from("({ Buf kb_ = {0}; Buf vb_ = {0}; ");
+        for (buf, a) in ["kb_", "vb_"].iter().zip(&args[1..]) {
+            let at = self.ty(a)?;
+            let enc = self.helper_enc(&at)?;
+            let v = self.expr(a)?;
+            write!(s, "{enc}(&{buf}, {v}); ").unwrap();
+        }
+        write!(s, "int64_t* ob_ = 0; int64_t ol_ = 0; int64_t rc_ = sspur_db ? sspur_db({op}, {}, kb_.data, kb_.len, vb_.data, vb_.len, &ob_, &ol_) : -1; free(kb_.data); free(vb_.data); if (UNLIKELY(rc_)) {{ db_fail(st, ob_, ol_); TRAPV({T_MSG}, 0, 0); }} ", c_lit(store)).unwrap();
+        if is(t, "Unit") {
+            s.push_str("free(ob_); 0LL; })");
+        } else {
+            let dec = self.helper_dec(t)?;
+            write!(s, "const int64_t* dp_ = ob_; __auto_type dr_ = {dec}(&dp_); free(ob_); dr_; }})").unwrap();
+        }
+        Ok(s)
+    }
+
     fn method(&mut self, e: &Expr, recv: &Expr, name: &str, args: &[Expr], t: &Type) -> G {
+        if matches!(&recv.kind, ExprKind::Name(n) if n == "db") && self.lookup("db").is_none() && sspur_check::db_op(name).is_some() && !args.is_empty() {
+            return self.db_call(name, args, t);
+        }
         if self.check.user_methods.contains(&(e.span.start, e.span.end)) {
             let mut vals = vec![self.call_arg(name, 0, recv)?];
             for (i, a) in args.iter().enumerate() {
@@ -2907,6 +3150,9 @@ impl<'a> Cx<'a> {
         let r = self.expr(recv)?;
         if name == "str" {
             return self.show_str(&r, &rt);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "Atomic" || n == "Chan") {
+            return self.conc_method(&r, &rt, name, args, t);
         }
         if is(&rt, "Str") {
             return self.str_method(&r, name, args, t);
@@ -3054,9 +3300,9 @@ impl<'a> Cx<'a> {
             "reverse" => wrap(format!("RawL r_ = raw_alloc({l}.len, sizeof({ec})); {ec}* d_ = ({ec}*)r_.data; for (int64_t {i} = 0; {i} < {l}.len; {i}++) d_[{i}] = {l}.data[{l}.len - 1 - {i}]; r_.hdr[1] = {l}.len; ({lc}){{{l}.len, d_, r_.hdr}};")),
             "sum" => {
                 if is(et, "F64") {
-                    wrap(format!("double s_ = 0.0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) s_ += {l}.data[{i}]; s_;"))
+                    wrap(format!("double s_ = -0.0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) s_ += {l}.data[{i}]; {l}.len ? s_ : 0.0;"))
                 } else {
-                    wrap(format!("int64_t s_ = 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) if (UNLIKELY(__builtin_add_overflow(s_, {l}.data[{i}], &s_))) TRAPV({T_OVERFLOW}, 0, 0); s_;"))
+                    wrap(format!("int64_t s_; if (UNLIKELY(sum_i64({l}.data, {l}.len, &s_))) TRAPV({T_OVERFLOW}, 0, 0); s_;"))
                 }
             }
             "contains" => {
@@ -3522,6 +3768,13 @@ impl<'a> Cx<'a> {
                 Ok(format!("while ({cv}) {{ {poll}(void)({}); }} ", b?))
             }
             Stmt::For(p, it, body) => {
+                if let ExprKind::Par(src) = &it.kind
+                    && src.len() == 1 {
+                        return self.par_for(p, &src[0], body);
+                    }
+                if self.ty(it).is_ok_and(|t| elem(&t, "Chan").is_some()) {
+                    return self.chan_for(p, it, body);
+                }
                 if let (Pat::Bind(i), ExprKind::Range(a, b)) = (p, &it.kind) {
                     let (av, bv) = (self.expr(a)?, self.expr(b)?);
                     let (s_, e_) = (self.fresh("fs"), self.fresh("fe"));

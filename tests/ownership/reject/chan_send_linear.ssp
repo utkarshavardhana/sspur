@@ -1,0 +1,6 @@
+profile sys
+
+res type Tok = {id: Int}
+
+fn push(c: Chan[Tok]) -> Unit ! conc
+= c.send(Tok{id: 1})

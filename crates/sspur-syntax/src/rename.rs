@@ -103,6 +103,15 @@ impl Renamer<'_> {
                 self.hit(&mut t.name);
                 self.expr(&mut t.body, &mut vec![]);
             }
+            Def::Store(st) => {
+                self.hit(&mut st.name);
+                self.ty(&mut st.key);
+                self.ty(&mut st.val);
+            }
+            Def::Svc(sv) => {
+                self.hit(&mut sv.name);
+                sv.eps.iter_mut().for_each(|e| self.hit(&mut e.handler));
+            }
             Def::Effect(e) => {
                 self.hit(&mut e.name);
                 let shadow = e.params.iter().any(|p| p.name == self.from);

@@ -1,11 +1,13 @@
 mod builtins;
 pub mod own;
+mod deploy;
 pub mod types;
 
 use serde::Serialize;
 use serde_json::json;
 use sspur_syntax::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+pub use deploy::{db_op, HTTP_METHODS};
 pub use types::{Row, Type};
 
 #[derive(Clone, Debug, Serialize)]
@@ -43,6 +45,7 @@ pub struct CheckOutput {
     pub gen_loops: HashSet<(u32, u32)>,
     pub clause_effects: HashMap<(u32, u32), BTreeSet<String>>,
     pub own: own::OwnInfo,
+    pub stores: BTreeMap<String, (Type, Type)>,
 }
 
 pub type ExprKey = (u32, u32, u8);
@@ -162,6 +165,11 @@ struct Checker {
     clause_depth: u32,
     alias_stack: Vec<String>,
     sys: bool,
+    task_bases: Vec<usize>,
+    task_depth: u32,
+    cur_rparams: Vec<String>,
+    chan_checks: Vec<(Type, Span)>,
+    stores: BTreeMap<String, (Type, Type)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -207,6 +215,8 @@ const BUILTIN_TYPES: &[(&str, usize)] = &[
     ("Untrusted", 1),
     ("Guess", 1),
     ("Map", 2),
+    ("Atomic", 1),
+    ("Chan", 1),
 ];
 
 pub fn check(m: &Module) -> CheckOutput {
@@ -241,6 +251,11 @@ pub fn check(m: &Module) -> CheckOutput {
         clause_depth: 0,
         alias_stack: vec![],
         sys: m.profile.as_deref() == Some("sys"),
+        task_bases: vec![],
+        task_depth: 0,
+        cur_rparams: vec![],
+        chan_checks: vec![],
+        stores: BTreeMap::new(),
     };
     c.load_builtins();
     if c.sys {
@@ -263,7 +278,8 @@ pub fn check(m: &Module) -> CheckOutput {
             }
             Def::Test(t) => c.check_test(t),
             Def::Type(t) => c.check_type_refines(t),
-            Def::Effect(_) => {}
+            Def::Effect(_) | Def::Store(_) => {}
+            Def::Svc(sv) => c.check_svc(sv, m),
         }
         for (k, t) in std::mem::take(&mut c.pending_types) {
             let r = c.resolve(&t);
@@ -289,7 +305,7 @@ pub fn check(m: &Module) -> CheckOutput {
             _ => {}
         }
     }
-    let own = own::analyze(m, &c.record_types, &c.user_methods);
+    let own = own::analyze(m, &c.record_types, &c.user_methods, &c.expr_types);
     for d in own.diags {
         c.diags.push(d);
     }
@@ -320,7 +336,7 @@ pub fn check(m: &Module) -> CheckOutput {
             fix: vec![],
         });
     }
-    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info }
+    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info, stores: c.stores }
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -586,10 +602,18 @@ impl Checker {
             }
         }
         self.cur_def = None;
+        self.collect_stores(m);
         for d in &m.defs {
             if let Def::Fn(f) = d {
                 self.cur_def = Some(f.name.clone());
-                let s = self.scheme_of(f);
+                self.check_db_sig(f);
+                let s = match &f.ext {
+                    Some(_) => {
+                        self.check_extern(f);
+                        self.scheme_of(&sspur_syntax::ffi::sspur_view(f))
+                    }
+                    None => self.scheme_of(f),
+                };
                 self.fns.insert(f.name.clone(), s);
             }
         }
@@ -659,11 +683,31 @@ impl Checker {
         }
     }
 
+    fn check_extern(&mut self, f: &FnDef) {
+        if !f.tparams.is_empty() {
+            self.err("E_EXTERN", f.sig_span, "extern functions can't be generic".into());
+        }
+        if f.effects.len() != 1 || f.effects[0].name != "ffi" || !f.effects[0].args.is_empty() {
+            self.err("E_EXTERN", f.sig_span, "extern functions declare exactly the effect 'ffi': add '! ffi'".into());
+        }
+        if f.params.iter().any(|p| p.refine.is_some()) {
+            self.err("E_EXTERN", f.sig_span, "extern parameters can't have 'where' refinements".into());
+        }
+        if let Err(e) = sspur_syntax::ffi::signature(f) {
+            self.push_diag("E_EXTERN", "error", f.sig_span, e, Some("C-compatible types: Int I8 I16 I32 U8 U16 U32 U64 F32 F64 Bool Str Opt[Str] (and List[scalar] parameters)".into()), vec![]);
+        }
+    }
+
     fn check_fn(&mut self, f: &FnDef) {
+        if f.ext.is_some() {
+            return;
+        }
         self.cur_def = Some(f.name.clone());
         let scheme = self.fns[&f.name].clone();
         self.tparams = scheme.tparams.clone();
+        self.cur_rparams = scheme.rparams.clone();
         self.check_fn_body(f, &scheme);
+        self.check_chans();
         self.report_holes();
         self.tparams.clear();
         self.cur_def = None;
@@ -717,6 +761,7 @@ impl Checker {
         let saved_params = std::mem::replace(&mut self.cur_params, f.params.iter().map(|p| p.name.clone()).zip(scheme.params.iter().cloned()).collect());
         let saved_depth = std::mem::replace(&mut self.lambda_depth, 0);
         let saved_clause = std::mem::replace(&mut self.clause_depth, 0);
+        let saved_task = std::mem::replace(&mut self.task_depth, 0);
         let t = self.infer(&f.body, Some(&scheme.ret));
         self.expect(&scheme.ret, &t, f.body.span);
         let frame = self.frames.pop().unwrap();
@@ -726,6 +771,7 @@ impl Checker {
         self.cur_params = saved_params;
         self.lambda_depth = saved_depth;
         self.clause_depth = saved_clause;
+        self.task_depth = saved_task;
 
         let mut declared: BTreeSet<String> = scheme.atoms.clone();
         for ft in &scheme.fails {
@@ -788,6 +834,7 @@ impl Checker {
             self.push_diag("E_UNSAFE", "error", *span, "raw memory operations are unsafe".into(), Some("move them into a function that declares '! unsafe' or has an 'unsafe \"reason\"' clause".into()), vec![]);
         }
         self.scopes.pop();
+        self.check_chans();
         self.report_holes();
         self.cur_def = None;
     }
@@ -1032,6 +1079,9 @@ impl Checker {
             let atom = self.ueff_atom(&n, &args);
             self.add_effect(atom, span, None);
         }
+        if name == "chan" && given == args.len() && !self.fns.contains_key("chan") {
+            self.chan_checks.push((ret.clone(), span));
+        }
         self.resolve(&ret)
     }
 
@@ -1199,6 +1249,7 @@ impl Checker {
                 }
                 self.method(x, xt, f, &[], e.span)
             }
+            ExprKind::Method { recv, name, args, .. } if self.is_db_recv(recv) => self.infer_db(name, args, e.span),
             ExprKind::Method { recv, name, targs, args } => {
                 if !targs.is_empty() {
                     self.err("E_UNSUPPORTED", e.span, "explicit type arguments on methods are not supported yet".into());
@@ -1341,11 +1392,15 @@ impl Checker {
                 Type::list(self.resolve(&elem))
             }
             ExprKind::Tuple(xs) | ExprKind::Par(xs) => {
+                let par = matches!(e.kind, ExprKind::Par(_));
+                if par && xs.len() < 2 {
+                    self.push_diag("E_PAR_ARITY", "error", e.span, "par needs at least two tasks".into(), Some("for one task per element write 'for x in par(xs)'".into()), vec![]);
+                }
                 let exps: Vec<Option<Type>> = match exp.map(|t| self.resolve(t)) {
                     Some(Type::Tuple(ts)) if ts.len() == xs.len() => ts.into_iter().map(Some).collect(),
                     _ => vec![None; xs.len()],
                 };
-                Type::Tuple(xs.iter().zip(exps).map(|(x, t)| self.infer(x, t.as_ref())).collect())
+                Type::Tuple(xs.iter().zip(exps).map(|(x, t)| if par { self.task(x.span, |c| c.infer(x, t.as_ref())) } else { self.infer(x, t.as_ref()) }).collect())
             }
             ExprKind::Raise(x) => {
                 let t = self.infer(x, None);
@@ -1397,7 +1452,9 @@ impl Checker {
                 self.resolve(&bt)
             }
             ExprKind::Return(x) => {
-                if self.lambda_depth > 0 {
+                if self.task_depth > 0 && self.lambda_depth == 0 {
+                    self.err("E_RETURN_IN_PAR", e.span, "'return' is not allowed inside a par task; the task's value is its result".into());
+                } else if self.lambda_depth > 0 {
                     self.err("E_RETURN_IN_LAMBDA", e.span, "'return' is not allowed inside a lambda".into());
                 } else if self.clause_depth > 0 {
                     self.err("E_RETURN_IN_HANDLER", e.span, "'return' is not allowed inside a handler arm; the arm's value is the result".into());
@@ -1445,9 +1502,79 @@ impl Checker {
         cur
     }
 
+    fn scope_of(&self, n: &str) -> Option<usize> {
+        self.scopes.iter().rposition(|s| s.contains_key(n))
+    }
+
+    fn task<T>(&mut self, span: Span, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.task_bases.push(self.scopes.len());
+        self.task_depth += 1;
+        self.frames.push(Frame::new());
+        let saved_lambda = std::mem::replace(&mut self.lambda_depth, 0);
+        let r = f(self);
+        self.lambda_depth = saved_lambda;
+        let frame = self.frames.pop().unwrap();
+        let frame = self.norm_frame(frame);
+        self.task_depth -= 1;
+        self.task_bases.pop();
+        for (a, (s, ty)) in frame {
+            let base = a.split('[').next().unwrap_or("");
+            if (self.effects.contains_key(base) && base != "fail") || self.cur_rparams.contains(&a) {
+                let why = if base == "log" { "log lines from concurrent tasks would interleave nondeterministically; return the text or send it on a Chan" } else { "effect handlers do not cross task boundaries" };
+                self.push_diag("E_PAR_EFFECT", "error", if s == Span::default() { span } else { s }, format!("a par task cannot perform '{a}': {why}"), None, vec![]);
+            }
+            self.add_effect(a, s, ty);
+        }
+        r
+    }
+
+    fn check_chans(&mut self) {
+        for (t, span) in std::mem::take(&mut self.chan_checks) {
+            let rt = self.resolve(&t);
+            if self.type_has_fn(&rt) {
+                self.push_diag("E_PAR_SHARE", "error", span, format!("{rt} would carry function values between tasks"), Some("channels carry data; send a value the receiver interprets".into()), vec![]);
+            }
+        }
+    }
+
+    fn type_has_fn(&self, t: &Type) -> bool {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut stack = vec![t.clone()];
+        while let Some(t) = stack.pop() {
+            match t {
+                Type::Fn(..) => return true,
+                Type::Tuple(xs) => stack.extend(xs),
+                Type::Con(n, args) => {
+                    let info = self.types.get(&n);
+                    let map: HashMap<String, Type> = info.map(|i| i.params.iter().cloned().zip(args.iter().cloned()).collect()).unwrap_or_default();
+                    stack.extend(args);
+                    if !seen.insert(n.clone()) {
+                        continue;
+                    }
+                    match info.map(|i| &i.kind) {
+                        Some(TypeKind::Record(fs)) => stack.extend(fs.iter().map(|(_, t)| subst_params(t, &map))),
+                        Some(TypeKind::Sum(vs)) => stack.extend(vs.iter().filter_map(|v| self.ctors.get(v)).filter_map(|c| c.fields.as_ref()).flatten().map(|(_, t)| subst_params(t, &map))),
+                        Some(TypeKind::New(inner)) => stack.push(inner.clone()),
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn infer_name(&mut self, n: &str, span: Span) -> Type {
         if let Some(l) = self.lookup(n) {
-            return l.ty.clone();
+            let ty = l.ty.clone();
+            if let Some(&base) = self.task_bases.last()
+                && self.scope_of(n).is_some_and(|i| i < base) {
+                    let rt = self.resolve(&ty);
+                    if self.type_has_fn(&rt) {
+                        self.push_diag("E_PAR_SHARE", "error", span, format!("task uses '{n}' of type {rt} from outside the task; function values can write captured variables, so they are not shared across tasks"), Some("call a top-level function by name, or define the function inside the task".into()), vec![]);
+                    }
+                }
+            return ty;
         }
         if n == "none" {
             let t = self.fresh();
@@ -2150,6 +2277,10 @@ impl Checker {
             }
             Stmt::Assign(n, e, span) => match self.lookup(n).cloned() {
                 Some(Local { ty, mutable: true }) => {
+                    if let Some(&base) = self.task_bases.last()
+                        && self.scope_of(n).is_some_and(|i| i < base) {
+                            self.push_diag("E_PAR_RACE", "error", *span, format!("task assigns '{n}', which is declared outside the task; tasks run concurrently, so this is a data race"), Some("return the value from the task, or use an Atomic[Int] or a Chan".into()), vec![]);
+                        }
                     let tr = self.resolve(&ty);
                     let t = self.infer(e, Some(&tr));
                     self.expect(&ty, &t, e.span);
@@ -2177,15 +2308,40 @@ impl Checker {
                 self.add_effect("div".into(), c.span, None);
                 Type::unit()
             }
+            Stmt::For(p, it, body) if matches!(&it.kind, ExprKind::Par(xs) if xs.len() == 1) => {
+                let ExprKind::Par(xs) = &it.kind else { unreachable!() };
+                let t = self.infer(&xs[0], None);
+                let elem = self.fresh();
+                self.expect(&Type::list(elem.clone()), &t, xs[0].span);
+                let lt = self.resolve(&t);
+                self.pending_types.push((expr_key(it), lt));
+                self.task(body.span, |c| {
+                    c.scopes.push(HashMap::new());
+                    let et = c.resolve(&elem);
+                    c.check_pat(p, &et);
+                    let bt = c.infer(body, Some(&Type::unit()));
+                    c.expect(&Type::unit(), &bt, body.span);
+                    c.scopes.pop();
+                });
+                Type::unit()
+            }
             Stmt::For(p, it, body) => {
                 self.frames.push(Frame::new());
                 let t = self.infer(it, None);
                 let frame = self.frames.pop().unwrap();
                 let frame = self.norm_frame(frame);
                 let yields = self.instances(&frame, "yield");
-                let is_list = matches!(self.resolve(&t), Type::Con(n, _) if n == "List");
-                let is_gen = !yields.is_empty() && !is_list;
-                let elem = if is_gen {
+                let rt = self.resolve(&t);
+                let is_list = matches!(&rt, Type::Con(n, _) if n == "List");
+                let chan_elem = match &rt {
+                    Type::Con(n, a) if n == "Chan" => Some(a[0].clone()),
+                    _ => None,
+                };
+                let is_gen = !yields.is_empty() && !is_list && chan_elem.is_none();
+                let elem = if let Some(ce) = chan_elem {
+                    self.add_effect("conc".into(), it.span, None);
+                    ce
+                } else if is_gen {
                     if yields.len() > 1 {
                         self.err("E_HANDLE_AMBIGUOUS", it.span, format!("the loop source yields several types: {}", yields.join(", ")));
                     }

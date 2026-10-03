@@ -54,8 +54,19 @@ fn semicolons_canonicalize_to_block() {
 fn errors_have_codes() {
     let e = parse("fn f( -> Int\n= 1").unwrap_err();
     assert_eq!(e.code, "E_PARSE_EXPECTED");
-    let e = parse("store Orders = table").unwrap_err();
+    let e = parse("queue Ship = fifo[Order]").unwrap_err();
     assert_eq!(e.code, "E_UNSUPPORTED");
+    let e = parse("store Orders = blob[Str, Str]").unwrap_err();
+    assert_eq!(e.code, "E_UNSUPPORTED");
+}
+
+#[test]
+fn store_and_svc_roundtrip() {
+    let src = "store Orders = table[OrderId, Order]\n\nsvc shop\n  ep post \"/orders\" = place\n  ep get \"/orders/{id}\" = find\n";
+    let m = parse(src).unwrap();
+    assert_eq!(print_module(&m), src);
+    let Def::Svc(s) = &m.defs[1] else { panic!() };
+    assert_eq!(s.eps[1].path_params(), ["id"]);
 }
 
 #[test]

@@ -1,4 +1,6 @@
 mod agent;
+mod bind;
+mod deploy;
 mod mcp;
 mod verify;
 
@@ -21,11 +23,14 @@ const USAGE: &str = "usage:
   sspur apply [tx.json|-] [-e JSON] [--test] apply a transaction of ops
   sspur q <query> [target] [--budget N] query the codebase (list sig body callers callees effects find pack why impact holes diag log)
   sspur src | log | export | spec [--full] | mcp
+  sspur bind header.h [--lib NAME] [-o out.ssp]   generate extern declarations from a C header (uses clang)
+  sspur export-c file.ssp [-o libfoo] [--shared] [--prefix P]  build a C library and header from the C-compatible functions
   add --json for machine output (apply, edit, q, check)
   sspur check|run|test|fuzz|verify|hash|fmt|native [file.ssp] [--json] [--cases N] [--seed N] [--edge] [--write] [--full]
   verify proves pre/post/where clauses with z3 and reports proved, counterexample, or unknown per clause
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
-  --O3 raises the optimization level; fuzz --differential compares native against the interpreter";
+  --O3 raises the optimization level; fuzz --differential compares native against the interpreter
+  sspur deploy plan <file.ssp> [--out DIR] | sspur deploy local <file.ssp> [--port N]   (see ADR 0016; never calls AWS)";
 
 fn main() -> ExitCode {
     std::thread::Builder::new().stack_size(1 << 29).spawn(real_main).unwrap().join().unwrap()
@@ -55,8 +60,8 @@ fn parse_args() -> Args {
     let mut flags = Vec::new();
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
-        if a.starts_with("--") || a == "-e" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e");
+        if a.starts_with("--") || a == "-e" || a == "-o" {
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -119,7 +124,33 @@ fn real_main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "mcp" => mcp::serve(),
-        "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" => program_cmd(&cmd, &args),
+        "bind" => {
+            let Some(h) = args.pos.get(1) else {
+                eprintln!("usage: sspur bind header.h [--lib NAME] [-o out.ssp]");
+                return ExitCode::from(2);
+            };
+            match bind::bind(h, args.val("--lib").map(String::as_str)) {
+                Ok(out) => match args.val("-o") {
+                    Some(p) => match std::fs::write(p, out) {
+                        Ok(()) => ExitCode::SUCCESS,
+                        Err(e) => {
+                            eprintln!("cannot write {p}: {e}");
+                            ExitCode::FAILURE
+                        }
+                    },
+                    None => {
+                        print!("{out}");
+                        ExitCode::SUCCESS
+                    }
+                },
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        "deploy" => deploy::run(args.pos.get(1).map(String::as_str), args.pos.get(2), args.val("--out"), args.val("--port")),
+        "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" => program_cmd(&cmd, &args),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -267,6 +298,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             ExitCode::SUCCESS
         }
         "verify" => verify::verify(&loaded, &label, json),
+        "export-c" => export_c(&loaded, &label, args),
         "hash" => {
             let res = Resolution { user_methods: Some(&loaded.check.user_methods), record_types: Some(&loaded.check.record_types) };
             for (name, h) in hash_module_with(&loaded.module, &res) {
@@ -353,6 +385,68 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         }
         _ => unreachable!(),
     }
+}
+
+fn export_c(l: &Loaded, label: &str, args: &Args) -> ExitCode {
+    let stem = std::path::Path::new(label).file_stem().map_or("out".into(), |s| s.to_string_lossy().into_owned());
+    let out = args.val("-o").cloned().unwrap_or_else(|| format!("lib{stem}"));
+    let out = out.trim_end_matches(".a").trim_end_matches(".so").trim_end_matches(".dylib").to_string();
+    let base = std::path::Path::new(&out).file_name().map_or(String::new(), |s| s.to_string_lossy().into_owned());
+    let prefix: String = args.val("--prefix").cloned().unwrap_or_else(|| base.strip_prefix("lib").unwrap_or(&base).to_string()).chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    let prefix = if prefix.is_empty() || prefix.starts_with(|c: char| c.is_ascii_digit()) { format!("s{prefix}") } else { prefix };
+    let ex = match sspur_native::cgen::export_c(&l.module, &l.check, &prefix) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("export failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let shared = args.has("--shared");
+    let lib = if shared { format!("{out}.{}", std::env::consts::DLL_EXTENSION) } else { format!("{out}.a") };
+    let header = format!("{out}.h");
+    let csrc = format!("{out}.sspur.c");
+    let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
+    let run = |c: &mut std::process::Command| -> Result<(), String> {
+        let o = c.output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+        if o.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&o.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")) }
+    };
+    let built = std::fs::write(&csrc, &ex.source).map_err(|e| e.to_string()).and_then(|_| {
+        if shared {
+            run(std::process::Command::new(&cc).args(["-O2", "-shared", "-fPIC", "-w", "-o", &lib, &csrc]).args(&ex.links))
+        } else {
+            let obj = format!("{out}.o");
+            let r = run(std::process::Command::new(&cc).args(["-O2", "-c", "-fPIC", "-w", "-o", &obj, &csrc])).and_then(|_| {
+                let _ = std::fs::remove_file(&lib);
+                run(std::process::Command::new("ar").args(["rcs", &lib, &obj]))
+            });
+            let _ = std::fs::remove_file(&obj);
+            r
+        }
+    });
+    if !args.has("--keep-c") {
+        let _ = std::fs::remove_file(&csrc);
+    }
+    if let Err(e) = built.and_then(|_| std::fs::write(&header, &ex.header).map_err(|e| e.to_string())) {
+        eprintln!("export failed: {e}");
+        return ExitCode::FAILURE;
+    }
+    for f in &ex.exported {
+        println!("export  {f}");
+    }
+    for (f, why) in &ex.skipped {
+        println!("skip    {f}  ({why})");
+    }
+    let dir = std::path::Path::new(&out).parent().map(|p| p.display().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(|| ".".into());
+    let mut link = format!("-L{dir} -l{}", base.strip_prefix("lib").unwrap_or(&base));
+    for a in &ex.links {
+        link.push(' ');
+        link.push_str(a);
+    }
+    if cfg!(target_os = "linux") {
+        link.push_str(" -lpthread -lm");
+    }
+    println!("wrote {lib} and {header}; link with {link}");
+    ExitCode::SUCCESS
 }
 
 fn native_interp(l: &Loaded, args: &Args) -> Interp {

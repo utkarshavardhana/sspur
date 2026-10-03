@@ -1,7 +1,7 @@
 use sspur_syntax::{Expr, FnDef};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
@@ -30,6 +30,20 @@ pub enum Value {
     Builtin(Rc<str>),
     Ptr(u32, i64),
     Ref(Rc<RefCell<Value>>),
+    Atomic(Rc<AtomCell>),
+    Chan(Rc<ChanCell>),
+}
+
+pub struct AtomCell {
+    pub id: u64,
+    pub v: Cell<i64>,
+}
+
+pub struct ChanCell {
+    pub id: u64,
+    pub q: RefCell<VecDeque<Value>>,
+    pub closed: Cell<bool>,
+    pub waiters: RefCell<VecDeque<usize>>,
 }
 
 pub struct Closure {
@@ -85,7 +99,9 @@ impl Value {
             Value::Wrap(..) => 14,
             Value::Guess(..) => 15,
             Value::Closure(_) | Value::Func(_) | Value::LocalFn(..) | Value::Builtin(_) | Value::Ref(_) => 13,
-            Value::Ptr(..) => 16,
+            Value::Ptr(..) => 18,
+            Value::Atomic(_) => 16,
+            Value::Chan(_) => 17,
         }
     }
 
@@ -138,6 +154,8 @@ impl Ord for Value {
             (New(n1, a), New(n2, b)) | (Wrap(n1, a), Wrap(n2, b)) => n1.cmp(n2).then_with(|| a.cmp(b)),
             (Guess(a, c1), Guess(b, c2)) => a.cmp(b).then_with(|| c1.total_cmp(c2)),
             (Ptr(a, x), Ptr(b, y)) => a.cmp(b).then_with(|| x.cmp(y)),
+            (Atomic(a), Atomic(b)) => a.id.cmp(&b.id),
+            (Chan(a), Chan(b)) => a.id.cmp(&b.id),
             _ => self.rank().cmp(&other.rank()),
         }
     }
@@ -236,6 +254,8 @@ impl fmt::Display for Value {
             Value::Builtin(n) => write!(f, "<builtin {n}>"),
             Value::Ptr(..) => write!(f, "<ptr>"),
             Value::Ref(c) => write!(f, "{}", c.borrow()),
+            Value::Atomic(_) => write!(f, "<atomic>"),
+            Value::Chan(_) => write!(f, "<chan>"),
         }
     }
 }

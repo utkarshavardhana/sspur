@@ -1,0 +1,57 @@
+"""Create fresh work directories and print one agent prompt per (language, task).
+
+  python3 setup.py <work_root>      -> <work_root>/{sspur,python}/<task>/ and <work_root>/prompts.json
+"""
+import json, os, shutil, subprocess, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SSPUR = os.path.abspath(os.environ.get("SSPUR", os.path.join(HERE, "../../target/release/sspur")))
+
+COMMON = """{intro}
+
+Task: {title}
+{steps}
+
+Required interface (hidden tests call exactly these names): {iface}
+
+Do not look at, list, or search any directory other than {dir}. When every step is done and the tests pass, reply with the single word DONE."""
+
+SSPUR_INTRO = """You are working on a small codebase written in SSPUR, a new programming language you have not seen before. Working directory: {dir}
+
+- The code lives in a content-addressed store in .sspur/, and the CLI is ./sspur (run commands as `cd {dir} && ./sspur ...`).
+- Start by reading the language reference with `./sspur spec`. It is the only documentation.
+- Read and change code only through the CLI: `./sspur q <query>` queries, and `./sspur apply tx.json` transactions (write transaction files inside {dir}). `./sspur test` and `./sspur check` run against the store.
+- Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."""
+
+PY_INTRO = """You are working on a small Python 3.9 codebase. Working directory: {dir}
+
+- All code is in app.py, with its tests at the bottom. Run them with `cd {dir} && LC_ALL=en_US.UTF-8 python3 -m pytest -q app.py`."""
+
+
+def main(root):
+    tasks = json.load(open(os.path.join(HERE, "tasks.json")))
+    prompts = []
+    for lang in ("sspur", "python"):
+        for t in tasks:
+            d = os.path.abspath(os.path.join(root, lang, t["id"]))
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
+            src = os.path.join(HERE, "tasks", t["id"], "start.ssp" if lang == "sspur" else "start.py")
+            if lang == "sspur":
+                shutil.copy(src, os.path.join(d, "start.ssp"))
+                subprocess.run([SSPUR, "init", "start.ssp"], cwd=d, check=True, capture_output=True)
+                os.remove(os.path.join(d, "start.ssp"))
+                os.symlink(SSPUR, os.path.join(d, "sspur"))
+                intro = SSPUR_INTRO.format(dir=d)
+            else:
+                shutil.copy(src, os.path.join(d, "app.py"))
+                intro = PY_INTRO.format(dir=d)
+            steps = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(t["steps"]))
+            prompt = COMMON.format(intro=intro, title=t["title"], steps=steps, iface=t[lang], dir=d)
+            prompts.append({"lang": lang, "task": t["id"], "dir": d, "prompt": prompt})
+    json.dump(prompts, open(os.path.join(root, "prompts.json"), "w"), indent=1)
+    print(f"{len(prompts)} prompts in {root}/prompts.json")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])

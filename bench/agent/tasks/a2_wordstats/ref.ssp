@@ -1,0 +1,37 @@
+fn words_of(text: Str, stop: List[Str]) -> List[Str]
+= text.lower.words.filter(w => not stop.contains(w))
+
+fn word_freq(text: Str, stop: List[Str]) -> List[(Str, Int)]
+= words_of(text, stop).counts
+
+fn top_k(text: Str, k: Int where _ >= 0, stop: List[Str]) -> List[(Str, Int)]
+= word_freq(text, stop).sort_by((-_.1, _.0)).take(k)
+
+fn fmt_pair(p: (Str, Int)) -> Str
+= "{p.0}={p.1}"
+
+fn top_line(text: Str, k: Int where _ >= 0, stop: List[Str]) -> Str
+= top_k(text, k, stop).map(fmt_pair).join(" ")
+
+fn summary(text: Str, stop: List[Str]) -> Str
+= do
+  n = words_of(text, stop).len
+  d = word_freq(text, stop).len
+  "{n} words, {d} distinct, top: {top_line(text, 3, stop)}"
+
+fn longer(best: Opt[Str], w: Str) -> Opt[Str]
+= match best
+  | some(b) => if w.len > b.len then some(w) else best
+  | none => some(w)
+
+fn longest_word(text: Str) -> Opt[Str]
+= words_of(text, []).fold(none, longer)
+
+fn main() -> Unit ! log
+= log(summary("The cat and the hat. The end!", []))
+
+test freq_basic = word_freq("a b a", []) == [("a", 2), ("b", 1)]
+
+test top_one = top_k("x y y z", 1, []) == [("y", 2)]
+
+test summary_basic = summary("b a b", []) == "3 words, 2 distinct, top: b=2 a=1"

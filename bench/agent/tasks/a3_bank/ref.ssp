@@ -1,0 +1,60 @@
+type Account = {id: Str, owner: Str, balance: Int where _ >= 0, frozen: Bool}
+type BankErr = Insufficient{id: Str, needed: Int, available: Int} | SameAccount | UnknownAccount{id: Str} | Frozen{id: Str}
+
+fn accounts() -> List[Account]
+= [Account{id: "a1", owner: "alice", balance: 100, frozen: false}, Account{id: "b1", owner: "bob", balance: 20, frozen: false}, Account{id: "c1", owner: "carol", balance: 0, frozen: false}]
+
+fn open_account(bank: List[Account], id: Str, owner: Str) -> List[Account]
+= bank.push(Account{id, owner, balance: 0, frozen: false})
+
+fn lookup(bank: List[Account], id: Str) -> Account ! fail[BankErr]
+= bank.find(_.id == id).ok_or(UnknownAccount{id})
+
+fn set_balance(bank: List[Account], id: Str, b: Int where _ >= 0) -> List[Account]
+= bank.map(a => if a.id == id then a with balance := b else a)
+
+fn deposit(bank: List[Account], id: Str, amount: Int where _ > 0) -> List[Account] ! fail[BankErr]
+= do
+  a = lookup(bank, id)
+  if a.frozen then raise Frozen{id}
+  set_balance(bank, id, a.balance + amount)
+
+fn withdraw(bank: List[Account], id: Str, amount: Int where _ > 0) -> List[Account] ! fail[BankErr]
+= do
+  a = lookup(bank, id)
+  if a.frozen then raise Frozen{id}
+  if amount > a.balance then raise Insufficient{id, needed: amount, available: a.balance} else set_balance(bank, id, a.balance - amount)
+
+fn transfer(bank: List[Account], from: Str, to: Str, amount: Int where _ > 0) -> List[Account] ! fail[BankErr]
+= if from == to then raise SameAccount else deposit(withdraw(bank, from, amount + fee(amount)), to, amount)
+
+fn fee(amount: Int) -> Int
+= if amount < 50 then 1 else 0
+
+fn freeze(bank: List[Account], id: Str) -> List[Account] ! fail[BankErr]
+= do
+  lookup(bank, id)
+  bank.map(a => if a.id == id then a with frozen := true else a)
+
+fn describe(a: Account) -> Str
+= "{a.owner}: {a.balance}"
+
+fn attempt(bank: List[Account], from: Str, to: Str, amount: Int where _ > 0) -> Str
+= catch transfer(bank, from, to, amount).map(describe).join(", ")
+  | Insufficient{id, needed, available} => "declined: {id} needs {needed}, has {available}"
+  | SameAccount => "declined: same account"
+  | UnknownAccount{id} => "declined: no account {id}"
+  | Frozen{id} => "declined: {id} is frozen"
+
+fn main() -> Unit ! log
+= do
+  log(attempt(accounts(), "a1", "b1", 60))
+  log(attempt(accounts(), "b1", "a1", 50))
+
+test big_transfer = attempt(accounts(), "a1", "b1", 60) == "alice: 40, bob: 80, carol: 0"
+
+test declined = attempt(accounts(), "b1", "a1", 50) == "declined: b1 needs 50, has 20"
+
+test unknown = attempt(accounts(), "a1", "zz", 5) == "declined: no account zz"
+
+test opened = open_account(accounts(), "d1", "dan").map(describe).last == some("dan: 0")

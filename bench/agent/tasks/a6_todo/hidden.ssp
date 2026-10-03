@@ -1,0 +1,31 @@
+test hidden_complete_ok = catch pending(complete(demo(), 2)).map(_.id) == [1, 3, 4]
+  | _ => false
+
+test hidden_complete_missing = catch complete(demo(), 9).len == 0
+  | NotFound{id} => id == 9
+  | _ => false
+
+test hidden_complete_twice = catch complete(complete(demo(), 2), 2).len == 0
+  | AlreadyDone{id} => id == 2
+  | _ => false
+
+test hidden_render_high = render(Task{id: 2, title: "write report", done: false, pri: High}) == "[ ] #2 (high) write report"
+
+test hidden_render_low = render(Task{id: 5, title: "nap", done: true, pri: Low}) == "[x] #5 (low) nap"
+
+test hidden_render_all = render_all(demo()) == "[ ] #1 (low) buy milk\n[ ] #2 (high) write report\n[ ] #3 (med) call bob\n[ ] #4 (high) fix sink"
+
+test hidden_by_pri = by_priority(demo()).map(_.id) == [2, 4, 3, 1]
+
+test hidden_by_pri_pending = catch by_priority(complete(demo(), 4)).map(_.id) == [2, 3, 1]
+  | _ => false
+
+test hidden_clear_done = catch clear_done(complete(complete(demo(), 1), 3)).map(_.id) == [2, 4]
+  | _ => false
+
+test hidden_retitle = catch retitle(demo(), 3, "call alice").map(_.title) == ["buy milk", "write report", "call alice", "fix sink"]
+  | _ => false
+
+test hidden_retitle_missing = catch retitle(demo(), 7, "x").len == 0
+  | NotFound{id} => id == 7
+  | _ => false

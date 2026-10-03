@@ -319,6 +319,36 @@ impl Cx<'_> {
                 let lc = self.cty(&lt)?;
                 format!("({{ Str p_ = {}; RawL o_; Str e_ = {{0, 0}}; int k_ = ss_list_dir(p_, &o_, &e_); {}}})", v(0), res("k_", "e_").replace("r_.ok = 1;", &format!("{{ r_.ok = 1; r_.v = ({lc}){{o_.len, (Str*)o_.data, o_.hdr}}; }}")))
             }
+            "read_bytes" => {
+                self.std("fsx");
+                let lc = self.cty(&arg0(t))?;
+                format!("({{ Str p_ = {}; RawL o_; Str e_ = {{0, 0}}; int k_ = ss_read_bytes(p_, &o_, &e_); {}}})", v(0), res("k_", "e_").replace("r_.ok = 1;", &format!("{{ r_.ok = 1; r_.v = ({lc}){{o_.len, (int64_t*)o_.data, o_.hdr}}; }}")))
+            }
+            "write_bytes" => {
+                self.std("fsx");
+                format!("({{ Str p_ = {}; __auto_type b_ = {}; Str e_ = {{0, 0}}; int k_ = ss_write_bytes(p_, b_.data, b_.len, &e_); {}}})", v(0), v(1), res("k_", "e_"))
+            }
+            "mkdir" | "mkdir_all" | "remove_dir" => {
+                self.std("fsx");
+                let call = if n == "remove_dir" { "ss_remove_dir(p_, &e_)".to_string() } else { format!("ss_mkdir(p_, {}, &e_)", i32::from(n == "mkdir_all")) };
+                format!("({{ Str p_ = {}; Str e_ = {{0, 0}}; int k_ = {call}; {}}})", v(0), res("k_", "e_"))
+            }
+            "rename" => {
+                self.std("fsx");
+                format!("({{ Str p_ = {}; Str q_ = {}; Str e_ = {{0, 0}}; int k_ = ss_rename(p_, q_, &e_); {}}})", v(0), v(1), res("k_", "e_"))
+            }
+            "exists" | "is_dir" => {
+                self.std("fsx");
+                format!("((int64_t)(ss_path_kind({}) {}))", v(0), if n == "exists" { "!= 0" } else { "== 2" })
+            }
+            "file_size" | "modified_ms" => {
+                self.std("fsx");
+                format!("({{ Str p_ = {}; int64_t o_ = 0; Str e_ = {{0, 0}}; int k_ = ss_stat_num(p_, {}, &o_, &e_); {}}})", v(0), i32::from(n == "modified_ms"), res("k_", "e_").replace("r_.ok = 1;", "{ r_.ok = 1; r_.v = o_; }"))
+            }
+            "eprint" => {
+                self.std("eprint");
+                format!("({{ ss_eprint({}); 0LL; }})", v(0))
+            }
             "read_line" => {
                 self.std("io");
                 format!("({{ Str o_; {c} r_ = {{0}}; if (ss_read_line(&o_, st)) {{ r_.some = 1; r_.v = o_; }} r_; }})")

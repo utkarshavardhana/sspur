@@ -76,6 +76,11 @@ fn rng_normal(s: &mut u64, mean: f64, sd: f64) -> f64 {
     mean + t
 }
 
+#[cfg(target_os = "macos")]
+const ENOTEMPTY: i32 = 66;
+#[cfg(not(target_os = "macos"))]
+const ENOTEMPTY: i32 = 39;
+
 pub fn os_reason(e: &std::io::Error) -> String {
     match e.raw_os_error() {
         Some(2) => "not found".into(),
@@ -83,6 +88,7 @@ pub fn os_reason(e: &std::io::Error) -> String {
         Some(21) => "is a directory".into(),
         Some(20) => "not a directory".into(),
         Some(17) => "already exists".into(),
+        Some(ENOTEMPTY) => "directory not empty".into(),
         Some(n) => format!("os error {n}"),
         None => "invalid UTF-8".into(),
     }
@@ -112,6 +118,23 @@ pub fn mono_ns() -> i64 {
     let mut t = [0i64; 2];
     unsafe { clock_gettime(CLOCK_MONOTONIC, &mut t) };
     t[0].saturating_mul(1_000_000_000).saturating_add(t[1])
+}
+
+fn mkdir_all(p: &str) -> Result<Value, std::io::Error> {
+    if p.is_empty() {
+        return Err(std::io::Error::from_raw_os_error(2));
+    }
+    let b = p.as_bytes();
+    for i in 1..=b.len() {
+        if i < b.len() && b[i] != b'/' {
+            continue;
+        }
+        if let Err(e) = std::fs::create_dir(&p[..i])
+            && !(e.raw_os_error() == Some(17) && std::fs::metadata(&p[..i]).is_ok_and(|m| m.is_dir())) {
+                return Err(e);
+            }
+    }
+    Ok(Value::Unit)
 }
 
 fn read_line_raw() -> R<Option<String>> {
@@ -328,6 +351,56 @@ impl Interp {
             "remove_file" => {
                 let p = s(&a[0])?;
                 io_res(p, std::fs::remove_file(p).map(|_| Value::Unit))
+            }
+            "read_bytes" => {
+                let p = s(&a[0])?;
+                io_res(p, std::fs::read(p).map(|b| ints(b.into_iter().map(i64::from))))
+            }
+            "write_bytes" => {
+                let p = s(&a[0])?;
+                let mut bs = Vec::new();
+                for x in list(&a[1])?.iter() {
+                    match u8::try_from(int(x)?) {
+                        Ok(b) => bs.push(b),
+                        Err(_) if !p.contains('\0') => return Ok(Value::Res(Err(Rc::new(Value::str(&format!("{p}: byte out of range")))))),
+                        Err(_) => break,
+                    }
+                }
+                io_res(p, std::fs::write(p, bs).map(|_| Value::Unit))
+            }
+            "mkdir" => {
+                let p = s(&a[0])?;
+                io_res(p, std::fs::create_dir(p).map(|_| Value::Unit))
+            }
+            "mkdir_all" => {
+                let p = s(&a[0])?;
+                io_res(p, mkdir_all(p))
+            }
+            "remove_dir" => {
+                let p = s(&a[0])?;
+                io_res(p, std::fs::remove_dir(p).map(|_| Value::Unit))
+            }
+            "rename" => {
+                let (p, q) = (s(&a[0])?, s(&a[1])?);
+                if q.contains('\0') {
+                    return Ok(Value::Res(Err(Rc::new(Value::str(&format!("{p}: invalid path"))))));
+                }
+                io_res(p, std::fs::rename(p, q).map(|_| Value::Unit))
+            }
+            "exists" | "is_dir" => {
+                let p = s(&a[0])?;
+                let m = if p.contains('\0') { None } else { std::fs::metadata(p).ok() };
+                Value::Bool(m.is_some_and(|m| n == "exists" || m.is_dir()))
+            }
+            "file_size" | "modified_ms" => {
+                use std::os::unix::fs::MetadataExt;
+                let p = s(&a[0])?;
+                io_res(p, std::fs::metadata(p).map(|m| Value::Int(if n == "file_size" { m.size() as i64 } else { m.mtime() * 1000 + m.mtime_nsec() / 1_000_000 })))
+            }
+            "eprint" => {
+                use std::io::Write;
+                let _ = writeln!(std::io::stderr(), "{}", s(&a[0])?);
+                Value::Unit
             }
             "read_line" => opt(read_line_raw()?.map(|l| Value::str(&l))),
             "read_lines" => {

@@ -43,7 +43,7 @@ static uint32_t ss_utf8_get(Str s, int64_t* i) {
 //@ fs fail utf8 sys
 static Str ss_why(Str path, int e) {
     SB_INIT(b); sb_put(&b, path.p, path.len); sb_put(&b, ": ", 2);
-    const char* w = e == -1 ? "invalid path" : e == -2 ? "invalid UTF-8" : e == ENOENT ? "not found" : (e == EACCES || e == EPERM) ? "permission denied" : e == EISDIR ? "is a directory" : e == ENOTDIR ? "not a directory" : e == EEXIST ? "already exists" : 0;
+    const char* w = e == -1 ? "invalid path" : e == -2 ? "invalid UTF-8" : e == -3 ? "byte out of range" : e == ENOENT ? "not found" : (e == EACCES || e == EPERM) ? "permission denied" : e == EISDIR ? "is a directory" : e == ENOTDIR ? "not a directory" : e == EEXIST ? "already exists" : e == ENOTEMPTY ? "directory not empty" : 0;
     if (w) sb_put(&b, w, (int64_t)strlen(w)); else { sb_put(&b, "os error ", 9); sb_int(&b, e); }
     return sb_done(&b);
 }
@@ -454,3 +454,66 @@ static inline uint64_t ss_rng(uint64_t* s) { uint64_t m = *s + 0x9E3779B97F4A7C1
 static inline double ss_rng_f64(uint64_t* s) { return (double)(ss_rng(s) >> 11) * (1.0 / 9007199254740992.0); }
 static inline int64_t ss_rng_below(uint64_t* s, int64_t n) { return (int64_t)(((unsigned __int128)ss_rng(s) * (unsigned __int128)(uint64_t)n) >> 64); }
 static double ss_rng_normal(uint64_t* s, double mean, double sd) { double u1 = ss_rng_f64(s); double u2 = ss_rng_f64(s); double r = sqrt(-2.0 * log(1.0 - u1)); double c = cos(6.283185307179586 * u2); double z = r * c; double t = sd * z; return mean + t; }
+//@ fsx fs
+#include <sys/stat.h>
+#include <stdio.h>
+static int ss_read_bytes(Str path, RawL* out, Str* err) {
+    char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
+    int fd = open(c, O_RDONLY | O_CLOEXEC); if (fd < 0) { *err = ss_why(path, errno); return 0; }
+    int64_t cap = 4096, n = 0; unsigned char* buf = (unsigned char*)malloc((size_t)cap);
+    for (;;) {
+        if (n == cap) { cap *= 2; buf = (unsigned char*)realloc(buf, (size_t)cap); }
+        ssize_t k = read(fd, buf + n, (size_t)(cap - n));
+        if (k < 0) { if (errno == EINTR) continue; int e = errno; close(fd); free(buf); *err = ss_why(path, e); return 0; }
+        if (k == 0) break;
+        n += k;
+    }
+    close(fd);
+    RawL r = raw_alloc_a(n, 8, 1); int64_t* d = (int64_t*)r.data;
+    for (int64_t i = 0; i < n; i++) d[i] = buf[i];
+    free(buf); r.len = n; r.hdr[1] = n; *out = r; return 1;
+}
+static int ss_write_bytes(Str path, const int64_t* d, int64_t n, Str* err) {
+    char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
+    for (int64_t i = 0; i < n; i++) if (d[i] < 0 || d[i] > 255) { *err = ss_why(path, -3); return 0; }
+    char* b = (char*)sspur_alloc_atomic((size_t)n + 1);
+    for (int64_t i = 0; i < n; i++) b[i] = (char)d[i];
+    return ss_write_file(path, (Str){n, b}, 0, err);
+}
+static int ss_mkdir(Str path, int all, Str* err) {
+    char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
+    if (!all) { if (mkdir(c, 0777) != 0) { *err = ss_why(path, errno); return 0; } return 1; }
+    if (!path.len) { *err = ss_why(path, ENOENT); return 0; }
+    for (int64_t i = 1; i <= path.len; i++) {
+        if (i < path.len && c[i] != '/') continue;
+        char save = c[i]; c[i] = 0;
+        int r = mkdir(c, 0777), e = errno; struct stat sb;
+        int ok = r == 0 || (e == EEXIST && stat(c, &sb) == 0 && S_ISDIR(sb.st_mode));
+        c[i] = save;
+        if (!ok) { *err = ss_why(path, e); return 0; }
+    }
+    return 1;
+}
+static int ss_remove_dir(Str path, Str* err) {
+    char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
+    if (rmdir(c) != 0) { *err = ss_why(path, errno); return 0; }
+    return 1;
+}
+static int ss_rename(Str from, Str to, Str* err) {
+    char* a = ss_cpath(from); char* b = ss_cpath(to); if (!a || !b) { *err = ss_why(from, -1); return 0; }
+    if (rename(a, b) != 0) { *err = ss_why(from, errno); return 0; }
+    return 1;
+}
+static int64_t ss_path_kind(Str path) { char* c = ss_cpath(path); struct stat sb; if (!c || stat(c, &sb) != 0) return 0; return S_ISDIR(sb.st_mode) ? 2 : 1; }
+static int ss_stat_num(Str path, int mtime, int64_t* out, Str* err) {
+    char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
+    struct stat sb; if (stat(c, &sb) != 0) { *err = ss_why(path, errno); return 0; }
+#ifdef __APPLE__
+    struct timespec m = sb.st_mtimespec;
+#else
+    struct timespec m = sb.st_mtim;
+#endif
+    *out = mtime ? (int64_t)m.tv_sec * 1000 + (int64_t)m.tv_nsec / 1000000 : (int64_t)sb.st_size; return 1;
+}
+//@ eprint
+static void ss_eprint(Str s) { int64_t off = 0; while (off < s.len) { ssize_t k = write(2, s.p + off, (size_t)(s.len - off)); if (k <= 0) break; off += k; } (void)!write(2, "\n", 1); }

@@ -140,6 +140,7 @@ impl Interp {
                     it.add_type(t)
                 }
                 Def::Effect(e) => it.ops.extend(e.ops.iter().map(|o| o.name.clone())),
+                Def::Store(_) | Def::Svc(_) => {}
             }
         }
         it

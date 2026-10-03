@@ -17,6 +17,14 @@ pub fn print_def(d: &Def) -> String {
         Def::Fn(f) => print_fn(f),
         Def::Test(t) => format!("test {} = {}", t.name, expr(&t.body, 0)),
         Def::Effect(e) => print_effect_def(e),
+        Def::Store(st) => format!("store {} = {}[{}, {}]", st.name, st.kind, ty(&st.key), ty(&st.val)),
+        Def::Svc(sv) => {
+            let mut s = format!("svc {}", sv.name);
+            for ep in &sv.eps {
+                s.push_str(&format!("\n  ep {} {:?} = {}", ep.method, ep.path, ep.handler));
+            }
+            s
+        }
     }
 }
 

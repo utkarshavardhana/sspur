@@ -1,0 +1,24 @@
+fn hidden_text() -> Str
+= "the cat and the dog and the bird"
+
+test hidden_ties = top_k(hidden_text(), 3, []) == [("the", 3), ("and", 2), ("bird", 1)]
+
+test hidden_ties_all = top_k("d c b a c", 4, []) == [("c", 2), ("a", 1), ("b", 1), ("d", 1)]
+
+test hidden_stop_top = top_k(hidden_text(), 2, ["the", "and"]) == [("bird", 1), ("cat", 1)]
+
+test hidden_stop_freq = word_freq("The THE cat", ["the"]) == [("cat", 1)]
+
+test hidden_words_stop = words_of("A b, a C!", ["a"]) == ["b", "c"]
+
+test hidden_summary_stop = summary(hidden_text(), ["the"]) == "5 words, 4 distinct, top: and=2 bird=1 cat=1"
+
+test hidden_summary_nostop = summary("b a b", []) == "3 words, 2 distinct, top: b=2 a=1"
+
+test hidden_top_line = top_line("q q r", 5, ["r"]) == "q=2"
+
+test hidden_longest = longest_word("a bb ccc dd eee") == some("ccc")
+
+test hidden_longest_case = longest_word("Hello World") == some("hello")
+
+test hidden_longest_none = longest_word("!! ??") == none

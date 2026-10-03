@@ -1,0 +1,44 @@
+type Entry = {key: Str, value: Str}
+type CfgErr = Missing{key: Str} | NotInt{key: Str, value: Str} | NotBool{key: Str, value: Str}
+
+fn parse_line(line: Str) -> Opt[Entry]
+= do
+  t = line.trim
+  parts = t.split("=")
+  key = parts[0].trim
+  if t.starts_with("#") or parts.len < 2 or key.is_empty then none else some(Entry{key, value: parts.drop(1).join("=").trim})
+
+fn parse(text: Str) -> List[Entry]
+= text.split(";").map(parse_line).filter(_.is_some).map(_.get)
+
+fn lookup(cfg: List[Entry], key: Str) -> Opt[Str]
+= cfg.reverse.find(_.key == key).map(_.value)
+
+fn get_str(cfg: List[Entry], key: Str) -> Str ! fail[CfgErr]
+= lookup(cfg, key).ok_or(Missing{key})
+
+fn get_int(cfg: List[Entry], key: Str) -> Int ! fail[CfgErr]
+= do
+  v = get_str(cfg, key)
+  v.to_int.ok_or(NotInt{key, value: v})
+
+fn get_bool(cfg: List[Entry], key: Str, default: Bool) -> Bool ! fail[CfgErr]
+= match lookup(cfg, key)
+  | none => default
+  | some(v) => if ["true", "yes", "1"].contains(v.lower) then true else if ["false", "no", "0"].contains(v.lower) then false else raise NotBool{key, value: v}
+
+fn keys(cfg: List[Entry]) -> List[Str]
+= cfg.map(_.key).unique
+
+fn sample_text() -> Str
+= "host=localhost;port=8080;debug=true"
+
+fn main() -> Unit ! log
+= log(keys(parse(sample_text())).join(","))
+
+test parse_sample = parse(sample_text()).len == 3
+
+test lookup_host = lookup(parse(sample_text()), "host") == some("localhost")
+
+test missing = catch get_str(parse(sample_text()), "nope") == ""
+  | Missing{key} => key == "nope"

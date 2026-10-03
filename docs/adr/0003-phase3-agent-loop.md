@@ -36,6 +36,7 @@ Status: accepted, 2026-10-02
 
 ## Next
 
+- The agent token comparison (`bench/agent/`, 2026-10-03) doesn't meet the exit criterion yet: SSPUR used 1.96x Python's total tokens with the same 95/95 pass rate. Next steps: compact text output for `q` and `apply`, inline transactions, then a rerun.
 - A fresh 30-task set to confirm the tolerant-input gain on held-out data.
 - More P0 constructs: `Secret`, `Pii`, and `Untrusted` taint types; `Guess[T]`; decision tables; `Id[T]` arenas.
 - Phase 4: the Cranelift backend and the `sys` profile.

@@ -1,0 +1,67 @@
+type Priority = Low | Med | High
+type Task = {id: Int where _ > 0, title: Str, done: Bool, pri: Priority}
+type TaskErr = NotFound{id: Int} | AlreadyDone{id: Int}
+
+fn next_id(ts: List[Task]) -> Int
+= ts.map(_.id).max.or(0) + 1
+
+fn add_task(ts: List[Task], title: Str, pri: Priority) -> List[Task]
+= ts.push(Task{id: next_id(ts), title, done: false, pri})
+
+fn find_task(ts: List[Task], id: Int) -> Task ! fail[TaskErr]
+= ts.find(_.id == id).ok_or(NotFound{id})
+
+fn complete(ts: List[Task], id: Int) -> List[Task] ! fail[TaskErr]
+= do
+  t = find_task(ts, id)
+  if t.done then raise AlreadyDone{id}
+  ts.map(t => if t.id == id then t with done := true else t)
+
+fn retitle(ts: List[Task], id: Int, title: Str) -> List[Task] ! fail[TaskErr]
+= do
+  find_task(ts, id)
+  ts.map(t => if t.id == id then t with title := title else t)
+
+fn clear_done(ts: List[Task]) -> List[Task]
+= ts.filter(t => not t.done)
+
+fn rank(p: Priority) -> Int
+= match p
+  | High => 0
+  | Med => 1
+  | Low => 2
+
+fn label(p: Priority) -> Str
+= match p
+  | High => "high"
+  | Med => "med"
+  | Low => "low"
+
+fn by_priority(ts: List[Task]) -> List[Task]
+= pending(ts).sort_by(t => (rank(t.pri), t.id))
+
+fn pending(ts: List[Task]) -> List[Task]
+= ts.filter(t => not t.done)
+
+fn box(t: Task) -> Str
+= if t.done then "[x]" else "[ ]"
+
+fn render(t: Task) -> Str
+= "{box(t)} #{t.id} ({label(t.pri)}) {t.title}"
+
+fn render_all(ts: List[Task]) -> Str
+= ts.map(render).join("\n")
+
+fn demo() -> List[Task]
+= add_task(add_task(add_task(add_task([], "buy milk", Low), "write report", High), "call bob", Med), "fix sink", High)
+
+fn main() -> Unit ! log
+= log(catch render_all(complete(demo(), 1))
+  | _ => "error")
+
+test ids = demo().map(_.id) == [1, 2, 3, 4]
+
+test complete_one = catch pending(complete(demo(), 2)).map(_.id) == [1, 3, 4]
+  | _ => false
+
+test render_one = render(Task{id: 5, title: "nap", done: true, pri: Low}) == "[x] #5 (low) nap"

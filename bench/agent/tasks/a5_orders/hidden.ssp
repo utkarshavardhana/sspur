@@ -1,0 +1,27 @@
+fn hidden_with(c: Str) -> Order
+= sample_order() with coupon := c
+
+fn hidden_big(c: Str, unit: Int where _ >= 0) -> Order
+= Order{id: 9, lines: [Line{sku: "tv", qty: 1, unit}], coupon: c}
+
+test hidden_gross = gross(sample_order()) == 3150
+
+test hidden_plain_total = total(sample_order()) == 3901
+
+test hidden_plain_invoice = invoice(sample_order()) == "order 7: gross 31.50, discount 0.00, shipping 4.99, tax 2.52, total 39.01"
+
+test hidden_save10 = discount(hidden_with("SAVE10")) == 315 and tax(hidden_with("SAVE10")) == 226 and total(hidden_with("SAVE10")) == 3560
+
+test hidden_save10_invoice = invoice(hidden_with("SAVE10")) == "order 7: gross 31.50, discount 3.15, shipping 4.99, tax 2.26, total 35.60"
+
+test hidden_big20_small = discount(hidden_with("BIG20")) == 0
+
+test hidden_big20 = discount(hidden_big("BIG20", 12000)) == 2400 and shipping(hidden_big("BIG20", 12000)) == 0 and total(hidden_big("BIG20", 12000)) == 10368
+
+test hidden_net_threshold = shipping(hidden_big("SAVE10", 5400)) == 499 and total(hidden_big("SAVE10", 5400)) == 5747
+
+test hidden_gross_threshold = shipping(hidden_big("", 5000)) == 0
+
+test hidden_freeship = shipping(hidden_with("FREESHIP")) == 0 and discount(hidden_with("FREESHIP")) == 0 and total(hidden_with("FREESHIP")) == 3402
+
+test hidden_unknown = total(hidden_with("XYZ")) == 3901

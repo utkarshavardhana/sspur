@@ -1,0 +1,21 @@
+test hidden_empty = average(Student{name: "e", scores: []}) == 0 and report_card(Student{name: "e", scores: []}) == "e: 0 (F)"
+
+test hidden_bounds = [letter(90), letter(89), letter(80), letter(70), letter(60), letter(59), letter(100)] == ["A", "B", "B", "C", "D", "F", "A"]
+
+test hidden_rank = ranking(roster()) == ["bo", "mia", "zed", "ali"]
+
+test hidden_rank_ties = ranking([Student{name: "cy", scores: [80]}, Student{name: "al", scores: [80]}, Student{name: "bo", scores: [90]}]) == ["bo", "al", "cy"]
+
+test hidden_drop = drop_lowest(Student{name: "z", scores: [95, 50, 90, 50]}).scores == [95, 90, 50]
+
+test hidden_drop_one = drop_lowest(Student{name: "z", scores: [70]}).scores == [70] and drop_lowest(Student{name: "z", scores: []}).scores == []
+
+test hidden_drop_name = drop_lowest(Student{name: "q", scores: [1, 2]}) == Student{name: "q", scores: [2]}
+
+test hidden_curve = curve([Student{name: "a", scores: [95, 80]}, Student{name: "b", scores: []}], 10) == [Student{name: "a", scores: [100, 90]}, Student{name: "b", scores: []}]
+
+test hidden_honor = honor_roll(roster()) == ["bo", "mia", "zed"]
+
+test hidden_honor_empty = honor_roll([]) == []
+
+test hidden_grade = grade(Student{name: "m", scores: [90, 90]}) == "A"

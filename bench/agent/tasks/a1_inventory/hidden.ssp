@@ -1,0 +1,34 @@
+test hidden_total = total_value(sample()) == 7 * 12 + 40 * 3 + 2 * 250
+
+test hidden_total_empty = total_value([]) == 0
+
+test hidden_low_sorted = low_stock(sample(), 10) == ["a1", "c3"]
+
+test hidden_low_none = low_stock(sample(), 1) == []
+
+test hidden_remove_ok = catch find_item(remove_stock(sample(), "b2", 15), "b2").map(_.qty) == some(25)
+  | _ => false
+
+test hidden_remove_all = catch find_item(remove_stock(sample(), "a1", 2), "a1").map(_.qty) == some(0)
+  | _ => false
+
+test hidden_remove_keeps_order = catch remove_stock(sample(), "b2", 1).map(_.sku) == ["c3", "b2", "a1"]
+  | _ => false
+
+test hidden_remove_short = catch remove_stock(sample(), "a1", 3).len == 0
+  | OutOfStock{sku, wanted, have} => sku == "a1" and wanted == 3 and have == 2
+  | _ => false
+
+test hidden_remove_unknown = catch remove_stock(sample(), "q9", 1).len == 0
+  | UnknownSku{sku} => sku == "q9"
+  | _ => false
+
+test hidden_add_ok = catch add_item(sample(), Item{sku: "d4", name: "drill", qty: 1, price: 900}).map(_.sku) == ["c3", "b2", "a1", "d4"]
+  | _ => false
+
+test hidden_add_dup = catch add_item(sample(), Item{sku: "b2", name: "bolt", qty: 1, price: 3}).len == 0
+  | DuplicateSku{sku} => sku == "b2"
+  | _ => false
+
+test hidden_restock_still = catch find_item(restock(sample(), "c3", 3), "c3").map(_.qty) == some(10)
+  | _ => false

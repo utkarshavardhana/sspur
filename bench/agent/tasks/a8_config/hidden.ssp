@@ -1,0 +1,38 @@
+fn hidden_cfg() -> List[Entry]
+= parse(" host = example.com ; port=8080;# port=9;url=http://x?a=b;empty=;=nokey;junk;port = 9090;debug=Yes;n=-5;bad=12a;off=NO")
+
+test hidden_len = hidden_cfg().len == 9
+
+test hidden_keys = keys(hidden_cfg()) == ["host", "port", "url", "empty", "debug", "n", "bad", "off"]
+
+test hidden_trim = lookup(hidden_cfg(), "host") == some("example.com")
+
+test hidden_first_eq = lookup(hidden_cfg(), "url") == some("http://x?a=b")
+
+test hidden_empty_value = lookup(hidden_cfg(), "empty") == some("")
+
+test hidden_last_wins = catch get_int(hidden_cfg(), "port") == 9090
+  | _ => false
+
+test hidden_neg = catch get_int(hidden_cfg(), "n") == -5
+  | _ => false
+
+test hidden_not_int = catch get_int(hidden_cfg(), "bad") == 0
+  | NotInt{key, value} => key == "bad" and value == "12a"
+  | _ => false
+
+test hidden_int_missing = catch get_int(hidden_cfg(), "zz") == 0
+  | Missing{key} => key == "zz"
+  | _ => false
+
+test hidden_bool = catch get_bool(hidden_cfg(), "debug", false) and not get_bool(hidden_cfg(), "off", true)
+  | _ => false
+
+test hidden_bool_default = catch get_bool(hidden_cfg(), "zz", true) and not get_bool(hidden_cfg(), "zz", false)
+  | _ => false
+
+test hidden_not_bool = catch get_bool(hidden_cfg(), "host", false)
+  | NotBool{key, value} => key == "host" and value == "example.com"
+  | _ => false
+
+test hidden_blank = parse("a=1;;b=2; ;#c=3").map(_.key) == ["a", "b"]

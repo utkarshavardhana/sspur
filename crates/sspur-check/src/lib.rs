@@ -914,7 +914,7 @@ impl Checker {
             ExprKind::Name(n) => self.infer_name(n, e.span),
             ExprKind::Field(x, f) => {
                 let xt = self.infer(x, None);
-                let rt = self.resolve(&xt);
+                let mut rt = self.resolve(&xt);
                 if let Type::Tuple(items) = &rt
                     && let Ok(i) = f.parse::<usize>() {
                         return match items.get(i) {
@@ -935,7 +935,7 @@ impl Checker {
                     if let [(owner, params)] = owners.as_slice() {
                         let args: Vec<Type> = params.iter().map(|_| self.fresh()).collect();
                         self.unify(&Type::Con(owner.clone(), args), &xt);
-                        return self.infer(e, exp);
+                        rt = self.resolve(&xt);
                     }
                 }
                 if let Type::Con(n, args) = &rt {

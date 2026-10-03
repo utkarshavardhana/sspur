@@ -1,0 +1,88 @@
+type CfgErr = Missing{key: Str} | NotInt{key: Str, value: Str} | NotBool{key: Str, value: Str}
+
+type Entry = {key: Str, value: Str}
+
+fn get_bool(cfg: List[Entry], key: Str, default: Bool) -> Bool ! fail[CfgErr]
+= match lookup(cfg, key)
+| none => default
+| some(v) => parse_bool(key, v)
+
+fn get_int(cfg: List[Entry], key: Str) -> Int ! fail[CfgErr]
+= do
+  v = get_str(cfg, key)
+  if is_int_text(v) then v.to_int.ok_or(NotInt{key: key, value: v}) else raise NotInt{key: key, value: v}
+
+fn get_str(cfg: List[Entry], key: Str) -> Str ! fail[CfgErr]
+= lookup(cfg, key).ok_or(Missing{key: key})
+
+fn is_digits(s: Str) -> Bool
+= not s.is_empty and s.chars.all(c => "0123456789".contains(c))
+
+fn is_int_text(s: Str) -> Bool
+= if s.starts_with("-") then is_digits(s.drop(1)) else is_digits(s)
+
+fn keys(cfg: List[Entry]) -> List[Str]
+= cfg.map(_.key).unique
+
+fn lookup(cfg: List[Entry], key: Str) -> Opt[Str]
+= cfg.reverse.find(_.key == key).map(_.value)
+
+fn main() -> Unit ! log
+= log(keys(parse(sample_text())).join(","))
+
+fn parse(text: Str) -> List[Entry]
+= text.split(";").map(parse_line).filter(_.is_some).map(_.get)
+
+fn parse_bool(key: Str, v: Str) -> Bool ! fail[CfgErr]
+= do
+  l = v.lower
+  if l == "true" or l == "yes" or l == "1" then true else if l == "false" or l == "no" or l == "0" then false else raise NotBool{key: key, value: v}
+
+fn parse_line(line: Str) -> Opt[Entry]
+= do
+  t = line.trim
+  parts = t.split("=")
+  k = parts[0].trim
+  if t.starts_with("#") or parts.len < 2 or k.is_empty then none else some(Entry{key: k, value: parts.drop(1).join("=").trim})
+
+fn sample_text() -> Str
+= "host=localhost;port=8080;debug=true"
+
+test lookup_host = lookup(parse(sample_text()), "host") == some("localhost")
+
+test missing = catch get_str(parse(sample_text()), "nope") == ""
+| Missing{key} => key == "nope"
+
+test parse_sample = parse(sample_text()).len == 3
+
+test t_bool_bad = catch get_bool(parse("a=maybe"), "a", true) == true
+| NotBool{key, value} => value == "maybe"
+| _ => false
+
+test t_bool_default = get_bool(parse("a=1"), "zz", true)
+
+test t_bool_ok = get_bool(parse("a=YES;b=0"), "a", false) and not get_bool(parse("a=YES;b=0"), "b", true)
+
+test t_first_eq = lookup(parse("url=a=b"), "url") == some("a=b")
+
+test t_int_bad = catch get_int(parse("n=4x"), "n") == 0
+| NotInt{key, value} => value == "4x"
+| _ => false
+
+test t_int_dash = catch get_int(parse("n=-"), "n") == 0
+| NotInt{key, value} => value == "-"
+| _ => false
+
+test t_int_missing = catch get_int(parse("n=1"), "z") == 0
+| Missing{key} => key == "z"
+| _ => false
+
+test t_int_ok = get_int(parse("n=-42"), "n") == -42
+
+test t_keys_order = keys(parse("b=1;a=2;b=3")) == ["b", "a"]
+
+test t_last_wins = lookup(parse("a=1;a=2"), "a") == some("2")
+
+test t_trim_skip = parse(" a = 1 ; b=2;junk; =x;#c=3; url=a=b ").len == 3
+
+test t_trim_val = lookup(parse("  k  =  v w  "), "k") == some("v w")

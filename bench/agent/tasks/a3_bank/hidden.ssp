@@ -1,0 +1,35 @@
+test hidden_no_fee = attempt(accounts(), "a1", "b1", 60) == "alice: 40, bob: 80, carol: 0"
+
+test hidden_fee = attempt(accounts(), "a1", "b1", 10) == "alice: 89, bob: 30, carol: 0"
+
+test hidden_fee_short = attempt(accounts(), "b1", "a1", 20) == "declined: b1 needs 21, has 20"
+
+test hidden_fee_exact = attempt(accounts(), "b1", "a1", 19) == "alice: 119, bob: 0, carol: 0"
+
+test hidden_frozen_to = catch attempt(freeze(accounts(), "b1"), "a1", "b1", 60) == "declined: b1 is frozen"
+  | _ => false
+
+test hidden_frozen_from = catch attempt(freeze(accounts(), "a1"), "a1", "b1", 60) == "declined: a1 is frozen"
+  | _ => false
+
+test hidden_frozen_other = catch attempt(freeze(accounts(), "c1"), "a1", "b1", 60) == "alice: 40, bob: 80, carol: 0"
+  | _ => false
+
+test hidden_deposit_frozen = catch deposit(freeze(accounts(), "c1"), "c1", 5).len == 0
+  | Frozen{id} => id == "c1"
+  | _ => false
+
+test hidden_withdraw_frozen = catch withdraw([Account{id: "z", owner: "zed", balance: 5, frozen: true}], "z", 1).len == 0
+  | Frozen{id} => id == "z"
+  | _ => false
+
+test hidden_freeze_unknown = catch freeze(accounts(), "q").len == 0
+  | UnknownAccount{id} => id == "q"
+  | _ => false
+
+test hidden_freeze_sets = catch freeze(accounts(), "b1").map(_.frozen) == [false, true, false]
+  | _ => false
+
+test hidden_unfrozen = accounts().all(a => not a.frozen) and open_account(accounts(), "d1", "dan").last.map(_.frozen) == some(false)
+
+test hidden_same = attempt(accounts(), "a1", "a1", 5) == "declined: same account"

@@ -1,0 +1,35 @@
+type Item = {sku: Str, name: Str, qty: Int where _ >= 0, price: Int where _ >= 0}
+type InvErr = UnknownSku{sku: Str} | OutOfStock{sku: Str, wanted: Int, have: Int}
+
+fn sample() -> List[Item]
+= [Item{sku: "c3", name: "cable", qty: 7, price: 12}, Item{sku: "b2", name: "bolt", qty: 40, price: 3}, Item{sku: "a1", name: "anchor", qty: 2, price: 250}]
+
+fn find_item(inv: List[Item], sku: Str) -> Opt[Item]
+= inv.find(_.sku == sku)
+
+fn total_value(inv: List[Item]) -> Int
+= inv.map(_.qty + _.price).sum
+
+fn restock(inv: List[Item], sku: Str, n: Int where _ > 0) -> List[Item] ! fail[InvErr]
+= if find_item(inv, sku).is_none then raise UnknownSku{sku} else inv.map(i => if i.sku == sku then i with qty := i.qty + n else i)
+
+fn low_stock(inv: List[Item], threshold: Int) -> List[Str]
+= inv.filter(_.qty < threshold).map(_.sku)
+
+fn describe(i: Item) -> Str
+= "{i.sku} {i.name} x{i.qty} @ {i.price}"
+
+fn report(inv: List[Item]) -> Str
+= inv.map(describe).join("\n")
+
+fn main() -> Unit ! log
+= log(report(sample()))
+
+test restock_adds = catch find_item(restock(sample(), "a1", 3), "a1").map(_.qty) == some(5)
+  | _ => false
+
+test restock_unknown = catch restock(sample(), "zz", 1).len == 0
+  | UnknownSku{sku} => sku == "zz"
+  | _ => false
+
+test describe_one = describe(Item{sku: "x", name: "nut", qty: 1, price: 2}) == "x nut x1 @ 2"

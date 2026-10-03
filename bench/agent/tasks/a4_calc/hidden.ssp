@@ -1,0 +1,28 @@
+test hidden_sub = run(Sub{a: Num{v: 10}, b: Var{name: "x"}}, [("x", 3)]) == "(10 - x) = 7"
+
+test hidden_div = run(Div{a: Num{v: 7}, b: Num{v: 2}}, []) == "7 / 2 = 3"
+
+test hidden_div_zero = run(Div{a: Num{v: 1}, b: Sub{a: Var{name: "x"}, b: Var{name: "x"}}}, [("x", 4)]) == "1 / (x - x) = error: division by zero"
+
+test hidden_unbound_still = run(Sub{a: Var{name: "w"}, b: Num{v: 1}}, []) == "(w - 1) = error: unbound w"
+
+test hidden_eval_neg = catch eval(Mul{a: Sub{a: Num{v: 2}, b: Num{v: 5}}, b: Num{v: 3}}, []) == -9
+  | _ => false
+
+test hidden_eval_divzero = catch eval(Div{a: Num{v: 5}, b: Num{v: 0}}, []) == 0
+  | DivByZero => true
+  | _ => false
+
+test hidden_simp_sub = show(simplify(Sub{a: Var{name: "y"}, b: Num{v: 0}})) == "y"
+
+test hidden_simp_div = show(simplify(Div{a: Add{a: Num{v: 0}, b: Var{name: "y"}}, b: Num{v: 1}})) == "y"
+
+test hidden_simp_inner = show(simplify(Sub{a: Mul{a: Num{v: 1}, b: Var{name: "a"}}, b: Var{name: "b"}})) == "(a - b)"
+
+test hidden_simp_div_inner = show(simplify(Div{a: Var{name: "a"}, b: Add{a: Num{v: 2}, b: Num{v: 0}}})) == "a / 2"
+
+test hidden_vars = var_names(Add{a: Var{name: "x"}, b: Mul{a: Var{name: "y"}, b: Div{a: Var{name: "x"}, b: Var{name: "z"}}}}) == ["x", "y", "z"]
+
+test hidden_vars_none = var_names(Sub{a: Num{v: 3}, b: Num{v: 1}}) == []
+
+test hidden_old = run(Add{a: Num{v: 2}, b: Mul{a: Var{name: "x"}, b: Num{v: 4}}}, [("x", 3)]) == "(2 + x * 4) = 14"

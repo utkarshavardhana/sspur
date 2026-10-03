@@ -18,6 +18,9 @@ pub enum NVal {
     New(String, Box<NVal>),
     Wrap(String, Box<NVal>),
     Guess(Box<NVal>, f64),
+    Set(Vec<NVal>),
+    Heap(Vec<NVal>),
+    Res(Result<Box<NVal>, Box<NVal>>),
 }
 
 #[derive(Clone, Default)]
@@ -87,6 +90,22 @@ impl Layouts {
                     self.encode(x, &a[0], out)?;
                 }
             }
+            (NVal::Set(xs) | NVal::Heap(xs), Type::Con(n, a)) if n == "#Set" || n == "#Heap" => {
+                out.push(xs.len() as i64);
+                for x in xs {
+                    self.encode(x, &a[0], out)?;
+                }
+            }
+            (NVal::Res(r), Type::Con(n, a)) if n == "Res" => match r {
+                Ok(x) => {
+                    out.push(1);
+                    self.encode(x, &a[0], out)?;
+                }
+                Err(e) => {
+                    out.push(0);
+                    self.encode(e, &a[1], out)?;
+                }
+            },
             (NVal::Map(kv), Type::Con(n, a)) if n == "Map" => {
                 out.push(kv.len() as i64);
                 for (k, v) in kv {
@@ -133,7 +152,22 @@ impl Layouts {
                 "Int" => NVal::Int(next()?),
                 "Bool" => NVal::Bool(next()? != 0),
                 "F64" => NVal::Float(f64::from_bits(next()? as u64)),
-                "Str" => {
+                "#Set" | "#Heap" => {
+                    let len = next()?;
+                    let mut xs = Vec::with_capacity(len.clamp(0, 1 << 16) as usize);
+                    for _ in 0..len {
+                        xs.push(self.decode(words, pos, &a[0])?);
+                    }
+                    if n == "#Set" { NVal::Set(xs) } else { NVal::Heap(xs) }
+                }
+                "Res" => {
+                    if next()? == 1 {
+                        NVal::Res(Ok(Box::new(self.decode(words, pos, &a[0])?)))
+                    } else {
+                        NVal::Res(Err(Box::new(self.decode(words, pos, &a[1])?)))
+                    }
+                }
+                "Str" | "#StrBuf" => {
                     let len = next()? as usize;
                     let mut bytes = Vec::with_capacity(len);
                     for _ in 0..len.div_ceil(8) {
@@ -263,6 +297,28 @@ impl fmt::Display for NVal {
                 }
                 write!(f, "}}")
             }
+            NVal::Set(xs) => {
+                write!(f, "{{")?;
+                for (i, x) in xs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{x}")?;
+                }
+                write!(f, "}}")
+            }
+            NVal::Heap(xs) => {
+                write!(f, "heap[")?;
+                for (i, x) in xs.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{x}")?;
+                }
+                write!(f, "]")
+            }
+            NVal::Res(Ok(x)) => write!(f, "ok({x})"),
+            NVal::Res(Err(x)) => write!(f, "err({x})"),
             NVal::New(n, v) => write!(f, "{n}({v})"),
             NVal::Wrap(k, _) if k == "Secret" => write!(f, "<secret>"),
             NVal::Wrap(k, _) if k == "Pii" => write!(f, "<redacted>"),

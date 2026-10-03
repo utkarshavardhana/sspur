@@ -65,9 +65,9 @@ impl Type {
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Type::Con(n, a) if a.is_empty() => write!(f, "{n}"),
+            Type::Con(n, a) if a.is_empty() => write!(f, "{}", n.trim_start_matches('#')),
             Type::Con(n, a) => {
-                write!(f, "{n}[")?;
+                write!(f, "{}[", n.trim_start_matches('#'))?;
                 for (i, t) in a.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;

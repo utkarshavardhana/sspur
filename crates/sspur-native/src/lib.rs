@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 pub mod bare;
 pub mod cgen;
+pub mod json;
 pub mod nval;
 
 use nval::{scalar_display, Layouts, NVal};
@@ -137,6 +138,16 @@ extern "C" fn host_log(p: *const u8, len: i64) {
             let _ = writeln!(std::io::stdout(), "{s}");
         }
     }
+}
+
+static PROGRAM_ARGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+pub fn set_program_args(args: Vec<String>) {
+    *PROGRAM_ARGS.lock().unwrap() = args;
+}
+
+pub fn program_args() -> Vec<String> {
+    PROGRAM_ARGS.lock().unwrap().clone()
 }
 
 pub fn set_log_hook(hook: Option<LogHook>) {

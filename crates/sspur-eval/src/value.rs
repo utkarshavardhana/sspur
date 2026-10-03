@@ -1,7 +1,7 @@
 use sspur_syntax::{Expr, FnDef};
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
@@ -21,6 +21,8 @@ pub enum Value {
     Opt(Option<Rc<Value>>),
     Res(Result<Rc<Value>, Rc<Value>>),
     Map(Rc<BTreeMap<Value, Value>>),
+    Set(Rc<BTreeSet<Value>>),
+    Heap(Rc<Vec<Value>>),
     New(Rc<str>, Rc<Value>),
     Closure(Rc<Closure>),
     Func(Rc<FnDef>),
@@ -102,6 +104,8 @@ impl Value {
             Value::Ptr(..) => 18,
             Value::Atomic(_) => 16,
             Value::Chan(_) => 17,
+            Value::Set(_) => 19,
+            Value::Heap(_) => 20,
         }
     }
 
@@ -151,6 +155,8 @@ impl Ord for Value {
                 (Err(_), Ok(_)) => Ordering::Greater,
             },
             (Map(a), Map(b)) => a.iter().cmp(b.iter()),
+            (Set(a), Set(b)) => a.iter().cmp(b.iter()),
+            (Heap(a), Heap(b)) => a.iter().cmp(b.iter()),
             (New(n1, a), New(n2, b)) | (Wrap(n1, a), Wrap(n2, b)) => n1.cmp(n2).then_with(|| a.cmp(b)),
             (Guess(a, c1), Guess(b, c2)) => a.cmp(b).then_with(|| c1.total_cmp(c2)),
             (Ptr(a, x), Ptr(b, y)) => a.cmp(b).then_with(|| x.cmp(y)),
@@ -244,6 +250,17 @@ impl fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
+            Value::Set(s) => {
+                write!(f, "{{")?;
+                for (i, v) in s.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", Quoted(v))?;
+                }
+                write!(f, "}}")
+            }
+            Value::Heap(xs) => write_seq(f, "heap[", "]", xs),
             Value::New(n, v) => write!(f, "{n}({})", Quoted(v)),
             Value::Wrap(k, _) if &**k == "Secret" => write!(f, "<secret>"),
             Value::Wrap(k, _) if &**k == "Pii" => write!(f, "<redacted>"),

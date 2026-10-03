@@ -31,7 +31,8 @@ fn run_suite() {
         let res = Resolution { user_methods: Some(&out.user_methods), record_types: Some(&out.record_types) };
         assert_eq!(hash_module_with(&module, &res), hash_module_with(&module, &res));
 
-        let interp = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone());
+        let mut interp = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone());
+        interp.set_check(&out);
         let results = interp.run_tests();
         assert!(!results.is_empty(), "{} has no tests", path.display());
         for (name, r) in &results {
@@ -78,8 +79,11 @@ fn native_release_matches_interpreter_on_every_suite_program() {
             let src = std::fs::read_to_string(&path).unwrap();
             let module = parse(&src).unwrap();
             let out = check(&module);
-            let interp = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone()).run_tests();
+            let mut first = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone());
+            first.set_check(&out);
+            let interp = first.run_tests();
             let mut native = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone());
+            native.set_check(&out);
             let compiled = sspur_native::cgen::compile_release(&module, &out, "-O2").unwrap_or_else(|e| panic!("{}: {e}", path.display()));
             let effectful = module.defs.iter().any(|d| matches!(d, sspur_syntax::Def::Effect(_))) || src.contains("yield");
             assert!(compiled.skipped.is_empty() || effectful, "{}: not native: {:?}", path.display(), compiled.skipped);

@@ -3,6 +3,7 @@ mod builtins;
 mod ffi;
 pub mod fuzz;
 mod sched;
+mod stdlib;
 pub mod value;
 
 use sspur_syntax::*;
@@ -100,6 +101,8 @@ pub struct Interp {
     inplace: HashSet<(u32, u32)>,
     heap: RefCell<Vec<Option<Vec<Value>>>>,
     sched: sched::Sched,
+    pub json_types: HashMap<(u32, u32), sspur_check::Type>,
+    pub layouts: sspur_native::nval::Layouts,
 }
 
 const MAX_DEPTH: u32 = 20_000;
@@ -145,6 +148,8 @@ impl Interp {
             inplace: HashSet::new(),
             heap: RefCell::new(vec![None]),
             sched: Default::default(),
+            json_types: HashMap::new(),
+            layouts: Default::default(),
         };
         for d in &m.defs {
             match d {
@@ -368,6 +373,11 @@ impl Interp {
             }
             _ => trap(format!("no method {name} on Ptr")),
         }
+    }
+
+    pub fn set_check(&mut self, c: &sspur_check::CheckOutput) {
+        self.json_types = c.json_types.clone();
+        self.layouts = sspur_native::nval::Layouts::from_check(c);
     }
 
     pub fn set_native(&mut self, c: sspur_native::Compiled) {
@@ -780,6 +790,7 @@ impl Interp {
                 }
                 self.method(e.span, f, v, vec![])
             }
+            ExprKind::Method { recv, name, args, .. } if matches!(&recv.kind, ExprKind::Name(n) if n == "json") && env.cell("json").is_none() && !self.fns.contains_key("json") => self.json_op(e.span, name, args, env),
             ExprKind::Method { name, targs, .. } if name == "mmio" && !targs.is_empty() => trap("mmio needs a bare target: build with 'sspur build --target riscv64-qemu|aarch64-qemu'"),
             ExprKind::Method { recv, name, args, .. } => {
                 let r = self.eval(recv, env)?;
@@ -1201,6 +1212,12 @@ pub fn to_nval(v: &Value) -> Option<sspur_native::nval::NVal> {
         Value::List(xs) => NVal::List(xs.iter().map(to_nval).collect::<Option<_>>()?),
         Value::Map(m) => NVal::Map(m.iter().map(|(k, v)| Some((to_nval(k)?, to_nval(v)?))).collect::<Option<_>>()?),
         Value::Tuple(xs) => NVal::Tuple(xs.iter().map(to_nval).collect::<Option<_>>()?),
+        Value::Set(s) => NVal::Set(s.iter().map(to_nval).collect::<Option<_>>()?),
+        Value::Heap(xs) => NVal::Heap(xs.iter().map(to_nval).collect::<Option<_>>()?),
+        Value::Res(r) => NVal::Res(match r {
+            Ok(x) => Ok(Box::new(to_nval(x)?)),
+            Err(e) => Err(Box::new(to_nval(e)?)),
+        }),
         Value::Opt(o) => NVal::Opt(match o {
             Some(x) => Some(Box::new(to_nval(x)?)),
             None => None,
@@ -1227,6 +1244,16 @@ pub fn from_nval(v: sspur_native::nval::NVal) -> Value {
         NVal::Map(kv) => Value::Map(Rc::new(kv.into_iter().map(|(k, v)| (from_nval(k), from_nval(v))).collect())),
         NVal::Tuple(xs) => Value::Tuple(Rc::new(xs.into_iter().map(from_nval).collect())),
         NVal::Opt(o) => Value::Opt(o.map(|x| Rc::new(from_nval(*x)))),
+        NVal::Set(xs) => Value::Set(Rc::new(xs.into_iter().map(from_nval).collect())),
+        NVal::Heap(xs) => {
+            let mut v: Vec<Value> = xs.into_iter().map(from_nval).collect();
+            v.sort();
+            Value::Heap(Rc::new(v))
+        }
+        NVal::Res(r) => Value::Res(match r {
+            Ok(x) => Ok(Rc::new(from_nval(*x))),
+            Err(e) => Err(Rc::new(from_nval(*e))),
+        }),
     }
 }
 

@@ -6,7 +6,7 @@ use std::rc::Rc;
 const GLOBALS: &[&str] = &["log", "some", "ok", "err", "empty_map", "min", "max", "secret", "pii", "untrusted", "guess", "atomic", "chan"];
 
 pub fn is_global(n: &str) -> bool {
-    GLOBALS.contains(&n)
+    GLOBALS.contains(&n) || sspur_check::STD_GLOBAL_NAMES.contains(&n)
 }
 
 fn int(v: &Value) -> R<i64> {
@@ -64,7 +64,7 @@ impl Interp {
                 if y > x { y } else { x }
             }
             _ if self.ops.contains(n) => return self.perform(n, a),
-            _ => return trap(format!("unknown builtin '{n}'")),
+            _ => return self.std_global(n, a),
         })
     }
 
@@ -85,6 +85,8 @@ impl Interp {
                 _ => trap(format!("no method '{name}' on Res")),
             },
             Value::Map(m) => map_method(name, &m, a),
+            Value::Set(st) => self.set_method(name, &st, a),
+            Value::Heap(h) => self.heap_method(name, &h, a),
             Value::Atomic(c) => Ok(match name {
                 "load" => Value::Int(c.v.get()),
                 "store" => {
@@ -139,14 +141,14 @@ impl Interp {
                 "bxor" => Ok(Value::Int(n ^ int(&a[0])?)),
                 "shl" => Ok(Value::Int(u32::try_from(int(&a[0])?).ok().filter(|k| *k < 64).map_or(0, |k| ((n as u64) << k) as i64))),
                 "shr" => Ok(Value::Int(u32::try_from(int(&a[0])?).ok().filter(|k| *k < 64).map_or(0, |k| ((n as u64) >> k) as i64))),
-                _ => trap(format!("no method '{name}' on Int")),
+                _ => crate::stdlib::std_int(name, n, a),
             },
             Value::Float(x) => match name {
                 "abs" => Ok(Value::Float(x.abs())),
                 "round" => Ok(Value::Int(x.round() as i64)),
                 "floor" => Ok(Value::Int(x.floor() as i64)),
                 "sqrt" => Ok(Value::Float(x.sqrt())),
-                _ => trap(format!("no method '{name}' on F64")),
+                _ => crate::stdlib::std_float(name, x, a),
             },
             v => trap(format!("no method '{name}' on {v}")),
         }
@@ -270,7 +272,7 @@ impl Interp {
                 let parts: Vec<String> = xs.iter().map(|x| x.to_string()).collect();
                 Value::str(&parts.join(sep))
             }
-            _ => return trap(format!("no method '{name}' on List")),
+            _ => return self.std_list(name, xs, a),
         })
     }
 
@@ -340,7 +342,7 @@ fn str_method(name: &str, x: &str, a: Vec<Value>) -> R {
         }
         "to_int" => x.trim().parse::<i64>().map_or(Value::Opt(None), |n| Value::some(Value::Int(n))),
         "is_alpha" => Value::Bool(!x.is_empty() && x.chars().all(char::is_alphabetic)),
-        _ => return trap(format!("no method '{name}' on Str")),
+        _ => return crate::stdlib::std_str(name, x, a),
     })
 }
 

@@ -254,6 +254,19 @@ impl Interp {
                 }
                 Value::Map(Rc::new(m))
             }
+            "Set" | "Heap" if !self.types.contains_key(name) => {
+                let mut xs = Vec::new();
+                for _ in 0..if deep { 0 } else { rng.below(6) } {
+                    xs.push(self.generate(&arg(0), rng, opts, depth + 1)?);
+                }
+                xs.sort();
+                if name == "Set" {
+                    Value::Set(Rc::new(xs.into_iter().collect()))
+                } else {
+                    Value::Heap(Rc::new(xs))
+                }
+            }
+            "StrBuf" if !self.types.contains_key(name) => return self.generate(&Ty::Named { name: "Str".into(), args: vec![], span: Span::default() }, rng, opts, depth),
             _ => return self.gen_user(name, args, rng, opts, depth),
         })
     }

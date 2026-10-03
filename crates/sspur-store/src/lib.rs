@@ -264,6 +264,7 @@ impl Store {
         if tx.gate.as_deref() == Some("tests") {
             let mut it = sspur_eval::Interp::new(&next.module, next.check.record_types.clone(), next.check.user_methods.clone(), next.check.gen_loops.clone());
             it.set_ownership(next.check.own.moves.clone(), next.check.own.inplace.clone());
+            it.set_check(&next.check);
             let failed: Vec<Diag> = it
                 .run_tests()
                 .into_iter()

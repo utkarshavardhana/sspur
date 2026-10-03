@@ -15,6 +15,7 @@ mod lower;
 mod own;
 mod prove;
 mod simd;
+mod stdlib;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
 type G<T = String> = Result<T, String>;
@@ -820,6 +821,11 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         .collect();
     let set_host: libloading::Symbol<unsafe extern "C" fn(*const crate::HostApi)> = unsafe { library.get(b"sspur_set_host") }.map_err(|e| e.to_string())?;
     unsafe { set_host(&crate::HOST) };
+    if let Ok(set_args) = unsafe { library.get::<unsafe extern "C" fn(*const [usize; 2], i64)>(b"sspur_set_args") } {
+        let args = crate::program_args();
+        let views: Vec<[usize; 2]> = args.iter().map(|a| [a.len(), a.as_ptr() as usize]).collect();
+        unsafe { set_args(views.as_ptr(), views.len() as i64) };
+    }
     Ok(assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines, free, plan.err_types))
 }
 
@@ -1076,7 +1082,7 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
 }
 
 fn precheck(f: &FnDef, bare: bool) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe") && !(bare && e.name == "mmio") && !f.tparams.iter().any(|p| p.name == e.name)) {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe" | "fs" | "io" | "time" | "env") && !(bare && e.name == "mmio") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())
@@ -1357,6 +1363,7 @@ impl<'a> Cx<'a> {
                 let parts: Vec<String> = ps.iter().map(|x| self.mangle(x)).collect::<G<_>>()?;
                 format!("F{}_{}_{}", ps.len(), parts.join("_"), self.mangle(r)?)
             }
+            Type::Con(n, a) if stdlib::STD_CONS.contains(&n.as_str()) => self.std_mangle(n, a)?,
             other => return Err(format!("uses type {other}, which is not native yet")),
         })
     }
@@ -1551,6 +1558,7 @@ impl<'a> Cx<'a> {
                 }
                 Ok(format!("{m}*"))
             }
+            Type::Con(n, _) if stdlib::STD_CONS.contains(&n.as_str()) => self.std_cty(t, &m),
             other => Err(format!("uses type {other}, which is not native yet")),
         }
     }
@@ -1651,6 +1659,7 @@ impl<'a> Cx<'a> {
                 }
                 body.push_str("default: return 0; }");
             }
+            _ if stdlib::is_std(t) => body = self.std_cmp_body(t)?,
             _ => return Err(format!("cannot compare {t} natively")),
         }
         writeln!(self.helpers, "static int {name}({c} a, {c} b) {{ {body} }}").unwrap();
@@ -1722,6 +1731,7 @@ impl<'a> Cx<'a> {
                 s.push_str("default: break; }");
                 s
             }
+            _ if stdlib::is_std(t) => self.std_enc_body(t)?,
             _ => return Err(format!("cannot encode {t}")),
         };
         writeln!(self.helpers_late, "static void {name}(Buf* b, {c} v) {{ {body} }}").unwrap();
@@ -1798,6 +1808,7 @@ impl<'a> Cx<'a> {
                 s.push_str("default: break; } return v;");
                 s
             }
+            _ if stdlib::is_std(t) => self.std_dec_body(t, &c)?,
             _ => return Err(format!("cannot decode {t}")),
         };
         writeln!(self.helpers_late, "static {c} {name}(const int64_t** p) {{ {body} }}").unwrap();
@@ -2397,6 +2408,9 @@ impl<'a> Cx<'a> {
                     && let Some(code) = self.conc_global(n, args, &t)? {
                         return Ok(code);
                     }
+                if let Some(code) = self.std_global(n, args, &t)? {
+                    return Ok(code);
+                }
                 match n.as_str() {
                     "empty_map" => Ok(format!("(({}){{0}})", self.cty(&t)?)),
                     "secret" | "pii" | "untrusted" => self.expr(&args[0]),
@@ -2767,6 +2781,7 @@ impl<'a> Cx<'a> {
                 s.push_str("default: break; }");
                 s
             }
+            _ if stdlib::is_std(t) => self.std_show_body(t)?,
             _ => return Err(format!("cannot display {t} natively")),
         };
         writeln!(self.helpers, "static void {name}(SB* b, {c} v, int q) {{ {body} }}").unwrap();
@@ -2925,7 +2940,7 @@ impl<'a> Cx<'a> {
                 };
                 format!("({{ OptS_ o_ = {call}; ({oc}){{o_.some, o_.v}}; }})")
             }
-            _ => return Err(format!("uses Str.{name}")),
+            _ => return self.std_str(r, name, args, t),
         })
     }
 
@@ -3081,6 +3096,7 @@ impl<'a> Cx<'a> {
                 }
                 body.push_str("default: break; }");
             }
+            _ if stdlib::is_std(t) => body.push_str(&self.std_hash_body(t)?),
             _ => return Err(format!("cannot hash {t}")),
         }
         body.push_str(" return h;");
@@ -3199,6 +3215,9 @@ impl<'a> Cx<'a> {
     }
 
     fn method(&mut self, e: &Expr, recv: &Expr, name: &str, args: &[Expr], t: &Type) -> G {
+        if matches!(&recv.kind, ExprKind::Name(n) if n == "json") && self.lookup("json").is_none() && !self.check.fn_types.contains_key("json") {
+            return self.json_call(e, name, args, t);
+        }
         if matches!(&recv.kind, ExprKind::Name(n) if n == "db") && self.lookup("db").is_none() && sspur_check::db_op(name).is_some() && !args.is_empty() {
             return self.db_call(name, args, t);
         }
@@ -3243,6 +3262,9 @@ impl<'a> Cx<'a> {
         }
         if matches!(&rt, Type::Con(n, _) if n == "Map") {
             return self.map_method(&r, &rt, name, args, t);
+        }
+        if stdlib::is_std(&rt) {
+            return self.std_method(&r, &rt, name, args, t);
         }
         if let Type::Con(kind, a) = &rt {
             if matches!(kind.as_str(), "Secret" | "Pii" | "Untrusted") {
@@ -3349,7 +3371,7 @@ impl<'a> Cx<'a> {
                     let op = if name == "shl" { "<<" } else { ">>" };
                     format!("({{ uint64_t x_ = (uint64_t)({r}); int64_t k_ = {}; (k_ < 0 || k_ > 63) ? 0LL : (int64_t)(x_ {op} k_); }})", self.expr(&args[0])?)
                 }
-                _ => return Err(format!("uses Int.{name}")),
+                _ => return self.std_int(&r, name, args, t),
             });
         }
         if is(&rt, "F64") {
@@ -3358,7 +3380,7 @@ impl<'a> Cx<'a> {
                 "round" => format!("f2i(round({r}))"),
                 "floor" => format!("f2i(floor({r}))"),
                 "sqrt" => format!("sqrt({r})"),
-                _ => return Err(format!("uses F64.{name}")),
+                _ => return self.std_float(&r, name, args),
             });
         }
         Err(format!("uses method '{name}' on {rt}"))
@@ -3524,7 +3546,7 @@ impl<'a> Cx<'a> {
                 let sep = self.expr(&args[0])?;
                 wrap(format!("str_join({l}.data, {l}.len, {sep});"))
             }
-            _ => return Err(format!("uses List.{name}")),
+            _ => return self.std_list(r, lt, et, name, args, t),
         })
     }
 
@@ -3542,6 +3564,9 @@ impl<'a> Cx<'a> {
                 }
             }
             Pat::Ctor { name, args } => {
+                if matches!(t, Type::Con(n, _) if n == "Res") {
+                    return self.res_pattern(name, args, v, t, conds, binds);
+                }
                 if let Some(et) = elem(t, "Opt") {
                     match (name.as_str(), args) {
                         ("some", CtorArgs::Positional(ps)) => {

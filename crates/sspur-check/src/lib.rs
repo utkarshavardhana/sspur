@@ -2,6 +2,7 @@ mod bare;
 mod builtins;
 pub mod own;
 mod deploy;
+mod json;
 pub mod types;
 
 use serde::Serialize;
@@ -10,7 +11,7 @@ use sspur_syntax::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 pub use deploy::{db_op, HTTP_METHODS};
 pub use types::{Row, Type};
-pub use builtins::BARE_NAMES;
+pub use builtins::{BARE_NAMES, STD_GLOBAL_NAMES};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Diag {
@@ -48,6 +49,7 @@ pub struct CheckOutput {
     pub clause_effects: HashMap<(u32, u32), BTreeSet<String>>,
     pub own: own::OwnInfo,
     pub stores: BTreeMap<String, (Type, Type)>,
+    pub json_types: HashMap<(u32, u32), Type>,
 }
 
 pub type ExprKey = (u32, u32, u8);
@@ -173,6 +175,8 @@ struct Checker {
     cur_rparams: Vec<String>,
     chan_checks: Vec<(Type, Span)>,
     stores: BTreeMap<String, (Type, Type)>,
+    json_sites: Vec<((u32, u32), Type, Span, bool)>,
+    refined_names: HashSet<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -260,6 +264,8 @@ pub fn check(m: &Module) -> CheckOutput {
         cur_rparams: vec![],
         chan_checks: vec![],
         stores: BTreeMap::new(),
+        json_sites: vec![],
+        refined_names: HashSet::new(),
     };
     c.load_builtins();
     if c.sys {
@@ -283,6 +289,7 @@ pub fn check(m: &Module) -> CheckOutput {
         }
     }
     c.collect(m);
+    c.collect_refined(m);
     let mut sigs = BTreeMap::new();
     for d in &m.defs {
         match d {
@@ -319,6 +326,7 @@ pub fn check(m: &Module) -> CheckOutput {
             _ => {}
         }
     }
+    let json_types = c.finish_json(m);
     let own = own::analyze(m, &c.record_types, &c.user_methods, &c.expr_types);
     for d in own.diags {
         c.diags.push(d);
@@ -355,7 +363,7 @@ pub fn check(m: &Module) -> CheckOutput {
         let found = bare::check(m, &tables);
         c.diags.extend(found);
     }
-    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info, stores: c.stores }
+    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info, stores: c.stores, json_types }
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -413,6 +421,14 @@ impl Checker {
             self.globals.insert(name, s);
         }
         for (recv, src) in builtins::METHODS {
+            let (name, s) = self.builtin_scheme(src);
+            self.methods.insert((recv.to_string(), name), s);
+        }
+        for src in builtins::STD_GLOBALS {
+            let (name, s) = self.builtin_scheme(src);
+            self.globals.insert(name, s);
+        }
+        for (recv, src) in builtins::STD_METHODS {
             let (name, s) = self.builtin_scheme(src);
             self.methods.insert((recv.to_string(), name), s);
         }
@@ -536,6 +552,13 @@ impl Checker {
                         return self.fresh();
                     }
                     return Type::Con(name.clone(), conv);
+                }
+                if let Some((_, internal, arity)) = builtins::STD_TYPES.iter().find(|(n, _, _)| n == name).filter(|_| !self.types.contains_key(name)) {
+                    if *arity != conv.len() {
+                        self.err("E_TYPE_ARITY", *span, format!("{name} takes {arity} type argument(s), got {}", conv.len()));
+                        return self.fresh();
+                    }
+                    return Type::Con(internal.to_string(), conv);
                 }
                 if let Some((_, arity)) = BUILTIN_TYPES.iter().find(|(n, _)| n == name) {
                     if *arity != conv.len() {
@@ -1307,6 +1330,7 @@ impl Checker {
                 }
                 self.method(x, xt, f, &[], e.span)
             }
+            ExprKind::Method { recv, name, targs, args } if self.is_json_recv(recv) => self.infer_json(name, targs, args, e.span),
             ExprKind::Method { recv, name, args, .. } if self.is_db_recv(recv) => self.infer_db(name, args, e.span),
             ExprKind::Method { recv, name, targs, args } if name == "mmio" && targs.len() == 1 => self.infer_mmio(recv, &targs[0], args, e.span),
             ExprKind::Method { recv, name, targs, args } => {

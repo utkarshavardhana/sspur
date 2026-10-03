@@ -62,4 +62,4 @@ Stress mode is `SSPUR_GC_STRESS=<bytes>`, which collects every N bytes. The suit
 |---|---|---|---|
 | Interpreter | `--interp` | everything | reference semantics; also powers `fuzz` with step budgets |
 | Cranelift JIT | `--native` | Int/Bool functions | about 1.66x C++, compiles in about 10ms |
-| Native (default) | none | the whole language | 0.8x to 1.1x C++ |
+| Native (default) | none | the whole language | 0.16x to 0.88x C++ (faster on every benchmark) |

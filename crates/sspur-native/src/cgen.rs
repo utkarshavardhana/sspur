@@ -619,8 +619,9 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
         .map(|(owner, fs)| (owner, fs.into_iter().map(|f| (f.name.clone(), f.refine.clone(), match &f.ty { Ty::Named { name, .. } => Some(name.clone()), _ => None })).collect()))
         .collect();
     let generic_defs: HashMap<String, FnDef> = defs.iter().filter(|f| !f.tparams.is_empty()).map(|f| (f.name.clone(), (*f).clone())).collect();
+    let smt = sspur_smt::Oracle::new(m, check);
     loop {
-        let mut cx = Cx::new(check, &ok, &alias_refines, &field_refines);
+        let mut cx = Cx::new(check, &ok, &alias_refines, &field_refines, &smt);
         cx.generics = generic_defs.iter().filter(|(n, _)| ok.contains(*n)).map(|(n, f)| (n.clone(), f.clone())).collect();
         cx.fn_index = index.clone();
         cx.all_fns = defs.iter().map(|f| (f.name.clone(), (*f).clone())).collect();
@@ -696,6 +697,14 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
             skipped.insert(n, e);
         }
     }
+}
+
+fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
+    let safe = match op {
+        BinOp::Div | BinOp::Rem => (rb.0 > 0 || rb.1 < 0) && (rb.0 > -1 || rb.1 < -1 || ra.0 > FULL.0),
+        _ => true,
+    };
+    safe && raw_op(op, ra, rb).is_some_and(fits)
 }
 
 fn precheck(f: &FnDef) -> G<()> {
@@ -784,6 +793,7 @@ struct Cx<'a> {
     eligible: &'a HashSet<String>,
     alias_refines: &'a HashMap<String, Expr>,
     field_refines: &'a FieldRefines,
+    smt: &'a sspur_smt::Oracle,
     layouts: Layouts,
     fwd: String,
     defs: String,
@@ -831,12 +841,13 @@ struct Cx<'a> {
 }
 
 impl<'a> Cx<'a> {
-    fn new(check: &'a CheckOutput, eligible: &'a HashSet<String>, alias_refines: &'a HashMap<String, Expr>, field_refines: &'a FieldRefines) -> Self {
+    fn new(check: &'a CheckOutput, eligible: &'a HashSet<String>, alias_refines: &'a HashMap<String, Expr>, field_refines: &'a FieldRefines, smt: &'a sspur_smt::Oracle) -> Self {
         Cx {
             check,
             eligible,
             alias_refines,
             field_refines,
+            smt,
             layouts: Layouts::from_check(check),
             fwd: String::new(),
             defs: String::new(),
@@ -1586,13 +1597,16 @@ impl<'a> Cx<'a> {
             _ => self.expr(&f.body)?,
         };
         writeln!(s, "  {}{rc} ret_;\n  ret_ = {body};\n  goto done_;\ndone_: ;", self.fn_decls).unwrap();
-        if let Some(rt) = &f.ret {
+        if let Some(rt) = f.ret.as_ref().filter(|_| env.is_some() || !self.smt.ret_proved(&f.name)) {
             let c = self.alias_check(rt, &format!("result of {}", f.name), "ret_", ret)?;
             writeln!(s, "  {c}").unwrap();
         }
         if !f.posts.is_empty() {
             self.scopes.push(HashMap::from([("r".to_string(), ("ret_".to_string(), ret.clone()))]));
             for (i, post) in f.posts.iter().enumerate() {
+                if env.is_none() && self.smt.post_proved(&f.name, i) {
+                    continue;
+                }
                 let c = self.expr(post)?;
                 let (bits, pre) = self.value_bits("ret_", ret)?;
                 writeln!(s, "  if (UNLIKELY(!({c}))) {{ {pre}TRAPV({T_POST}, {i}, {bits}); }}").unwrap();
@@ -1642,7 +1656,7 @@ impl<'a> Cx<'a> {
         self.all_fns.get(name)
     }
 
-    fn call_user(&mut self, name: &str, args: Vec<(String, Type)>, ret: Option<&Type>, src: Option<&[Expr]>) -> G {
+    fn call_user(&mut self, name: &str, args: Vec<(String, Type)>, ret: Option<&Type>, src: Option<(&Expr, &[Expr])>) -> G {
         let tys: Vec<Type> = args.iter().map(|(_, t)| t.clone()).collect();
         let (cname, rt) = self.resolve_callee(name, &tys, ret)?;
         let suffix = self.call_suffix.take().or_else(|| (self.own_fn.as_deref() == Some(name)).then(|| "__own".to_string()));
@@ -1656,7 +1670,7 @@ impl<'a> Cx<'a> {
             }
             None => cname,
         };
-        let cname = if src.is_some_and(|a| self.callee_safe(name, a)) { format!("{cname}__np") } else { cname };
+        let cname = if src.is_some_and(|(e, a)| self.callee_safe(name, a, e)) { format!("{cname}__np") } else { cname };
         let rr = self.rr(&rt)?;
         let mut s = String::from("({ ");
         let mut names = Vec::new();
@@ -1813,11 +1827,7 @@ impl<'a> Cx<'a> {
     }
 
     fn checked(&mut self, op: BinOp, x: &str, y: &str, ra: Iv, rb: Iv) -> String {
-        let safe = match op {
-            BinOp::Div | BinOp::Rem => (rb.0 > 0 || rb.1 < 0) && (rb.0 > -1 || rb.1 < -1 || ra.0 > FULL.0),
-            _ => true,
-        };
-        if safe && raw_op(op, ra, rb).is_some_and(fits) {
+        if iv_safe(op, ra, rb) {
             return format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; a_ {} b_; }})", op.symbol());
         }
         match op {
@@ -1928,7 +1938,7 @@ impl<'a> Cx<'a> {
                         if self.tail_spans.contains(&(e.span.start, e.span.end))
                             && self.catch_stack.is_empty()
                             && self.lookup(n).is_none()
-                            && (!self.tail_split || self.callee_safe(n, args)) {
+                            && (!self.tail_split || self.callee_safe(n, args, e)) {
                                 let z = self.zero(&t)?;
                                 let mut s = String::from("({ ");
                                 for (i, (v, _)) in vals.iter().enumerate() {
@@ -1940,13 +1950,13 @@ impl<'a> Cx<'a> {
                                 write!(s, "goto tail_; {z}; }})").unwrap();
                                 return Ok(s);
                             }
-                        self.call_user(n, vals, Some(&t), Some(args))
+                        self.call_user(n, vals, Some(&t), Some((e, args)))
                     }
                 }
             }
             ExprKind::Index(a, i) => {
                 let (av, iv) = (self.expr(a)?, self.expr(i)?);
-                if self.index_safe(a, i) {
+                if self.index_safe(a, i) || self.smt.proves(e, "index") {
                     return Ok(format!("(({av}).data[{iv}])"));
                 }
                 Ok(format!("({{ __auto_type l_ = {av}; int64_t i_ = {iv}; if (UNLIKELY(i_ < 0 || i_ >= l_.len)) TRAPV({T_INDEX}, l_.len, i_); l_.data[i_]; }})"))
@@ -1969,6 +1979,9 @@ impl<'a> Cx<'a> {
                 }
                 if is(&at, "Int") {
                     let (ra, rb) = (self.range(a), self.range(b));
+                    if *op != BinOp::Pow && !iv_safe(*op, ra, rb) && self.smt.proves(e, "arith") {
+                        return Ok(format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; a_ {} b_; }})", op.symbol()));
+                    }
                     return Ok(self.checked(*op, &x, &y, ra, rb));
                 }
                 if is(&at, "F64") {
@@ -1990,7 +2003,7 @@ impl<'a> Cx<'a> {
             }
             ExprKind::Unary(UnOp::Neg, x) => {
                 let v = self.expr(x)?;
-                if is(&t, "F64") || self.range(x).0 > FULL.0 {
+                if is(&t, "F64") || self.range(x).0 > FULL.0 || self.smt.proves(e, "neg") {
                     Ok(format!("(-({v}))"))
                 } else {
                     Ok(format!("({{ int64_t t_ = {v}; if (UNLIKELY(t_ == INT64_MIN)) TRAPV({T_OVERFLOW}, 0, 0); -t_; }})"))
@@ -2033,7 +2046,7 @@ impl<'a> Cx<'a> {
                     let rv = self.fresh("rv");
                     let inits: Vec<String> = decl.iter().map(|(f, _)| format!(".{f} = {}", temps[f])).collect();
                     write!(s, "{rc} {rv} = ({rc}){{{}}}; ", inits.join(", ")).unwrap();
-                    let proven = self.proven_fields(&owner, fields);
+                    let proven = self.proven_fields(e, &owner, fields);
                     s.push_str(&self.record_checks_except(&owner, &rv, ".", &decl, &proven)?);
                     write!(s, "{rv}; }})").unwrap();
                     Ok(s)
@@ -2619,7 +2632,7 @@ impl<'a> Cx<'a> {
                 vals.push((self.expr(a)?, self.ty(a)?));
             }
             let src: Vec<Expr> = std::iter::once(recv.clone()).chain(args.iter().cloned()).collect();
-            return self.call_user(name, vals, Some(t), Some(&src));
+            return self.call_user(name, vals, Some(t), Some((e, &src)));
         }
         if let Some(r) = self.fused(e, name, recv, args, t) {
             return r;

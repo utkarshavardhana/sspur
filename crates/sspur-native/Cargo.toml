@@ -13,3 +13,4 @@ cranelift-native = "0.136.2"
 libloading = "0.9.0"
 sspur-syntax.workspace = true
 sspur-check.workspace = true
+sspur-smt.workspace = true

@@ -503,6 +503,7 @@ dependencies = [
  "sspur-eval",
  "sspur-hash",
  "sspur-native",
+ "sspur-smt",
  "sspur-store",
  "sspur-syntax",
 ]
@@ -534,6 +535,16 @@ dependencies = [
  "cranelift-module",
  "cranelift-native",
  "libloading",
+ "sspur-check",
+ "sspur-smt",
+ "sspur-syntax",
+]
+
+[[package]]
+name = "sspur-smt"
+version = "0.1.0"
+dependencies = [
+ "blake3",
  "sspur-check",
  "sspur-syntax",
 ]

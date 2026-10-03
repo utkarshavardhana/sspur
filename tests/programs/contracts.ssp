@@ -1,0 +1,74 @@
+type Percent = Int where _ >= 0 and _ <= 100
+type Range = {lo: Int where _ >= 0, hi: Int where _ >= 0}
+
+fn clamp(x: Int, lo: Int, hi: Int) -> Int
+  pre lo <= hi
+  post r >= lo and r <= hi
+= if x < lo then lo else if x > hi then hi else x
+
+fn percent(x: Int) -> Percent
+= clamp(x, 0, 100)
+
+fn scale(p: Percent, total: Int where _ >= 0 and _ <= 1000000) -> Int
+  post r >= 0 and r <= total
+= p * total / 100
+
+fn width(lo: Int, hi: Int) -> Int
+  pre lo >= 0 and lo <= hi
+  post r >= 0 and r == hi - lo
+= hi - lo
+
+fn midpoint(lo: Int, hi: Int) -> Int
+  pre lo >= 0 and lo <= hi
+  post r >= lo and r <= hi
+= lo + width(lo, hi) / 2
+
+fn widen(r: Range, by: Int where _ >= 0 and _ <= 1000) -> Range
+  pre r.lo <= r.hi and r.hi <= 1000000
+  post r.hi - r.lo >= 0
+= {lo: max(r.lo - by, 0), hi: r.hi + by}
+
+fn search(xs: List[Int], t: Int, lo: Int, hi: Int) -> Int
+  pre lo >= 0 and lo <= hi and hi <= xs.len
+  post r >= 0 - 1 and r < xs.len
+= if lo >= hi then 0 - 1 else do
+  m = midpoint(lo, hi - 1)
+  if xs[m] == t then m else if xs[m] < t then search(xs, t, m + 1, hi) else search(xs, t, lo, m)
+
+fn find(xs: List[Int], t: Int) -> Int
+= search(xs, t, 0, xs.len)
+
+fn safe_div(a: Int, b: Int) -> Int
+  post b == 0 or b == 0 - 1 or r * b + a % b == a
+= if b == 0 or b == 0 - 1 then 0 else a / b
+
+fn sign_gap(a: Int, b: Int) -> Int
+  pre a <= b
+  post r >= 0
+= if a >= 0 then b - a else if b <= 0 then b - a else b + (0 - a)
+
+fn mean2(a: Int, b: Int) -> Int
+  pre a >= 0 and b >= 0
+  post r >= a
+= a / 2 + b / 2
+
+fn total_len(xs: List[Str]) -> Int
+  post r >= 0
+= xs.map(_.len).sum
+
+fn main() -> Unit ! log
+= do
+  log("{percent(250)} {scale(40, 250)} {midpoint(10, 20)} {find([1, 3, 5, 7, 9], 7)}")
+  log("{widen({lo: 3, hi: 10}, 5).lo} {safe_div(17, 5)} {sign_gap(3, 9)}")
+
+test clamp_high = percent(250) == 100
+test clamp_low = percent(0 - 3) == 0
+test scale_part = scale(40, 250) == 100
+test mid = midpoint(10, 20) == 15
+test found = find([1, 3, 5, 7, 9], 7) == 3
+test missing = find([1, 3, 5, 7, 9], 4) == 0 - 1
+test widened = widen({lo: 3, hi: 10}, 5) == {lo: 0, hi: 15}
+test division = safe_div(17, 5) == 3 and safe_div(4, 0) == 0
+test gap = sign_gap(0 - 4, 9) == 13
+test mean_ok = mean2(6, 6) == 6
+test lengths = total_len(["ab", "cde"]) == 5

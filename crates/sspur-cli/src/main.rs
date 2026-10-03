@@ -1,4 +1,5 @@
 mod mcp;
+mod verify;
 
 use serde_json::{json, Value as Json};
 use sspur_check::Diag;
@@ -17,7 +18,8 @@ const USAGE: &str = "usage:
   sspur apply [tx.json|-]               apply a transaction of ops
   sspur q <query> [target] [--budget N] query the codebase (list sig body callers callees effects find pack why impact holes diag log)
   sspur log | export | spec | mcp
-  sspur check|run|test|fuzz|hash|fmt|native [file.ssp] [--json] [--cases N] [--seed N] [--edge] [--write] [--full]
+  sspur check|run|test|fuzz|verify|hash|fmt|native [file.ssp] [--json] [--cases N] [--seed N] [--edge] [--write] [--full]
+  verify proves pre/post/where clauses with z3 and reports proved, counterexample, or unknown per clause
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
   --O3 raises the optimization level; fuzz --differential compares native against the interpreter";
 
@@ -115,7 +117,7 @@ fn real_main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "mcp" => mcp::serve(),
-        "check" | "run" | "test" | "fuzz" | "hash" | "fmt" | "native" => program_cmd(&cmd, &args),
+        "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" => program_cmd(&cmd, &args),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -223,6 +225,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        "verify" => verify::verify(&loaded, &label, json),
         "hash" => {
             let res = Resolution { user_methods: Some(&loaded.check.user_methods), record_types: Some(&loaded.check.record_types) };
             for (name, h) in hash_module_with(&loaded.module, &res) {

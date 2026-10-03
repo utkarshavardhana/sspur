@@ -87,3 +87,22 @@ fn native_release_matches_interpreter_on_every_suite_program() {
         }
     });
 }
+
+#[test]
+fn verify_reports_proofs_counterexamples_and_unknowns() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/contracts.ssp");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sspur")).arg("verify").arg(&path).arg("--json").output().unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let status = |f: &str, prefix: &str| v["clauses"].as_array().unwrap().iter().find(|c| c["fn"] == f && c["clause"].as_str().unwrap().starts_with(prefix)).map(|c| c["status"].as_str().unwrap().to_string()).unwrap();
+    if v["z3"] == false {
+        assert_eq!(status("clamp", "post"), "unknown");
+        assert!(out.status.success());
+        return;
+    }
+    assert_eq!((v["proved"].as_u64(), v["counterexample"].as_u64(), v["unknown"].as_u64()), (Some(19), Some(1), Some(1)), "{v}");
+    assert_eq!(status("search", "pre"), "proved");
+    assert_eq!(status("midpoint", "post"), "proved");
+    assert_eq!(status("mean2", "post"), "counterexample");
+    assert_eq!(status("total_len", "post"), "unknown");
+    assert!(!out.status.success());
+}

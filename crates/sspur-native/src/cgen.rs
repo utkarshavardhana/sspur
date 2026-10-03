@@ -1,5 +1,5 @@
 use crate::nval::Layouts;
-use crate::{assemble_rich, Compiled, RichFn, T_DEPTH, T_DIV_ZERO, T_INDEX, T_NOMATCH, T_OVERFLOW, T_POST, T_GUESS, T_MSG, T_PRE, T_RAISE, T_REFINE, T_REPEAT, T_UNWRAP};
+use crate::{assemble_rich, Compiled, RichFn, T_DEPTH, T_DIV_ZERO, T_INDEX, T_NOMATCH, T_OVERFLOW, T_POST, T_GUESS, T_MSG, T_PRE, T_RAISE, T_REFINE, T_REPEAT, T_UNWRAP, T_ALLOC, T_OOM};
 use sspur_check::{expr_key, CheckOutput, Type};
 use sspur_syntax::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -747,6 +747,7 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
     let smt = sspur_smt::Oracle::new(m, check);
     loop {
         let mut cx = Cx::new(check, &ok, &alias_refines, &field_refines, &smt);
+        cx.sys = m.profile.as_deref() == Some("sys");
         cx.generics = generic_defs.iter().filter(|(n, _)| ok.contains(*n)).map(|(n, f)| (n.clone(), f.clone())).collect();
         cx.fn_index = index.clone();
         cx.all_fns = defs.iter().map(|f| (f.name.clone(), (*f).clone())).collect();
@@ -788,7 +789,7 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
             writeln!(cx.protos, "static void enc_err(Status* st);").unwrap();
             for f in defs.iter().filter(|f| ok.contains(&f.name) && f.tparams.is_empty()) {
                 let (params, ret, scalar) = plan_fns[&f.name].clone();
-                if params.iter().chain([&ret]).any(has_fn) {
+                if params.iter().chain([&ret]).any(has_fn) || sys_sig(f, check) {
                     continue;
                 }
                 entries.push_str(&cx.entries(&f.name, &params, &ret, scalar)?);
@@ -800,7 +801,7 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
             src.push_str(&cx.protos);
             for f in defs.iter().filter(|f| ok.contains(&f.name) && f.tparams.is_empty()) {
                 let (params, ret, _) = &plan_fns[&f.name];
-                let ps: Vec<String> = params.iter().map(|t| cx.cty(t)).collect::<G<_>>()?;
+                let ps: Vec<String> = params.iter().zip(&f.params).map(|(t, p)| cx.cty(t).map(|c| if is_mut_borrow(&p.ty) { format!("{c}*") } else { c })).collect::<G<_>>()?;
                 let rr = cx.rr(ret)?;
                 let mut sig: Vec<String> = ps.iter().enumerate().map(|(i, t)| format!("{t} a{i}")).collect();
                 sig.push("Status* st".into());
@@ -812,7 +813,7 @@ fn generate(m: &Module, check: &CheckOutput) -> Result<(String, Plan), String> {
             src.push_str(&bodies);
             src.push_str(&entries);
             src.push_str(&cx.helpers_late);
-            plan_fns.retain(|_, (p, r, _)| !p.iter().chain([&*r]).any(has_fn));
+            plan_fns.retain(|n, (p, r, _)| !p.iter().chain([&*r]).any(has_fn) && !cx.all_fns.get(n).is_some_and(|f| sys_sig(f, check)));
             let src = cx.atomize(&src);
             let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone() };
             return Ok((src, plan));
@@ -833,7 +834,7 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
 }
 
 fn precheck(f: &FnDef) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail") && !f.tparams.iter().any(|p| p.name == e.name)) {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "unsafe") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())
@@ -966,6 +967,9 @@ struct Cx<'a> {
     par_mode: bool,
     par_memo: HashMap<String, bool>,
     par_heavy: HashSet<String>,
+    sys: bool,
+    flags: HashMap<String, String>,
+    borrow_res: HashSet<String>,
 }
 
 impl<'a> Cx<'a> {
@@ -1023,6 +1027,9 @@ impl<'a> Cx<'a> {
             par_mode: false,
             par_memo: HashMap::new(),
             par_heavy: HashSet::new(),
+            sys: false,
+            flags: HashMap::new(),
+            borrow_res: HashSet::new(),
         }
     }
 
@@ -1080,6 +1087,7 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if n == "Map" => format!("M_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
             Type::Con(n, a) if matches!(n.as_str(), "Secret" | "Pii" | "Untrusted") => format!("W{}_{}", &n[..1], self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Guess" => format!("G_{}", self.mangle(&a[0])?),
+            Type::Con(n, a) if n == "Ptr" => format!("P_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n) => format!("N_{n}"),
             Type::Con(n, a) if self.layouts.records.contains_key(n) || self.layouts.sums.contains_key(n) => {
                 let kind = if self.layouts.records.contains_key(n) { "R" } else { "S" };
@@ -1182,6 +1190,7 @@ impl<'a> Cx<'a> {
             Type::Con(n, _) if matches!(n.as_str(), "Int" | "Bool" | "Unit") => Ok("int64_t".into()),
             Type::Con(n, _) if n == "F64" => Ok("double".into()),
             Type::Con(n, _) if n == "Str" => Ok("Str".into()),
+            Type::Con(n, _) if n == "Ptr" => Ok("int64_t".into()),
             Type::Con(n, a) if n == "List" => {
                 self.fwd_decl(&m);
                 if self.complete.insert(m.clone()) {
@@ -1309,6 +1318,7 @@ impl<'a> Cx<'a> {
     fn zero_cost_inner(&self, t: &Type) -> Option<Type> {
         match t {
             Type::Con(n, a) if matches!(n.as_str(), "Secret" | "Pii" | "Untrusted") => Some(a[0].clone()),
+            Type::Con(n, _) if n == "Ptr" => Some(Type::int()),
             Type::Con(n, a) if a.is_empty() => self.layouts.newtypes.get(n).cloned(),
             _ => None,
         }
@@ -1669,7 +1679,8 @@ impl<'a> Cx<'a> {
         let rc = self.cty(ret)?;
         let mut sig = Vec::new();
         for (i, t) in params.iter().enumerate() {
-            sig.push(format!("{} a{i}", self.cty(t)?));
+            let star = if f.params.get(i).is_some_and(|p| is_mut_borrow(&p.ty)) { "*" } else { "" };
+            sig.push(format!("{}{star} a{i}", self.cty(t)?));
         }
         sig.push("Status* st".into());
         sig.push("int64_t depth".into());
@@ -1694,7 +1705,7 @@ impl<'a> Cx<'a> {
         let split = env.is_none() && self.entry_checks(f);
         self.tail_spans.clear();
         self.tail_split = split;
-        if env.is_none() && f.posts.is_empty() && !self.generics.contains_key(&f.name) && !cname.ends_with("__lin") && !matches!(f.body.kind, ExprKind::Table(_)) {
+        if env.is_none() && !self.sys && f.posts.is_empty() && !self.generics.contains_key(&f.name) && !cname.ends_with("__lin") && !matches!(f.body.kind, ExprKind::Table(_)) {
             own::tail_calls(&f.body, &f.name, &mut self.tail_spans);
         }
         let label = if self.tail_spans.is_empty() { "" } else { "tail_: ;\n" };
@@ -1704,7 +1715,17 @@ impl<'a> Cx<'a> {
         } else {
             writeln!(s, "{label}  depth += 1; if (UNLIKELY(depth > 0)) TRAPV({T_DEPTH}, 0, 0);").unwrap();
         }
+        self.flags.clear();
+        self.borrow_res.clear();
         for (i, (p, t)) in f.params.iter().zip(params).enumerate() {
+            if is_mut_borrow(&p.ty) {
+                let c = format!("(*a{i})");
+                if self.drop_fn(t).is_some() {
+                    self.borrow_res.insert(c.clone());
+                }
+                self.scopes[0].insert(p.name.clone(), (c, t.clone()));
+                continue;
+            }
             self.scopes[0].insert(p.name.clone(), (format!("a{i}"), t.clone()));
         }
         self.inplace.clear();
@@ -1730,6 +1751,16 @@ impl<'a> Cx<'a> {
             writeln!(s, "  return {fname_c}__np({args}st, depth);\n}}\nstatic {rr} {fname_c}__np({}) {{\n{label}  depth += 1; if (UNLIKELY(depth > 0)) TRAPV({T_DEPTH}, 0, 0);", sig.join(", ")).unwrap();
         }
         self.assume_entry(f);
+        let destructor_of = self.check.own.destructor_of(&f.name).map(str::to_string);
+        for (i, (p, t)) in f.params.iter().zip(params).enumerate() {
+            if matches!(&p.ty, Ty::Named { name, .. } if name == "&" || name == "&mut") || matches!(t, Type::Con(n, _) if Some(n) == destructor_of.as_ref()) {
+                continue;
+            }
+            if self.drop_fn(t).is_some() {
+                let decl = self.owned_decl(&p.name, t, &format!("a{i}"))?;
+                writeln!(s, "  {decl}").unwrap();
+            }
+        }
         let body = match &f.body.kind {
             ExprKind::Table(rows) => self.table(f, rows, params, ret)?,
             _ => self.expr(&f.body)?,
@@ -1753,6 +1784,53 @@ impl<'a> Cx<'a> {
         }
         writeln!(s, "  return ({rr}){{ret_, 0}};\n}}\n#undef RRT\n#undef FIDX").unwrap();
         Ok(s)
+    }
+
+    fn drop_fn(&self, t: &Type) -> Option<String> {
+        match t {
+            Type::Con(n, a) if a.is_empty() => self.check.own.drops.get(n).cloned(),
+            _ => None,
+        }
+    }
+
+    fn drop_call(&mut self, t: &Type, v: &str) -> G {
+        let d = self.drop_fn(t).ok_or("drops a value without a destructor")?;
+        if !self.eligible.contains(&d) {
+            return Err(format!("drops a value whose destructor '{d}' is not native"));
+        }
+        Ok(format!("({{ __auto_type dr_ = f_{d}({v}, st, depth); (void)dr_; 0LL; }})"))
+    }
+
+    fn owned_decl(&mut self, name: &str, t: &Type, init: &str) -> G {
+        let d = self.drop_fn(t).ok_or("owned value without a destructor")?;
+        if !self.eligible.contains(&d) {
+            return Err(format!("drops a value whose destructor '{d}' is not native"));
+        }
+        let c = self.cty(t)?;
+        let m = self.mangle(t)?;
+        let wt = format!("W_{m}");
+        if self.helpers_done.insert(wt.clone()) {
+            writeln!(self.defs, "typedef struct {{ {c} v; int64_t live; Status* st; int64_t depth; }} {wt};").unwrap();
+            writeln!(self.helpers, "static void cl_{m}({wt}* p) {{ if (p->live) {{ p->live = 0; __auto_type r_ = f_{d}(p->v, p->st, p->depth); (void)r_; }} }}").unwrap();
+        }
+        let w = self.fresh("ow");
+        let cname = format!("{w}.v");
+        self.scopes.last_mut().unwrap().insert(name.to_string(), (cname.clone(), t.clone()));
+        self.flags.insert(cname.clone(), format!("{w}.live"));
+        self.mutable.insert(cname);
+        Ok(format!("{wt} {w} __attribute__((cleanup(cl_{m}))) = {{{init}, 1, st, depth}}; "))
+    }
+
+    fn call_arg(&mut self, callee: &str, i: usize, a: &Expr) -> G<(String, Type)> {
+        let mut_borrow = self.fn_def(callee).and_then(|f| f.params.get(i)).is_some_and(|p| is_mut_borrow(&p.ty));
+        if !mut_borrow {
+            return Ok((self.expr(a)?, self.ty(a)?));
+        }
+        let place = match &a.kind {
+            ExprKind::Unary(UnOp::Ref | UnOp::RefMut, x) => &**x,
+            _ => a,
+        };
+        Ok((format!("&({})", self.expr(place)?), self.ty(place)?))
     }
 
     fn resolve_callee(&mut self, name: &str, arg_types: &[Type], ret: Option<&Type>) -> G<(String, Type)> {
@@ -1787,7 +1865,7 @@ impl<'a> Cx<'a> {
     }
 
     fn may_raise(&self, name: &str) -> bool {
-        self.fn_def(name).is_none_or(|f| f.effects.iter().any(|e| !matches!(e.name.as_str(), "log" | "div")))
+        self.fn_def(name).is_none_or(|f| f.effects.iter().any(|e| !matches!(e.name.as_str(), "log" | "div" | "unsafe")))
     }
 
     fn fn_def(&self, name: &str) -> Option<&FnDef> {
@@ -2016,7 +2094,13 @@ impl<'a> Cx<'a> {
             ExprKind::Float(x) => Ok(format!("bitsd({}LL)", x.to_bits() as i64)),
             ExprKind::Bool(b) => Ok(if *b { "1LL" } else { "0LL" }.into()),
             ExprKind::Unit => Ok("0LL".into()),
-            ExprKind::Name(n) if self.lookup(n).is_some() => Ok(self.lookup(n).unwrap().0),
+            ExprKind::Name(n) if self.lookup(n).is_some() => {
+                let c = self.lookup(n).unwrap().0;
+                match self.flags.get(&c) {
+                    Some(flag) if self.check.own.moves.contains(&(e.span.start, e.span.end)) => Ok(format!("({{ {flag} = 0; {c}; }})")),
+                    _ => Ok(c),
+                }
+            }
             ExprKind::Placeholder => self.lookup("_").map(|(v, _)| v).ok_or_else(|| "unbound placeholder".into()),
             ExprKind::Name(n) if n == "none" => Ok(format!("({}){{0}}", self.cty(&t)?)),
             ExprKind::Name(n) if matches!(t, Type::Fn(..)) && self.check.fn_types.contains_key(n) => self.fn_value(n, &t),
@@ -2070,10 +2154,11 @@ impl<'a> Cx<'a> {
                         let op = if n == "min" { "<" } else { ">" };
                         Ok(format!("({{ __auto_type x_ = {a}; __auto_type y_ = {b}; {c}(y_, x_) {op} 0 ? y_ : x_; }})"))
                     }
+                    "drop" | "leak" | "alloc" | "free" | "null" if self.sys && self.lookup(n).is_none() && !self.check.fn_types.contains_key(n) => self.sys_builtin(n, args, &t),
                     _ => {
                         let mut vals = Vec::new();
-                        for a in args {
-                            vals.push((self.expr(a)?, self.ty(a)?));
+                        for (i, a) in args.iter().enumerate() {
+                            vals.push(self.call_arg(n, i, a)?);
                         }
                         if self.tail_spans.contains(&(e.span.start, e.span.end))
                             && self.catch_stack.is_empty()
@@ -2150,6 +2235,7 @@ impl<'a> Cx<'a> {
                 }
             }
             ExprKind::Unary(UnOp::Not, x) => Ok(format!("((int64_t)!({}))", self.expr(x)?)),
+            ExprKind::Unary(UnOp::Ref | UnOp::RefMut, x) => self.expr(x),
             ExprKind::Range(a, b) => {
                 let (av, bv) = (self.expr(a)?, self.expr(b)?);
                 let lc = self.cty(&t)?;
@@ -2233,6 +2319,28 @@ impl<'a> Cx<'a> {
         }
     }
 
+    fn sys_builtin(&mut self, n: &str, args: &[Expr], t: &Type) -> G {
+        match n {
+            "drop" => {
+                let at = self.ty(&args[0])?;
+                let v = self.expr(&args[0])?;
+                let tmp = self.fresh("dv");
+                let call = self.drop_call(&at, &tmp)?;
+                Ok(format!("({{ __auto_type {tmp} = {v}; {call}; }})"))
+            }
+            "leak" => Ok(format!("({{ (void)({}); 0LL; }})", self.expr(&args[0])?)),
+            "null" => Ok("0LL".into()),
+            "free" => Ok(format!("({{ free((void*)(intptr_t)({})); 0LL; }})", self.expr(&args[0])?)),
+            "alloc" => {
+                let et = elem(t, "Ptr").ok_or("alloc without a pointer type")?;
+                let ec = self.cty(&et)?;
+                let (nv, iv) = (self.expr(&args[0])?, self.expr(&args[1])?);
+                Ok(format!("({{ int64_t an_ = {nv}; __auto_type ai_ = {iv}; if (UNLIKELY(an_ < 0 || an_ > (1LL << 28))) TRAPV({T_ALLOC}, an_, 0); {ec}* ap_ = ({ec}*)malloc((size_t)(an_ ? an_ : 1) * sizeof({ec})); if (UNLIKELY(!ap_)) TRAPV({T_OOM}, 0, 0); for (int64_t ak_ = 0; ak_ < an_; ak_++) ap_[ak_] = ai_; (int64_t)(intptr_t)ap_; }})"))
+            }
+            _ => Err(format!("uses {n}")),
+        }
+    }
+
     fn err_index(&mut self, t: &Type) -> usize {
         match self.err_types.iter().position(|x| x == t) {
             Some(i) => i,
@@ -2289,6 +2397,7 @@ impl<'a> Cx<'a> {
             _ if is(t, "Unit") => "sb_put(b, \"()\", 2);".to_string(),
             _ if is(t, "F64") => "sb_f64(b, v);".to_string(),
             _ if is(t, "Str") => "if (q) sb_strq(b, v); else sb_put(b, v.p, v.len);".to_string(),
+            Type::Con(n, _) if n == "Ptr" => "(void)v; sb_put(b, \"<ptr>\", 5);".to_string(),
             Type::Con(n, a) if n == "List" => {
                 let e = self.helper_show(&a[0])?;
                 format!("sb_put(b, \"[\", 1); for (int64_t i = 0; i < v.len; i++) {{ if (i) sb_put(b, \", \", 2); {e}(b, v.data[i], 1); }} sb_put(b, \"]\", 1);")
@@ -2767,9 +2876,9 @@ impl<'a> Cx<'a> {
 
     fn method(&mut self, e: &Expr, recv: &Expr, name: &str, args: &[Expr], t: &Type) -> G {
         if self.check.user_methods.contains(&(e.span.start, e.span.end)) {
-            let mut vals = vec![(self.expr(recv)?, self.ty(recv)?)];
-            for a in args {
-                vals.push((self.expr(a)?, self.ty(a)?));
+            let mut vals = vec![self.call_arg(name, 0, recv)?];
+            for (i, a) in args.iter().enumerate() {
+                vals.push(self.call_arg(name, i + 1, a)?);
             }
             let src: Vec<Expr> = std::iter::once(recv.clone()).chain(args.iter().cloned()).collect();
             return self.call_user(name, vals, Some(t), Some((e, &src)));
@@ -2847,6 +2956,20 @@ impl<'a> Cx<'a> {
         }
         if let Some(et) = elem(&rt, "List") {
             return self.list_method(&r, &rt, &et, name, args, t);
+        }
+        if let Some(et) = elem(&rt, "Ptr") {
+            let ec = self.cty(&et)?;
+            let p = format!("(({ec}*)(intptr_t)({r}))");
+            return Ok(match name {
+                "is_null" => format!("((int64_t)(({r}) == 0))"),
+                "load" => format!("({p}[{}])", self.expr(&args[0])?),
+                "store" => {
+                    let (i, v) = (self.expr(&args[0])?, self.expr(&args[1])?);
+                    format!("({{ int64_t si_ = {i}; __auto_type sv_ = {v}; {p}[si_] = sv_; 0LL; }})")
+                }
+                "offset" => format!("((int64_t)(intptr_t)({p} + ({})))", self.expr(&args[0])?),
+                _ => return Err(format!("uses Ptr.{name}")),
+            });
         }
         if let Some(et) = elem(&rt, "Opt") {
             return Ok(match name {
@@ -3337,6 +3460,11 @@ impl<'a> Cx<'a> {
                 self.pattern(p, &tmp, &t, &mut conds, &mut binds)?;
                 let mut out = format!("__auto_type {tmp} = {v}; ");
                 for (n, expr, bt) in binds {
+                    if self.drop_fn(&bt).is_some() {
+                        let d = self.owned_decl(&n, &bt, &expr)?;
+                        out.push_str(&d);
+                        continue;
+                    }
                     let c = self.bind(&n, bt);
                     if matches!(p, Pat::Bind(_)) {
                         self.bind_fact(&c, e);
@@ -3350,6 +3478,13 @@ impl<'a> Cx<'a> {
                 let (cell, _) = self.lookup(n).ok_or("lost boxed variable")?;
                 Ok(format!("{cell} = {v}; "))
             }
+            Stmt::Var(n, e) if self.ty(e).is_ok_and(|t| self.drop_fn(&t).is_some()) => {
+                let t = self.ty(e)?;
+                let v = self.expr(e)?;
+                let tmp = self.fresh("ov");
+                let d = self.owned_decl(n, &t, &tmp)?;
+                Ok(format!("__auto_type {tmp} = {v}; {d}"))
+            }
             Stmt::Var(n, e) => {
                 let t = self.ty(e)?;
                 let c = self.cty(&t)?;
@@ -3360,6 +3495,15 @@ impl<'a> Cx<'a> {
                     self.inplace.insert(var.clone());
                 }
                 Ok(format!("{c} {var} = {v}; "))
+            }
+            Stmt::Assign(n, e, span) if self.lookup(n).is_some_and(|(c, _)| self.flags.contains_key(&c) || self.borrow_res.contains(&c)) && !self.check.own.inplace.contains(&(span.start, span.end)) => {
+                let (var, t) = self.lookup(n).unwrap();
+                let v = self.expr(e)?;
+                let call = self.drop_call(&t, &var)?;
+                Ok(match self.flags.get(&var).cloned() {
+                    Some(flag) => format!("{{ __auto_type nv_ = {v}; if ({flag}) {{ {flag} = 0; (void)({call}); }} {var} = nv_; {flag} = 1; }} "),
+                    None => format!("{{ __auto_type nv_ = {v}; (void)({call}); {var} = nv_; }} "),
+                })
             }
             Stmt::Assign(n, e, _) => {
                 let (var, _) = self.lookup(n).ok_or("assigns an unknown variable")?;
@@ -3472,6 +3616,40 @@ impl<'a> Cx<'a> {
         write!(s, "{w}; }})").unwrap();
         Ok(s)
     }
+}
+
+fn is_mut_borrow(t: &Ty) -> bool {
+    matches!(t, Ty::Named { name, .. } if name == "&mut")
+}
+
+fn sys_ty(t: &Ty) -> bool {
+    match t {
+        Ty::Named { name, args, .. } => matches!(name.as_str(), "&" | "&mut" | "own" | "Ptr") || args.iter().any(sys_ty),
+        Ty::Tuple(xs) => xs.iter().any(sys_ty),
+        Ty::Fn { params, ret, .. } => params.iter().any(sys_ty) || sys_ty(ret),
+    }
+}
+
+fn sys_sig(f: &FnDef, check: &CheckOutput) -> bool {
+    let res = |t: &Ty| {
+        let mut hit = false;
+        let mut stack = vec![t];
+        while let Some(t) = stack.pop() {
+            match t {
+                Ty::Named { name, args, .. } => {
+                    hit |= check.own.res_types.contains(name);
+                    stack.extend(args.iter());
+                }
+                Ty::Tuple(xs) => stack.extend(xs.iter()),
+                Ty::Fn { params, ret, .. } => {
+                    stack.extend(params.iter());
+                    stack.push(ret);
+                }
+            }
+        }
+        hit
+    };
+    f.params.iter().map(|p| &p.ty).chain(f.ret.iter()).any(|t| sys_ty(t) || res(t))
 }
 
 fn stmt_mentions(s: &Stmt, v: &str) -> bool {

@@ -1,0 +1,3 @@
+fn f(x: Int) -> Int
+  unsafe "nothing"
+= x

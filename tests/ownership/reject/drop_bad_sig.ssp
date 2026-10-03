@@ -1,0 +1,6 @@
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(n: Int)
+= ()

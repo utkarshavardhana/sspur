@@ -1,4 +1,5 @@
 mod builtins;
+pub mod own;
 pub mod types;
 
 use serde::Serialize;
@@ -41,6 +42,7 @@ pub struct CheckOutput {
     pub local_fn_types: HashMap<(u32, u32), (Vec<Type>, Type)>,
     pub gen_loops: HashSet<(u32, u32)>,
     pub clause_effects: HashMap<(u32, u32), BTreeSet<String>>,
+    pub own: own::OwnInfo,
 }
 
 pub type ExprKey = (u32, u32, u8);
@@ -159,6 +161,7 @@ struct Checker {
     clause_effects: HashMap<(u32, u32), BTreeSet<String>>,
     clause_depth: u32,
     alias_stack: Vec<String>,
+    sys: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -237,8 +240,19 @@ pub fn check(m: &Module) -> CheckOutput {
         clause_effects: HashMap::new(),
         clause_depth: 0,
         alias_stack: vec![],
+        sys: m.profile.as_deref() == Some("sys"),
     };
     c.load_builtins();
+    if c.sys {
+        for src in builtins::SYS_GLOBALS {
+            let (name, s) = c.builtin_scheme(src);
+            c.globals.insert(name, s);
+        }
+        for (recv, src) in builtins::SYS_METHODS {
+            let (name, s) = c.builtin_scheme(src);
+            c.methods.insert((recv.to_string(), name), s);
+        }
+    }
     c.collect(m);
     let mut sigs = BTreeMap::new();
     for d in &m.defs {
@@ -275,18 +289,38 @@ pub fn check(m: &Module) -> CheckOutput {
             _ => {}
         }
     }
-    if m.profile.as_deref().is_some_and(|p| p != "app") {
+    let own = own::analyze(m, &c.record_types, &c.user_methods);
+    for d in own.diags {
+        c.diags.push(d);
+    }
+    for (fname, uses) in &own.drop_effects {
+        let Some(Def::Fn(f)) = m.defs.iter().find(|d| d.name() == fname) else { continue };
+        let mut declared: BTreeSet<String> = f.effects.iter().map(printer::effect).collect();
+        if f.trusted.is_some() {
+            declared.insert("unsafe".into());
+        }
+        for (atom, span, why) in uses {
+            c.diags.retain(|d| !(d.code == "W_EFFECT_UNUSED" && d.def.as_deref() == Some(fname) && d.msg.starts_with(&format!("declares '{atom}' "))));
+            if !declared.contains(atom) && !c.diags.iter().any(|d| d.def.as_deref() == Some(fname) && d.span == [span.start, span.end] && d.msg.contains(&format!("'{atom}'"))) {
+                let code = if atom == "unsafe" { "E_UNSAFE" } else { "E_EFFECT_MISSING" };
+                c.cur_def = Some(fname.clone());
+                c.push_diag(code, "error", *span, format!("{why} performs '{atom}' but the signature does not declare it"), Some(format!("add '{atom}' to the effect row of {fname}")), vec![]);
+                c.cur_def = None;
+            }
+        }
+    }
+    if m.profile.as_deref().is_some_and(|p| p != "app" && p != "sys") {
         c.diags.push(Diag {
             code: "E_UNSUPPORTED".into(),
             severity: "error",
             def: None,
             span: [0, 0],
             msg: format!("profile '{}' is not supported by this compiler version yet", m.profile.as_deref().unwrap()),
-            hint: Some("only the default 'app' profile is implemented".into()),
+            hint: Some("only the 'app' and 'sys' profiles are implemented".into()),
             fix: vec![],
         });
     }
-    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects }
+    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info }
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -441,6 +475,22 @@ impl Checker {
                 let conv: Vec<Type> = args.iter().map(|x| self.conv_ty_depth(x, depth)).collect();
                 if self.tparams.contains(name) {
                     return Type::Param(name.clone());
+                }
+                if matches!(name.as_str(), "&" | "&mut" | "own") {
+                    if !self.sys {
+                        self.push_diag("E_PROFILE", "error", *span, format!("'{}' types need 'profile sys'", if name == "own" { "own" } else { name.as_str() }), Some("add 'profile sys' as the first line".into()), vec![]);
+                    }
+                    return conv.into_iter().next().unwrap_or_else(Type::unit);
+                }
+                if name == "Ptr" && !self.types.contains_key(name) {
+                    if !self.sys {
+                        self.push_diag("E_PROFILE", "error", *span, "raw pointers need 'profile sys'".into(), Some("add 'profile sys' as the first line".into()), vec![]);
+                    }
+                    if conv.len() != 1 {
+                        self.err("E_TYPE_ARITY", *span, format!("Ptr takes 1 type argument(s), got {}", conv.len()));
+                        return self.fresh();
+                    }
+                    return Type::Con(name.clone(), conv);
                 }
                 if let Some((_, arity)) = BUILTIN_TYPES.iter().find(|(n, _)| n == name) {
                     if *arity != conv.len() {
@@ -635,7 +685,8 @@ impl Checker {
     fn check_fn_body(&mut self, f: &FnDef, scheme: &Scheme) {
         let mut scope = HashMap::new();
         for (p, t) in f.params.iter().zip(&scheme.params) {
-            scope.insert(p.name.clone(), Local { ty: t.clone(), mutable: false });
+            let mutable = matches!(&p.ty, Ty::Named { name, .. } if name == "&mut");
+            scope.insert(p.name.clone(), Local { ty: t.clone(), mutable });
         }
         for (p, t) in f.params.iter().zip(&scheme.params) {
             if let Some(r) = &p.refine {
@@ -684,7 +735,27 @@ impl Checker {
             let atom = self.ueff_atom(n, args);
             declared.insert(atom);
         }
+        if let Some(reason) = &f.trusted {
+            if !self.sys {
+                self.push_diag("E_PROFILE", "error", f.sig_span, "an 'unsafe' clause needs 'profile sys'".into(), Some("add 'profile sys' as the first line".into()), vec![]);
+            }
+            if reason.trim().is_empty() {
+                self.push_diag("E_REASON_REQUIRED", "error", f.sig_span, format!("the unsafe clause of {} needs a non-empty reason", f.name), Some("unsafe \"why this is sound\"".into()), vec![]);
+            } else {
+                self.push_diag("A_UNSAFE", "audit", f.sig_span, format!("{} discharges unsafe: {reason}", f.name), None, vec![]);
+            }
+            if !frame.contains_key("unsafe") && !declared.contains("unsafe") {
+                self.push_diag("W_UNSAFE_UNUSED", "warning", f.sig_span, format!("{} has an unsafe clause but performs no unsafe operation", f.name), None, vec![]);
+            }
+        }
         for (atom, (span, _)) in &frame {
+            if atom == "unsafe" && f.trusted.is_some() {
+                continue;
+            }
+            if atom == "unsafe" && !declared.contains(atom) {
+                self.push_diag("E_UNSAFE", "error", *span, "raw memory operations are unsafe".into(), Some(format!("declare '! unsafe' on {}, or discharge it with an 'unsafe \"reason\"' clause", f.name)), vec![]);
+                continue;
+            }
             if !declared.contains(atom) {
                 let fix = json!({"op": "refine", "target": f.name, "contract": {"effects": [format!("+{atom}")]}});
                 self.push_diag(
@@ -713,7 +784,9 @@ impl Checker {
         self.frames.push(Frame::new());
         let ty = self.infer(&t.body, Some(&Type::bool()));
         self.expect(&Type::bool(), &ty, t.body.span);
-        self.frames.pop();
+        if let Some((span, _)) = self.frames.pop().unwrap().get("unsafe") {
+            self.push_diag("E_UNSAFE", "error", *span, "raw memory operations are unsafe".into(), Some("move them into a function that declares '! unsafe' or has an 'unsafe \"reason\"' clause".into()), vec![]);
+        }
         self.scopes.pop();
         self.report_holes();
         self.cur_def = None;
@@ -1182,6 +1255,12 @@ impl Checker {
                 let t = self.infer(x, Some(&Type::bool()));
                 self.expect(&Type::bool(), &t, x.span);
                 Type::bool()
+            }
+            ExprKind::Unary(UnOp::Ref | UnOp::RefMut, x) => {
+                if !self.sys {
+                    self.push_diag("E_PROFILE", "error", e.span, "borrows need 'profile sys'".into(), Some("add 'profile sys' as the first line".into()), vec![]);
+                }
+                self.infer(x, exp)
             }
             ExprKind::Range(a, b) => {
                 for x in [a, b] {
@@ -2046,12 +2125,19 @@ impl Checker {
         }
     }
 
+    fn record_pattern(&self, p: &Pat) -> bool {
+        match p {
+            Pat::Ctor { name, args: CtorArgs::Record(fs) } => matches!(self.types.get(name), Some(TypeInfo { kind: TypeKind::Record(_), .. })) && fs.iter().all(|(_, p)| irrefutable(p) || self.record_pattern(p)),
+            _ => irrefutable(p),
+        }
+    }
+
     fn infer_stmt(&mut self, s: &Stmt, exp: Option<&Type>) -> Type {
         match s {
             Stmt::Expr(e) => self.infer(e, exp),
             Stmt::Let(p, e) => {
                 let t = self.infer(e, None);
-                if !irrefutable(p) {
+                if !irrefutable(p) && !(self.sys && self.record_pattern(p)) {
                     self.err("E_REFUTABLE_LET", e.span, "this pattern can fail to match; use 'match' instead".into());
                 }
                 self.check_pat(p, &t);

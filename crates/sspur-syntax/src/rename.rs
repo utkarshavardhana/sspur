@@ -31,6 +31,9 @@ impl Renamer<'_> {
         match d {
             Def::Type(t) => {
                 self.hit(&mut t.name);
+                if let Some(d) = &mut t.drop {
+                    self.hit(d);
+                }
                 let tparams: Vec<String> = t.params.iter().map(|p| p.name.clone()).collect();
                 let shadow = tparams.iter().any(|p| p == self.from);
                 match &mut t.body {

@@ -1,0 +1,11 @@
+profile sys
+
+res type Tok = {id: Int}
+
+fn spend(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn ignore(t: Tok) -> Int
+= 0

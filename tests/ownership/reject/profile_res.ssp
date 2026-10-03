@@ -1,0 +1,4 @@
+res type File = {fd: Int}
+
+fn f(x: Int) -> Int
+= x

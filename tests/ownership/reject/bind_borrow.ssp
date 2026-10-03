@@ -1,0 +1,26 @@
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn hold() -> Int
+= do
+  a = open(1)
+  r = &a
+  0

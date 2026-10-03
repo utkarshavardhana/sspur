@@ -98,3 +98,18 @@ pub const METHODS: &[(&str, &str)] = &[
     ("F64", "sqrt(n: F64) -> F64"),
     ("*", "str[A](x: A) -> Str"),
 ];
+
+pub const SYS_GLOBALS: &[&str] = &[
+    "alloc[T](n: Int, init: T) -> Ptr[T] ! unsafe",
+    "free[T](p: Ptr[T]) -> Unit ! unsafe",
+    "null[T]() -> Ptr[T]",
+    "drop[A](x: A) -> Unit",
+    "leak[A](x: A) -> Unit",
+];
+
+pub const SYS_METHODS: &[(&str, &str)] = &[
+    ("Ptr", "load[T](p: Ptr[T], i: Int) -> T ! unsafe"),
+    ("Ptr", "store_[T](p: Ptr[T], i: Int, x: T) -> Unit ! unsafe"),
+    ("Ptr", "offset[T](p: Ptr[T], n: Int) -> Ptr[T] ! unsafe"),
+    ("Ptr", "is_null[T](p: Ptr[T]) -> Bool"),
+];

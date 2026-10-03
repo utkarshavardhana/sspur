@@ -1,0 +1,13 @@
+profile sys
+
+res type Tok = {id: Int}
+
+fn spend(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn forget() -> Int
+= do
+  t = Tok{id: 1}
+  0

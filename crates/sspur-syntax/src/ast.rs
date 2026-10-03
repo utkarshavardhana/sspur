@@ -61,6 +61,8 @@ pub struct TypeDef {
     pub params: Vec<TParam>,
     pub body: TypeBody,
     pub derives: Vec<String>,
+    pub res: bool,
+    pub drop: Option<String>,
     pub span: Span,
 }
 
@@ -116,6 +118,7 @@ pub struct FnDef {
     pub pres: Vec<Expr>,
     pub posts: Vec<Expr>,
     pub examples: Vec<Expr>,
+    pub trusted: Option<String>,
     pub body: Expr,
     pub span: Span,
     pub sig_span: Span,
@@ -197,6 +200,8 @@ impl BinOp {
 pub enum UnOp {
     Neg,
     Not,
+    Ref,
+    RefMut,
 }
 
 #[derive(Clone, Debug, PartialEq)]

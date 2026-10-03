@@ -701,6 +701,7 @@ impl<'a> Enc<'a> {
                 let t = self.bool_of(v);
                 Val::Bool(format!("(not {t})"))
             }
+            ExprKind::Unary(UnOp::Ref | UnOp::RefMut, x) => self.ex(x),
             ExprKind::Unary(UnOp::Neg, x) => match self.ex(x) {
                 Val::Int(t) if is_ty(self.ty(e), "Int") => {
                     let c = format!("(not (= {t} {MIN}))");

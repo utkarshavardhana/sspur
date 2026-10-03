@@ -262,7 +262,8 @@ impl Store {
             return TxResult { ok: false, root: None, changes: vec![], diags: next.check.diags, src: Some(next.src) };
         }
         if tx.gate.as_deref() == Some("tests") {
-            let it = sspur_eval::Interp::new(&next.module, next.check.record_types.clone(), next.check.user_methods.clone(), next.check.gen_loops.clone());
+            let mut it = sspur_eval::Interp::new(&next.module, next.check.record_types.clone(), next.check.user_methods.clone(), next.check.gen_loops.clone());
+            it.set_ownership(next.check.own.moves.clone(), next.check.own.inplace.clone());
             let failed: Vec<Diag> = it
                 .run_tests()
                 .into_iter()

@@ -138,6 +138,9 @@ impl<'a> Hasher<'a> {
                     }
                     TypeBody::New(ty) => tys.push(ty),
                 }
+                if let Some(d) = &t.drop {
+                    add(d);
+                }
             }
             Def::Fn(f) => {
                 for p in &f.params {
@@ -312,6 +315,13 @@ impl<'a> Hasher<'a> {
                 derives.sort();
                 enc.uint(derives.len() as u64);
                 derives.iter().for_each(|x| enc.str(x));
+                if t.res {
+                    enc.tag(b'R');
+                    match &t.drop {
+                        Some(d) => self.expr(&mut enc, &Expr::new(ExprKind::Name(d.clone()), Span::default()), group),
+                        None => enc.tag(0),
+                    }
+                }
             }
             Def::Fn(f) => {
                 enc.tag(b'F');
@@ -357,6 +367,10 @@ impl<'a> Hasher<'a> {
                     self.expr(&mut enc, x, group);
                 }
                 enc.locals = saved;
+                if let Some(r) = &f.trusted {
+                    enc.tag(b'U');
+                    enc.str(r);
+                }
                 self.expr(&mut enc, &f.body, group);
             }
             Def::Test(t) => {
@@ -534,7 +548,12 @@ impl<'a> Hasher<'a> {
                 self.expr(enc, r, group);
             }
             ExprKind::Unary(op, x) => {
-                enc.tag(if *op == UnOp::Neg { b'-' } else { b'!' });
+                enc.tag(match op {
+                    UnOp::Neg => b'-',
+                    UnOp::Not => b'!',
+                    UnOp::Ref => b'&',
+                    UnOp::RefMut => b'M',
+                });
                 self.expr(enc, x, group);
             }
             ExprKind::Range(a, b) => {

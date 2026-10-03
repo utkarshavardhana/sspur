@@ -91,6 +91,11 @@ pub struct Interp {
     gen_loops: HashSet<(u32, u32)>,
     handlers: RefCell<Vec<HFrame>>,
     next_handler: Cell<u64>,
+    sys: bool,
+    drops: HashMap<String, String>,
+    moves: HashSet<(u32, u32)>,
+    inplace: HashSet<(u32, u32)>,
+    heap: RefCell<Vec<Option<Vec<Value>>>>,
 }
 
 const MAX_DEPTH: u32 = 20_000;
@@ -128,6 +133,11 @@ impl Interp {
             gen_loops,
             handlers: RefCell::new(vec![]),
             next_handler: Cell::new(0),
+            sys: m.profile.as_deref() == Some("sys"),
+            drops: HashMap::new(),
+            moves: HashSet::new(),
+            inplace: HashSet::new(),
+            heap: RefCell::new(vec![None]),
         };
         for d in &m.defs {
             match d {
@@ -136,6 +146,9 @@ impl Interp {
                 }
                 Def::Test(t) => it.tests.push(t.clone()),
                 Def::Type(t) => {
+                    if let Some(d) = t.drop.as_ref().filter(|_| t.res) {
+                        it.drops.insert(t.name.clone(), d.clone());
+                    }
                     it.types.insert(t.name.clone(), t.clone());
                     it.add_type(t)
                 }
@@ -225,6 +238,130 @@ impl Interp {
         out
     }
 
+    pub fn set_ownership(&mut self, moves: HashSet<(u32, u32)>, inplace: HashSet<(u32, u32)>) {
+        self.moves = moves;
+        self.inplace = inplace;
+    }
+
+    fn droppable(&self, v: &Value) -> bool {
+        matches!(v, Value::Record(t, _) if self.drops.contains_key(&**t))
+    }
+
+    fn own_define(&self, env: &Rc<Env>, name: &str, v: Value) {
+        let owned = self.droppable(&v);
+        env.define(name, v);
+        if owned {
+            env.owned.borrow_mut().push(name.into());
+        }
+    }
+
+    fn run_drop(&self, v: Value) -> R<()> {
+        let Value::Record(t, _) = &v else { return Ok(()) };
+        let Some(f) = self.drops.get(&**t).and_then(|d| self.fns.get(d)).cloned() else { return Ok(()) };
+        self.call_fn(&f, vec![v]).map(|_| ())
+    }
+
+    fn release<T>(&self, env: &Rc<Env>, r: R<T>) -> R<T> {
+        if env.owned.borrow().is_empty() || matches!(r, Err(Ctrl::Trap(_))) {
+            return r;
+        }
+        let names: Vec<Rc<str>> = std::mem::take(&mut *env.owned.borrow_mut());
+        for n in names.iter().rev() {
+            let Some(cell) = env.vars.borrow().get(n).cloned() else { continue };
+            let v = std::mem::replace(&mut *cell.borrow_mut(), Value::Unit);
+            if self.droppable(&v) {
+                self.run_drop(v)?;
+            }
+        }
+        r
+    }
+
+    fn arg_values(&self, f: &FnDef, args: &[&Expr], env: &Rc<Env>) -> R<Vec<Value>> {
+        let mut out = Vec::with_capacity(args.len());
+        for (i, a) in args.iter().enumerate() {
+            let borrow = f.params.get(i).is_some_and(|p| matches!(&p.ty, Ty::Named { name, .. } if name == "&" || name == "&mut"));
+            if !borrow {
+                out.push(self.eval(a, env)?);
+                continue;
+            }
+            let place = match &a.kind {
+                ExprKind::Unary(UnOp::Ref | UnOp::RefMut, x) => x,
+                _ => *a,
+            };
+            let cell = match &place.kind {
+                ExprKind::Name(n) => env.cell(n),
+                _ => None,
+            };
+            let cell = match cell {
+                Some(c) => c,
+                None => Rc::new(RefCell::new(self.eval(place, env)?)),
+            };
+            out.push(Value::Ref(cell));
+        }
+        Ok(out)
+    }
+
+    fn sys_call(&self, n: &str, a: Vec<Value>) -> R {
+        let mut a = a.into_iter();
+        let mut next = || a.next().unwrap_or(Value::Unit);
+        match n {
+            "drop" => self.run_drop(next()).map(|_| Value::Unit),
+            "leak" => Ok(Value::Unit),
+            "null" => Ok(Value::Ptr(0, 0)),
+            "alloc" => {
+                let Value::Int(len) = next() else { return trap("alloc expects an Int size") };
+                if !(0..=1 << 28).contains(&len) {
+                    return trap(format!("invalid allocation size {len}"));
+                }
+                let init = next();
+                let mut heap = self.heap.borrow_mut();
+                heap.push(Some(vec![init; len as usize]));
+                Ok(Value::Ptr(heap.len() as u32 - 1, 0))
+            }
+            "free" => {
+                let Value::Ptr(b, off) = next() else { return trap("free expects a Ptr") };
+                let mut heap = self.heap.borrow_mut();
+                match heap.get_mut(b as usize) {
+                    _ if b == 0 => trap("undefined behavior: free of null"),
+                    Some(slot @ Some(_)) if off == 0 => {
+                        *slot = None;
+                        Ok(Value::Unit)
+                    }
+                    Some(Some(_)) => trap("undefined behavior: free of an interior pointer"),
+                    _ => trap("undefined behavior: double free"),
+                }
+            }
+            _ => trap(format!("unknown sys builtin {n}")),
+        }
+    }
+
+    fn ptr_method(&self, name: &str, b: u32, off: i64, a: Vec<Value>) -> R {
+        if name == "is_null" {
+            return Ok(Value::Bool(b == 0));
+        }
+        let mut a = a.into_iter();
+        let Some(Value::Int(i)) = a.next() else { return trap(format!("Ptr.{name} expects an Int")) };
+        if name == "offset" {
+            return Ok(Value::Ptr(b, off.checked_add(i).ok_or_else(|| Ctrl::Trap("undefined behavior: pointer overflow".into()))?));
+        }
+        let mut heap = self.heap.borrow_mut();
+        let block = match heap.get_mut(b as usize) {
+            _ if b == 0 => return trap("undefined behavior: null dereference"),
+            Some(Some(block)) => block,
+            _ => return trap("undefined behavior: use after free"),
+        };
+        let k = off.checked_add(i).filter(|k| *k >= 0 && (*k as usize) < block.len());
+        let Some(k) = k else { return trap("undefined behavior: out-of-bounds access") };
+        match name {
+            "load" => Ok(block[k as usize].clone()),
+            "store" => {
+                block[k as usize] = a.next().unwrap_or(Value::Unit);
+                Ok(Value::Unit)
+            }
+            _ => trap(format!("no method {name} on Ptr")),
+        }
+    }
+
     pub fn set_native(&mut self, c: sspur_native::Compiled) {
         self.native = Some(c);
     }
@@ -288,12 +425,27 @@ impl Interp {
 
     fn call_fn_inner(&self, f: &FnDef, args: Vec<Value>, parent: &Rc<Env>) -> R {
         let env = Env::child(parent);
+        let r = self.call_body(f, args, &env);
+        self.release(&env, r)
+    }
+
+    fn call_body(&self, f: &FnDef, args: Vec<Value>, env: &Rc<Env>) -> R {
+        let env = env.clone();
+        let destructor = self.drops.values().any(|d| *d == f.name);
         for (p, v) in f.params.iter().zip(args) {
+            if let Value::Ref(cell) = v {
+                env.vars.borrow_mut().insert(p.name.as_str().into(), cell);
+                continue;
+            }
             self.check_value_type(&p.ty, &v, &format!("parameter '{}' of {}", p.name, f.name))?;
             if let Some(r) = &p.refine {
                 self.check_refine(r, &v, &format!("parameter '{}' of {}", p.name, f.name))?;
             }
-            env.define(&p.name, v);
+            if destructor {
+                env.define(&p.name, v);
+            } else {
+                self.own_define(&env, &p.name, v);
+            }
         }
         for pre in &f.pres {
             if !self.truthy(pre, &env)? {
@@ -558,6 +710,9 @@ impl Interp {
                 all.extend(args);
                 return self.call_fn(&f, all);
             }
+        if let Value::Ptr(b, off) = recv {
+            return self.ptr_method(name, b, off, args);
+        }
         self.call_method(name, recv, args)
     }
 
@@ -584,7 +739,23 @@ impl Interp {
             }
             ExprKind::Placeholder => env.get("_").map_or_else(|| trap("unbound '_'"), Ok),
             ExprKind::Hole(_) => trap("reached a typed hole"),
+            ExprKind::Name(n) if self.moves.contains(&(e.span.start, e.span.end)) => match env.cell(n) {
+                Some(c) => Ok(std::mem::replace(&mut *c.borrow_mut(), Value::Unit)),
+                None => self.eval_name(n, env),
+            },
             ExprKind::Name(n) => self.eval_name(n, env),
+            ExprKind::Field(x, f) if self.sys && self.user_methods.contains(&(e.span.start, e.span.end)) && self.fns.contains_key(f) => {
+                let fd = self.fns[f].clone();
+                let a = self.arg_values(&fd, &[&**x], env)?;
+                self.call_fn(&fd, a)
+            }
+            ExprKind::Method { recv, name, args, .. } if self.sys && self.user_methods.contains(&(e.span.start, e.span.end)) && self.fns.contains_key(name) => {
+                let fd = self.fns[name].clone();
+                let all: Vec<&Expr> = std::iter::once(&**recv).chain(args.iter()).collect();
+                let a = self.arg_values(&fd, &all, env)?;
+                self.call_fn(&fd, a)
+            }
+            ExprKind::Unary(UnOp::Ref | UnOp::RefMut, x) => self.eval(x, env),
             ExprKind::Field(x, f) => {
                 let v = self.eval(x, env)?;
                 if let Some(fv) = v.field(f) {
@@ -611,8 +782,12 @@ impl Interp {
                             return Ok(Value::New(n.as_str().into(), Rc::new(v)));
                         }
                         if let Some(fd) = self.fns.get(n).cloned() {
-                            let a = self.eval_args(args, env)?;
+                            let a = if self.sys { self.arg_values(&fd, &args.iter().collect::<Vec<_>>(), env)? } else { self.eval_args(args, env)? };
                             return self.call_fn(&fd, a);
+                        }
+                        if self.sys && matches!(n.as_str(), "drop" | "leak" | "alloc" | "free" | "null") {
+                            let a = self.eval_args(args, env)?;
+                            return self.sys_call(n, a);
                         }
                         if self.ops.contains(n) {
                             let a = self.eval_args(args, env)?;
@@ -686,10 +861,13 @@ impl Interp {
                     }
                 }
                 let mut last = Value::Unit;
-                for s in stmts {
-                    last = self.exec(s, &env)?;
-                }
-                Ok(last)
+                let r = (|| {
+                    for s in stmts {
+                        last = self.exec(s, &env)?;
+                    }
+                    Ok(())
+                })();
+                self.release(&env, r).map(|_| last)
             }
             ExprKind::Record { ctor, fields } => {
                 let owner = match ctor {
@@ -818,14 +996,15 @@ impl Interp {
             }
             Stmt::Var(n, e) => {
                 let v = self.eval(e, env)?;
-                env.define(n, v);
+                self.own_define(env, n, v);
                 Ok(Value::Unit)
             }
-            Stmt::Assign(n, e, _) => {
+            Stmt::Assign(n, e, span) => {
                 let v = self.eval(e, env)?;
-                match env.cell(n) {
-                    Some(c) => *c.borrow_mut() = v,
-                    None => return trap(format!("unbound name '{n}'")),
+                let Some(c) = env.cell(n) else { return trap(format!("unbound name '{n}'")) };
+                let old = std::mem::replace(&mut *c.borrow_mut(), v);
+                if self.droppable(&old) && !self.inplace.contains(&(span.start, span.end)) {
+                    self.run_drop(old)?;
                 }
                 Ok(Value::Unit)
             }
@@ -879,7 +1058,7 @@ impl Interp {
         match (p, v) {
             (Pat::Wild, _) => true,
             (Pat::Bind(n), _) => {
-                env.define(n, v.clone());
+                self.own_define(env, n, v.clone());
                 true
             }
             (Pat::Int(a), Value::Int(b)) => a == b,

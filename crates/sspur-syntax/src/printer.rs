@@ -88,9 +88,13 @@ fn print_type_def(t: &TypeDef) -> String {
         TypeBody::Alias(t, Some(r)) => format!("{} where {}", ty(t), expr(r, 0)),
         TypeBody::New(t) => format!("new {}", ty(t)),
     };
-    let mut s = format!("type {}{} = {}", t.name, tparams(&t.params), body);
+    let res = if t.res { "res " } else { "" };
+    let mut s = format!("{res}type {}{} = {}", t.name, tparams(&t.params), body);
     if !t.derives.is_empty() {
         s.push_str(&format!(" derive {}", t.derives.join(", ")));
+    }
+    if let Some(d) = &t.drop {
+        s.push_str(&format!(" drop {d}"));
     }
     s
 }
@@ -121,6 +125,9 @@ fn print_fn(f: &FnDef) -> String {
 fn print_fn_at(f: &FnDef, ind: usize) -> String {
     let mut s = print_sig(f);
     let c = pad(ind + 2);
+    if let Some(r) = &f.trusted {
+        s.push_str(&format!("\n{c}unsafe {}", expr(&Expr::new(ExprKind::Str(vec![StrPart::Lit(r.clone())]), Span::default()), 0)));
+    }
     for p in &f.pres {
         s.push_str(&format!("\n{c}pre {}", expr(p, ind + 2)));
     }
@@ -166,6 +173,8 @@ pub fn effect(e: &Effect) -> String {
 pub fn ty(t: &Ty) -> String {
     match t {
         Ty::Named { name, args, .. } if args.is_empty() => name.clone(),
+        Ty::Named { name, args, .. } if name == "&" => format!("&{}", ty(&args[0])),
+        Ty::Named { name, args, .. } if matches!(name.as_str(), "&mut" | "own") => format!("{name} {}", ty(&args[0])),
         Ty::Named { name, args, .. } => format!("{}[{}]", name, args.iter().map(ty).collect::<Vec<_>>().join(", ")),
         Ty::Tuple(xs) => format!("({})", xs.iter().map(ty).collect::<Vec<_>>().join(", ")),
         Ty::Fn { params, ret, effects: es } => {
@@ -188,7 +197,7 @@ fn prec_of(e: &Expr) -> u8 {
         ExprKind::Binary(op, ..) => op.prec(),
         ExprKind::Range(..) => 5,
         ExprKind::Unary(UnOp::Not, _) => 3,
-        ExprKind::Unary(UnOp::Neg, _) => 9,
+        ExprKind::Unary(UnOp::Neg | UnOp::Ref | UnOp::RefMut, _) => 9,
         ExprKind::Int(n) if *n < 0 => 9,
         ExprKind::Float(n) if *n < 0.0 => 9,
         ExprKind::Lambda { implicit: false, .. }
@@ -274,6 +283,8 @@ pub fn expr(e: &Expr, ind: usize) -> String {
         }
         ExprKind::Unary(UnOp::Neg, x) => format!("-{}", operand(x, 9, ind)),
         ExprKind::Unary(UnOp::Not, x) => format!("not {}", operand(x, 4, ind)),
+        ExprKind::Unary(UnOp::Ref, x) => format!("&{}", operand(x, 10, ind)),
+        ExprKind::Unary(UnOp::RefMut, x) => format!("&mut {}", operand(x, 10, ind)),
         ExprKind::Range(a, b) => format!("{}..{}", operand(a, 6, ind), operand(b, 6, ind)),
         ExprKind::If(c, t, f) => {
             let mut s = format!("if {} then {}", expr(c, ind), branch(t, ind));

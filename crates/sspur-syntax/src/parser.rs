@@ -193,6 +193,13 @@ impl Parser {
         let start = self.span();
         match self.peek() {
             Tok::Kw("type") => self.type_def().map(Def::Type),
+            Tok::Ident(r) if r == "res" && matches!(self.peek_at(1), Tok::Kw("type")) => {
+                self.bump();
+                let mut t = self.type_def()?;
+                t.res = true;
+                t.span = start.to(t.span);
+                Ok(Def::Type(t))
+            }
             Tok::Kw("fn") => self.fn_def().map(Def::Fn),
             Tok::Kw("rule") => self.rule_def().map(Def::Fn),
             Tok::Kw("test") => {
@@ -304,7 +311,13 @@ impl Parser {
                 }
             }
         }
-        Ok(TypeDef { name, params, body, derives, span: start.to(self.prev_span()) })
+        let drop = if matches!(self.peek(), Tok::Ident(d) if d == "drop") && matches!(self.peek_at(1), Tok::Ident(_)) {
+            self.bump();
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
+        Ok(TypeDef { name, params, body, derives, res: false, drop, span: start.to(self.prev_span()) })
     }
 
     fn type_body(&mut self) -> PResult<TypeBody> {
@@ -372,6 +385,22 @@ impl Parser {
     }
 
     fn ty(&mut self) -> PResult<Ty> {
+        if self.is_sym("&") {
+            let span = self.bump().span;
+            let name = if matches!(self.peek(), Tok::Ident(m) if m == "mut") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Sym("(")) {
+                self.bump();
+                "&mut"
+            } else {
+                "&"
+            };
+            let inner = self.ty()?;
+            return Ok(Ty::Named { name: name.into(), args: vec![inner], span: span.to(self.prev_span()) });
+        }
+        if matches!(self.peek(), Tok::Ident(o) if o == "own") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Sym("(")) {
+            let span = self.bump().span;
+            let inner = self.ty()?;
+            return Ok(Ty::Named { name: "own".into(), args: vec![inner], span: span.to(self.prev_span()) });
+        }
         let base = if self.eat_sym("(") {
             let mut items = Vec::new();
             while !self.is_sym(")") {
@@ -525,11 +554,17 @@ impl Parser {
         let mut pres = Vec::new();
         let mut posts = Vec::new();
         let mut examples = Vec::new();
+        let mut trusted = None;
         loop {
-            if self.newline_then(|t| matches!(t, Tok::Kw("pre" | "post" | "ex"))).is_some() {
+            let unsafe_ahead = |p: &Self, i: usize| matches!(p.peek_at(i), Tok::Ident(u) if u == "unsafe") && matches!(p.peek_at(i + 1), Tok::Str(_));
+            if self.newline_then(|t| matches!(t, Tok::Kw("pre" | "post" | "ex"))).is_some() || (matches!(self.peek(), Tok::Newline(_)) && unsafe_ahead(self, 1)) {
                 self.bump();
             }
-            if self.eat_kw("pre") {
+            if unsafe_ahead(self, 0) {
+                self.bump();
+                let Tok::Str(r) = self.bump().tok else { unreachable!() };
+                trusted = Some(r);
+            } else if self.eat_kw("pre") {
                 pres.push(self.refine_expr()?);
             } else if self.eat_kw("post") {
                 posts.push(self.refine_expr()?);
@@ -540,7 +575,7 @@ impl Parser {
             }
         }
         let body = Expr::new(ExprKind::Unit, self.prev_span());
-        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, body, span: start.to(self.prev_span()), sig_span })
+        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, trusted, body, span: start.to(self.prev_span()), sig_span })
     }
 
     fn expr_seq(&mut self) -> PResult<Expr> {
@@ -719,6 +754,14 @@ impl Parser {
                 _ => return false,
             }
         }
+    }
+
+    fn field_assign_ahead(&self) -> bool {
+        let mut i = 1;
+        while matches!(self.peek_at(i), Tok::Sym(".")) && matches!(self.peek_at(i + 1), Tok::Ident(_)) {
+            i += 2;
+        }
+        matches!(self.peek_at(i), Tok::Sym(":="))
     }
 
     fn assign_ahead(&self) -> bool {
@@ -900,6 +943,21 @@ impl Parser {
             self.bump();
             return Ok(vec![Stmt::Assign(name, self.expr()?, span)]);
         }
+        if let (Tok::Ident(name), Tok::Sym("."), Tok::Ident(_)) = (self.peek().clone(), self.peek_at(1), self.peek_at(2))
+            && self.field_assign_ahead() {
+                let span = self.span();
+                self.bump();
+                let mut path = Vec::new();
+                while self.eat_sym(".") {
+                    path.push(PathSeg::Field(self.expect_ident()?));
+                }
+                self.expect_sym(":=")?;
+                let value = self.expr()?;
+                let full = span.to(self.prev_span());
+                let base = Expr::new(ExprKind::Name(name.clone()), span);
+                let with = Expr::new(ExprKind::With(Box::new(base), vec![(path, value)]), full);
+                return Ok(vec![Stmt::Assign(name, with, span)]);
+            }
         let saved = self.pos;
         if let Ok(p) = self.pat()
             && self.eat_sym("=") {
@@ -1033,6 +1091,16 @@ impl Parser {
         if self.eat_kw("not") {
             let e = self.binary(4)?;
             return Ok(Expr::new(ExprKind::Unary(UnOp::Not, Box::new(e)), start.to(self.prev_span())));
+        }
+        if self.eat_sym("&") {
+            let op = if matches!(self.peek(), Tok::Ident(m) if m == "mut") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Sym("(")) {
+                self.bump();
+                UnOp::RefMut
+            } else {
+                UnOp::Ref
+            };
+            let e = self.unary()?;
+            return Ok(Expr::new(ExprKind::Unary(op, Box::new(e)), start.to(self.prev_span())));
         }
         if self.eat_sym("-") {
             let e = self.unary()?;

@@ -392,6 +392,7 @@ pub fn default_interp(l: &Loaded) -> Interp {
 
 pub fn interp(l: &Loaded) -> Interp {
     let mut it = Interp::new(&l.module, l.check.record_types.clone(), l.check.user_methods.clone(), l.check.gen_loops.clone());
+    it.set_ownership(l.check.own.moves.clone(), l.check.own.inplace.clone());
     it.float_sums = l
         .check
         .expr_types

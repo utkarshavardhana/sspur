@@ -28,6 +28,8 @@ pub enum Value {
     Wrap(Rc<str>, Rc<Value>),
     Guess(Rc<Value>, f64),
     Builtin(Rc<str>),
+    Ptr(u32, i64),
+    Ref(Rc<RefCell<Value>>),
 }
 
 pub struct Closure {
@@ -40,11 +42,12 @@ pub struct Closure {
 pub struct Env {
     pub vars: RefCell<HashMap<Rc<str>, Rc<RefCell<Value>>>>,
     pub parent: Option<Rc<Env>>,
+    pub owned: RefCell<Vec<Rc<str>>>,
 }
 
 impl Env {
     pub fn child(parent: &Rc<Env>) -> Rc<Env> {
-        Rc::new(Env { vars: RefCell::new(HashMap::new()), parent: Some(parent.clone()) })
+        Rc::new(Env { vars: RefCell::new(HashMap::new()), parent: Some(parent.clone()), owned: RefCell::new(Vec::new()) })
     }
 
     pub fn define(&self, name: &str, v: Value) {
@@ -81,7 +84,8 @@ impl Value {
             Value::New(..) => 12,
             Value::Wrap(..) => 14,
             Value::Guess(..) => 15,
-            Value::Closure(_) | Value::Func(_) | Value::LocalFn(..) | Value::Builtin(_) => 13,
+            Value::Closure(_) | Value::Func(_) | Value::LocalFn(..) | Value::Builtin(_) | Value::Ref(_) => 13,
+            Value::Ptr(..) => 16,
         }
     }
 
@@ -133,6 +137,7 @@ impl Ord for Value {
             (Map(a), Map(b)) => a.iter().cmp(b.iter()),
             (New(n1, a), New(n2, b)) | (Wrap(n1, a), Wrap(n2, b)) => n1.cmp(n2).then_with(|| a.cmp(b)),
             (Guess(a, c1), Guess(b, c2)) => a.cmp(b).then_with(|| c1.total_cmp(c2)),
+            (Ptr(a, x), Ptr(b, y)) => a.cmp(b).then_with(|| x.cmp(y)),
             _ => self.rank().cmp(&other.rank()),
         }
     }
@@ -229,6 +234,8 @@ impl fmt::Display for Value {
             Value::Closure(_) => write!(f, "<fn>"),
             Value::Func(d) | Value::LocalFn(d, _) => write!(f, "<fn {}>", d.name),
             Value::Builtin(n) => write!(f, "<builtin {n}>"),
+            Value::Ptr(..) => write!(f, "<ptr>"),
+            Value::Ref(c) => write!(f, "{}", c.borrow()),
         }
     }
 }

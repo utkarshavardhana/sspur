@@ -1,0 +1,12 @@
+profile sys
+
+fn add_to(x: &mut Int, y: &mut Int)
+= do
+  x := x + y
+  ()
+
+fn alias() -> Int
+= do
+  var n = 1
+  add_to(&mut n, &mut n)
+  n

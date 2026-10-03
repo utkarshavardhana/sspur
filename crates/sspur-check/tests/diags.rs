@@ -178,3 +178,24 @@ fn generators_are_typed_through_for() {
     assert!(codes(&format!("{base}{take}fn f() -> List[Int]\n= take(1, nums)")).is_empty());
     assert_eq!(codes(&format!("{base}{take}fn f() -> List[Str]\n= take(1, nums)")), vec!["E_TYPE_MISMATCH"]);
 }
+
+#[test]
+fn deep_constructor_nesting_checks_fast() {
+    let ty = "type Expr = Num{v: Int} | Var{name: Str} | Add{a: Expr, b: Expr} | Mul{a: Expr, b: Expr} | Sub{a: Expr, b: Expr} | Div{a: Expr, b: Expr}\nfn id[T](x: T) -> T\n= x\n";
+    let mut e = "Num{v: 0}".to_string();
+    for i in 0..12 {
+        e = format!("{}{{a: {e}, b: Var{{name: \"x\"}}}}", ["Add", "Sub", "Mul", "Div"][i % 4]);
+    }
+    let start = std::time::Instant::now();
+    assert!(codes(&format!("{ty}test t = id({e}) == Var{{name: \"x\"}}")).is_empty());
+    assert!(start.elapsed() < std::time::Duration::from_secs(1), "{:?}", start.elapsed());
+    let deep = "type L9 = {s: Secret[Str]}\ntype L8 = A8{x: L9} | B8{x: Expr}\ntype L7 = {x: L8}\ntype W = W{x: L7, e: Expr}\n";
+    assert_eq!(codes(&format!("{ty}{deep}fn f(a: W, b: W) -> Bool\n= a == b")), vec!["E_SECRET_COMPARE"]);
+}
+
+#[test]
+fn branching_alias_cycle_is_reported() {
+    let start = std::time::Instant::now();
+    assert!(codes("type A = (A, A)\nfn f(x: A) -> Int\n= 1").contains(&"E_TYPE_CYCLE".to_string()));
+    assert!(start.elapsed() < std::time::Duration::from_secs(1));
+}

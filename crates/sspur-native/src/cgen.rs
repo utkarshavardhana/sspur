@@ -11,6 +11,7 @@ mod fuse;
 mod lower;
 mod own;
 mod prove;
+mod simd;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
 type G<T = String> = Result<T, String>;
@@ -125,6 +126,21 @@ static int64_t __attribute__((noinline)) par_run(ParFn fn, void* cx, int64_t bas
     return r;
 }
 static inline void par_release(void) { __atomic_store_n(&par_busy, 0, __ATOMIC_RELEASE); }
+static int sum_i64(const int64_t* d, int64_t n, int64_t* out) {
+    int64_t acc = 0, miss = 0;
+    for (int64_t i = 0; i < n; i += 64) {
+        int64_t e = n - i > 64 ? i + 64 : n;
+        if (LIKELY_(miss < 8 + (i >> 9) && acc >= -(1LL << 62) && acc <= (1LL << 62))) {
+            uint64_t s = 0, f = 0;
+            for (int64_t j = i; j < e; j++) { s += (uint64_t)d[j]; f |= (uint64_t)d[j] + (1ULL << 56) >= (1ULL << 57); }
+            if (LIKELY_(!f)) { acc += (int64_t)s; continue; }
+            miss++;
+        }
+        for (int64_t j = i; j < e; j++) if (UNLIKELY(__builtin_add_overflow(acc, d[j], &acc))) return 1;
+    }
+    *out = acc;
+    return 0;
+}
 #include <sys/mman.h>
 #include <setjmp.h>
 #include <time.h>
@@ -966,6 +982,7 @@ struct Cx<'a> {
     par_mode: bool,
     par_memo: HashMap<String, bool>,
     par_heavy: HashSet<String>,
+    vec: Option<simd::Vecx>,
 }
 
 impl<'a> Cx<'a> {
@@ -1023,6 +1040,7 @@ impl<'a> Cx<'a> {
             par_mode: false,
             par_memo: HashMap::new(),
             par_heavy: HashSet::new(),
+            vec: None,
         }
     }
 
@@ -1967,6 +1985,9 @@ impl<'a> Cx<'a> {
     }
 
     fn checked(&mut self, op: BinOp, x: &str, y: &str, ra: Iv, rb: Iv) -> String {
+        if let Some(v) = self.vchecked(op, x, y, ra, rb) {
+            return v;
+        }
         if iv_safe(op, ra, rb) {
             return format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; a_ {} b_; }})", op.symbol());
         }
@@ -2096,7 +2117,11 @@ impl<'a> Cx<'a> {
             }
             ExprKind::Index(a, i) => {
                 let (av, iv) = (self.expr(a)?, self.expr(i)?);
-                if self.index_safe(a, i) || self.smt.proves(e, "index") {
+                if self.vec.is_some() {
+                    if let Some(s) = self.vindex(a, i, &av, &iv) {
+                        return Ok(s);
+                    }
+                } else if self.index_safe(a, i) || self.smt.proves(e, "index") {
                     return Ok(format!("(({av}).data[{iv}])"));
                 }
                 Ok(format!("({{ __auto_type l_ = {av}; int64_t i_ = {iv}; if (UNLIKELY(i_ < 0 || i_ >= l_.len)) TRAPV({T_INDEX}, l_.len, i_); l_.data[i_]; }})"))
@@ -2119,7 +2144,7 @@ impl<'a> Cx<'a> {
                 }
                 if is(&at, "Int") {
                     let (ra, rb) = (self.range(a), self.range(b));
-                    if *op != BinOp::Pow && !iv_safe(*op, ra, rb) && self.smt.proves(e, "arith") {
+                    if self.vec.is_none() && *op != BinOp::Pow && !iv_safe(*op, ra, rb) && self.smt.proves(e, "arith") {
                         return Ok(format!("({{ int64_t a_ = {x}; int64_t b_ = {y}; a_ {} b_; }})", op.symbol()));
                     }
                     return Ok(self.checked(*op, &x, &y, ra, rb));
@@ -2143,7 +2168,13 @@ impl<'a> Cx<'a> {
             }
             ExprKind::Unary(UnOp::Neg, x) => {
                 let v = self.expr(x)?;
-                if is(&t, "F64") || self.range(x).0 > FULL.0 || self.smt.proves(e, "neg") {
+                if is(&t, "F64") {
+                    return Ok(format!("(-({v}))"));
+                }
+                let proven = self.range(x).0 > FULL.0;
+                if let Some(s) = self.vneg(&v, proven) {
+                    Ok(s)
+                } else if proven || self.smt.proves(e, "neg") {
                     Ok(format!("(-({v}))"))
                 } else {
                     Ok(format!("({{ int64_t t_ = {v}; if (UNLIKELY(t_ == INT64_MIN)) TRAPV({T_OVERFLOW}, 0, 0); -t_; }})"))
@@ -2933,7 +2964,7 @@ impl<'a> Cx<'a> {
                 if is(et, "F64") {
                     wrap(format!("double s_ = 0.0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) s_ += {l}.data[{i}]; s_;"))
                 } else {
-                    wrap(format!("int64_t s_ = 0; for (int64_t {i} = 0; {i} < {l}.len; {i}++) if (UNLIKELY(__builtin_add_overflow(s_, {l}.data[{i}], &s_))) TRAPV({T_OVERFLOW}, 0, 0); s_;"))
+                    wrap(format!("int64_t s_; if (UNLIKELY(sum_i64({l}.data, {l}.len, &s_))) TRAPV({T_OVERFLOW}, 0, 0); s_;"))
                 }
             }
             "contains" => {

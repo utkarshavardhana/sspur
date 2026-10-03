@@ -522,6 +522,7 @@ pub(crate) fn std_str(name: &str, x: &str, a: Vec<Value>) -> R {
             let t = x.trim();
             opt(if float_syntax(t) { t.parse::<f64>().ok().map(Value::Float) } else { None })
         }
+        "format" => Value::str(&crate::stdx::format_str(x, s(&a[0])?)?),
         "bytes" => ints(x.bytes().map(i64::from)),
         "codes" => ints(x.chars().map(|c| c as i64)),
         _ => return trap(format!("no method '{name}' on Str")),
@@ -560,6 +561,7 @@ pub(crate) fn std_float(name: &str, x: f64, a: Vec<Value>) -> R {
         "is_nan" => Value::Bool(x.is_nan()),
         "is_finite" => Value::Bool(x.is_finite()),
         "is_inf" => Value::Bool(x.is_infinite()),
+        "format" => Value::str(&crate::stdx::format_f64(x, s(&a[0])?)?),
         "fma" => match a.get(1) {
             Some(Value::Float(z)) => Value::Float(unsafe { cm::fma(x, y()?, *z) }),
             _ => return trap("expected F64"),
@@ -674,6 +676,7 @@ pub(crate) fn std_int(name: &str, n: i64, a: Vec<Value>) -> R {
         "rotl" => Value::Int((n as u64).rotate_left((b()? & 63) as u32) as i64),
         "rotr" => Value::Int((n as u64).rotate_right((b()? & 63) as u32) as i64),
         "byteswap" => Value::Int(n.swap_bytes()),
+        "format" => Value::str(&crate::stdx::format_int(n, s(&a[0])?)?),
         "saturating_add" => Value::Int(n.saturating_add(b()?)),
         "saturating_sub" => Value::Int(n.saturating_sub(b()?)),
         "saturating_mul" => Value::Int(n.saturating_mul(b()?)),

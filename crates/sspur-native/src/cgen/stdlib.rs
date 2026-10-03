@@ -446,6 +446,10 @@ impl Cx<'_> {
                 self.std("fmt");
                 format!("({{ double d_; {c} o_ = {{0}}; if (ss_to_f64({r}, &d_)) {{ o_.some = 1; o_.v = d_; }} o_; }})")
             }
+            "format" => {
+                self.std("fmtspec");
+                format!("({{ Str s_ = {r}; Str f_ = {}; ss_format_str(s_, f_, st); }})", vals[0])
+            }
             "bytes" | "codes" => {
                 self.std("strx");
                 format!("({{ RawL r_ = ss_{name}({r}); ({c}){{r_.len, (int64_t*)r_.data, r_.hdr}}; }})")
@@ -469,6 +473,10 @@ impl Cx<'_> {
             "is_nan" => format!("({{ double x_ = {r}; (int64_t)(x_ != x_); }})"),
             "is_finite" => format!("((int64_t)isfinite({r}))"),
             "is_inf" => format!("((int64_t)isinf({r}))"),
+            "format" => {
+                self.std("fmtspec");
+                format!("({{ double x_ = {r}; Str f_ = {}; ss_format_f64(x_, f_, st); }})", vals[0])
+            }
             "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" | "cbrt" | "exp2" | "expm1" | "log1p" | "erf" | "erfc" | "lgamma" => one(name),
             "gamma" => one("tgamma"),
             "fmod" | "remainder" | "copysign" | "nextafter" | "fdim" => format!("({{ double x_ = {r}; double y_ = {}; {name}(x_, y_); }})", vals[0]),
@@ -503,6 +511,10 @@ impl Cx<'_> {
             "rotl" => two("uint64_t u_ = (uint64_t)a_; int k_ = (int)(b_ & 63); (int64_t)(k_ ? (u_ << k_) | (u_ >> (64 - k_)) : u_);"),
             "rotr" => two("uint64_t u_ = (uint64_t)a_; int k_ = (int)(b_ & 63); (int64_t)(k_ ? (u_ >> k_) | (u_ << (64 - k_)) : u_);"),
             "byteswap" => format!("((int64_t)__builtin_bswap64((uint64_t)({r})))"),
+            "format" => {
+                self.std("fmtspec");
+                format!("({{ int64_t v_ = {r}; Str f_ = {}; ss_format_int(v_, f_, st); }})", vals[0])
+            }
             "saturating_add" => two("int64_t r_; __builtin_add_overflow(a_, b_, &r_) ? (a_ < 0 ? INT64_MIN : INT64_MAX) : r_;"),
             "saturating_sub" => two("int64_t r_; __builtin_sub_overflow(a_, b_, &r_) ? (a_ < 0 ? INT64_MIN : INT64_MAX) : r_;"),
             "saturating_mul" => two("int64_t r_; __builtin_mul_overflow(a_, b_, &r_) ? ((a_ < 0) != (b_ < 0) ? INT64_MIN : INT64_MAX) : r_;"),

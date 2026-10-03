@@ -4,6 +4,7 @@ mod ffi;
 pub mod fuzz;
 mod sched;
 mod stdlib;
+mod stdx;
 pub mod value;
 
 use sspur_syntax::*;

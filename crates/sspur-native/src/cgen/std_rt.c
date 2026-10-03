@@ -355,3 +355,97 @@ static int sj_f64(SsJ* v, double* out) {
     char t[408]; memcpy(t, v->s.p, (size_t)v->s.len); t[v->s.len] = 0; *out = strtod(t, 0); return 1;
 }
 static void sj_f64_put(SB* b, double x) { if (isfinite(x)) sb_f64(b, x); else sb_put(b, "null", 4); }
+//@ failstr
+static void __attribute__((noinline, cold, noreturn)) ss_failstr(Status* st, Str m) { char* c = (char*)malloc((size_t)m.len + 1); memcpy(c, m.p, (size_t)m.len); st->rbuf = (int64_t*)c; st->rlen = m.len; sspur_trap(st, 12, 0, 0, 0); }
+//@ fmtspec failstr utf8
+typedef struct { uint32_t fill; int has_fill, align, sign, alt, zero, comma, ty; int64_t width, prec; } SsFs;
+static int ss_fs_isal(char c) { return c == '<' || c == '>' || c == '^' || c == '='; }
+static int ss_fs_parse(Str s, SsFs* f) {
+    memset(f, 0, sizeof *f); f->fill = ' '; f->prec = -1;
+    int64_t i = 0, n = s.len; const char* c = s.p;
+    if (n > 0) {
+        int64_t j = 0; uint32_t cp = ss_utf8_get(s, &j);
+        if (j < n && ss_fs_isal(c[j])) { f->fill = cp; f->has_fill = 1; f->align = c[j]; i = j + 1; }
+        else if (ss_fs_isal(c[0])) { f->align = c[0]; i = 1; }
+    }
+    if (i < n && (c[i] == '+' || c[i] == '-' || c[i] == ' ')) f->sign = c[i++];
+    if (i < n && c[i] == '#') { f->alt = 1; i++; }
+    if (i < n && c[i] == '0') { f->zero = 1; i++; }
+    while (i < n && c[i] >= '0' && c[i] <= '9') { f->width = f->width * 10 + (c[i] - '0'); if (f->width > 100000) return 0; i++; }
+    if (i < n && c[i] == ',') { f->comma = 1; i++; }
+    if (i < n && c[i] == '.') {
+        i++; int64_t s0 = i, p = 0;
+        while (i < n && c[i] >= '0' && c[i] <= '9') { p = p * 10 + (c[i] - '0'); if (p > 1000) return 0; i++; }
+        if (i == s0) return 0;
+        f->prec = p;
+    }
+    if (i < n && c[i] && strchr("dxXobfeE%s", c[i])) f->ty = c[i++];
+    return i == n;
+}
+static void ss_fs_bad(Str spec, Status* st) { SB_INIT(b); sb_put(&b, "bad format spec '", 17); sb_put(&b, spec.p, spec.len); sb_put(&b, "'", 1); ss_failstr(st, sb_done(&b)); }
+static Str ss_fs_group(const char* d, int64_t n) {
+    int64_t lead = 0; while (lead < n && d[lead] >= '0' && d[lead] <= '9') lead++;
+    SB_INIT(b);
+    for (int64_t k = 0; k < lead; k++) { if (k > 0 && (lead - k) % 3 == 0) sb_put(&b, ",", 1); sb_put(&b, d + k, 1); }
+    sb_put(&b, d + lead, n - lead);
+    return sb_done(&b);
+}
+static void ss_fs_rep(SB* b, uint32_t cp, int64_t k) { char t[4]; int64_t m = ss_utf8_put(t, cp); for (int64_t i = 0; i < k; i++) sb_put(b, t, m); }
+static Str ss_fs_pad(SsFs* f, const char* sign, const char* prefix, Str body, int numeric) {
+    int64_t len = (int64_t)strlen(sign) + (int64_t)strlen(prefix) + utf8_len(body);
+    uint32_t fill = f->has_fill ? f->fill : f->zero ? '0' : ' ';
+    int align = f->align ? f->align : f->zero ? '=' : numeric ? '>' : '<';
+    int64_t n = f->width > len ? f->width - len : 0;
+    SB_INIT(b);
+    if (align == '>') ss_fs_rep(&b, fill, n);
+    if (align == '^') ss_fs_rep(&b, fill, n / 2);
+    sb_put(&b, sign, (int64_t)strlen(sign)); sb_put(&b, prefix, (int64_t)strlen(prefix));
+    if (align == '=') ss_fs_rep(&b, fill, n);
+    sb_put(&b, body.p, body.len);
+    if (align == '<') ss_fs_rep(&b, fill, n);
+    if (align == '^') ss_fs_rep(&b, fill, n - n / 2);
+    return sb_done(&b);
+}
+static const char* ss_fs_sign(int neg, SsFs* f) { return neg ? "-" : f->sign == '+' ? "+" : f->sign == ' ' ? " " : ""; }
+static Str ss_format_int(int64_t v, Str spec, Status* st) {
+    SsFs f;
+    if (!ss_fs_parse(spec, &f) || f.prec >= 0 || !(f.ty == 0 || f.ty == 'd' || f.ty == 'x' || f.ty == 'X' || f.ty == 'o' || f.ty == 'b') || (f.comma && f.ty != 0 && f.ty != 'd')) ss_fs_bad(spec, st);
+    uint64_t u = v < 0 ? (uint64_t)0 - (uint64_t)v : (uint64_t)v;
+    int base = f.ty == 'x' || f.ty == 'X' ? 16 : f.ty == 'o' ? 8 : f.ty == 'b' ? 2 : 10;
+    const char* dg = f.ty == 'X' ? "0123456789ABCDEF" : "0123456789abcdef";
+    char t[72]; int k = 72;
+    do { t[--k] = dg[u % (uint64_t)base]; u /= (uint64_t)base; } while (u);
+    Str d = {72 - k, t + k};
+    if (f.comma) d = ss_fs_group(d.p, d.len);
+    const char* pre = !f.alt ? "" : f.ty == 'x' ? "0x" : f.ty == 'X' ? "0X" : f.ty == 'o' ? "0o" : f.ty == 'b' ? "0b" : "";
+    return ss_fs_pad(&f, ss_fs_sign(v < 0, &f), pre, d, 1);
+}
+static Str ss_fs_printf(const char* fmt, int64_t p, double x) {
+    int n = snprintf(0, 0, fmt, (int)p, x);
+    char* o = (char*)sspur_alloc_atomic((size_t)n + 1); snprintf(o, (size_t)n + 1, fmt, (int)p, x);
+    return (Str){n, o};
+}
+static Str ss_fs_exp(int64_t p, double x, int upper) {
+    Str m = ss_fs_printf(upper ? "%.*E" : "%.*e", p, x);
+    return m;
+}
+static Str ss_format_f64(double x, Str spec, Status* st) {
+    SsFs f;
+    if (!ss_fs_parse(spec, &f) || f.alt || !(f.ty == 0 || f.ty == 'f' || f.ty == 'e' || f.ty == 'E' || f.ty == '%') || (f.comma && (f.ty == 'e' || f.ty == 'E'))) ss_fs_bad(spec, st);
+    int nan = x != x, neg = signbit(x) && !nan; double a = fabs(x);
+    Str body;
+    if (nan) body = str_lit("NaN", 3);
+    else if (isinf(a)) body = str_lit("inf", 3);
+    else if (f.ty == 'e' || f.ty == 'E') body = ss_fs_exp(f.prec < 0 ? 6 : f.prec, a, f.ty == 'E');
+    else if (f.ty == '%') body = str_cat(ss_fs_printf("%.*f", f.prec < 0 ? 6 : f.prec, a * 100.0), str_lit("%", 1));
+    else if (f.ty == 'f' || f.prec >= 0) body = ss_fs_printf("%.*f", f.prec < 0 ? 6 : f.prec, a);
+    else { SB_INIT(b); sb_f64(&b, a); body = sb_done(&b); }
+    if (f.comma && isfinite(x)) body = ss_fs_group(body.p, body.len);
+    return ss_fs_pad(&f, ss_fs_sign(neg, &f), "", body, 1);
+}
+static Str ss_format_str(Str s, Str spec, Status* st) {
+    SsFs f;
+    if (!ss_fs_parse(spec, &f) || f.sign || f.alt || f.zero || f.comma || f.align == '=' || !(f.ty == 0 || f.ty == 's')) ss_fs_bad(spec, st);
+    if (f.prec >= 0) s = str_take(s, f.prec);
+    return ss_fs_pad(&f, "", "", s, 0);
+}

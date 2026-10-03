@@ -1,0 +1,57 @@
+type Row = {name: Str, qty: Int, price: F64}
+
+fn row(r: Row) -> Str
+= "{r.name.format("<10")}|{r.qty.format(">5")}|{r.price.format(">10,.2f")}"
+
+fn table(rows: List[Row]) -> List[Str]
+= [["item".format("<10"), "qty".format(">5"), "price".format(">10")].join("|"), "-".repeat(27)] + rows.map(row)
+
+fn hex_dump(bs: List[Int]) -> Str
+= bs.map(_.format("02x")).join(" ")
+
+fn ints(n: Int, spec: Str) -> Str
+= n.format(spec)
+
+fn floats(x: F64, spec: Str) -> Str
+= x.format(spec)
+
+fn strs(s: Str, spec: Str) -> Str
+= s.format(spec)
+
+fn try_spec(spec: Str) -> Str
+= 42.format(spec)
+
+test aligned = table([Row{name: "apple", qty: 3, price: 1234.5}, Row{name: "kiwi", qty: 12, price: 0.25}]) == ["item      |  qty|     price", "---------------------------", "apple     |    3|  1,234.50", "kiwi      |   12|      0.25"]
+test hex = hex_dump([0, 15, 255, 16]) == "00 0f ff 10" and 255.format("#X") == "0XFF" and 255.format("#06x") == "0x00ff" and (0 - 255).format("x") == "-ff"
+test radix = 5.format("b") == "101" and 5.format("#010b") == "0b00000101" and 8.format("o") == "10" and 8.format("#o") == "0o10"
+test signs = 7.format("+") == "+7" and (0 - 7).format("+") == "-7" and 7.format(" ") == " 7" and (0 - 7).format("05") == "-0007"
+test centered = "ab".format("^6") == "  ab  " and "ab".format("*^7") == "**ab***" and 5.format("x^5") == "xx5xx"
+test grouping = 1234567.format(",") == "1,234,567" and (0 - 1234567).format(",") == "-1,234,567" and 999.format(",") == "999"
+test fixed = 3.14159.format(".2f") == "3.14" and 2.5.format(".0f") == "2" and 1.0.format("f") == "1.000000" and (0.0 - 0.5).format("+.1f") == "-0.5"
+test sci = 12345.678.format(".3e") == "1.235e+04" and 0.00012.format("E") == "1.200000E-04" and 1.0e100.format(".1e") == "1.0e+100"
+test percent = 0.256.format(".1%") == "25.6%" and 1.0.format("%") == "100.000000%"
+test plain_float = 1.5.format("") == "1.5" and 1.5.format("8") == "     1.5" and (0.0 - 1.5).format("<8") == "-1.5    " and 2.0.format("08") == "000002.0"
+test specials = nan().format(".2f") == "NaN" and (0.0 - inf()).format("6") == "  -inf" and inf().format("+") == "+inf"
+test truncate = "hello world".format(".5") == "hello" and "héllo".format(">7.3") == "    hél" and "€".format("€>3") == "€€€"
+test unicode_fill = 3.format("é<3") == "3éé"
+
+fn float_spec(k: Int, w: Int, p: Int) -> Str
+= do
+  aligns = ["", "<", ">", "^", "=", "*<", "0>"]
+  signs = ["", "+", " ", "-"]
+  tys = ["", "f", "e", "E", "%"]
+  prec = if p % 3 == 0 then "" else "." + (p % 25).str
+  aligns[k % 7] + signs[k / 7 % 4] + (if k % 2 == 0 then "0" else "") + (w % 30).str + (if w % 5 == 0 then "," else "") + prec + tys[k / 28 % 5]
+
+fn float_built(k: Int, w: Int, p: Int, x: F64) -> Str
+= x.format(float_spec(k.band(1023), w.band(1023), p.band(1023)))
+
+fn int_built(k: Int, w: Int, n: Int) -> Str
+= do
+  aligns = ["", "<", ">", "^", "=", "_^"]
+  tys = ["", "d", "x", "X", "o", "b"]
+  k2 = k.band(1023)
+  spec = aligns[k2 % 6] + ["", "+", " "][k2 / 6 % 3] + (if k2 % 4 == 0 then "#" else "") + (if k2 % 3 == 0 then "0" else "") + (w.band(63)).str + (if w % 7 == 0 then "," else "") + tys[k2 / 18 % 6]
+  n.format(spec)
+
+test built_specs = float_built(5, 12, 4, 3.75) == float_built(5, 12, 4, 3.75) and int_built(20, 9, 255).len >= 3

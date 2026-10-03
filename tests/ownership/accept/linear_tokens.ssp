@@ -1,0 +1,35 @@
+profile sys
+
+res type Ticket = {seat: Int}
+
+fn issue(seat: Int) -> Ticket
+= Ticket{seat}
+
+fn upgrade(t: Ticket) -> Ticket
+= do
+  Ticket{seat} = t
+  Ticket{seat: seat + 100}
+
+fn redeem(t: Ticket) -> Int
+= do
+  Ticket{seat} = t
+  seat
+
+fn route(c: Bool, t: Ticket) -> Int
+= if c then redeem(upgrade(t)) else redeem(t)
+
+fn cycle(n: Int) -> Int
+= do
+  var t = issue(5)
+  for i in 0..n
+    t := upgrade(t)
+  redeem(t)
+
+fn main() -> Unit ! log
+= do
+  log("a {route(true, issue(1))}")
+  log("b {route(false, issue(2))}")
+  log("c {cycle(3)}")
+
+test r = route(true, issue(3)) == 103
+test c = cycle(2) == 205

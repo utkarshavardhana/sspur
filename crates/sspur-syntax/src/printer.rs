@@ -373,7 +373,12 @@ fn stmt(s: &Stmt, ind: usize) -> String {
     match s {
         Stmt::Let(p, e) => format!("{} = {}", pat(p), expr(e, ind)),
         Stmt::Var(n, e) => format!("var {} = {}", n, expr(e, ind)),
-        Stmt::Assign(n, e, _) => format!("{} := {}", n, expr(e, ind)),
+        Stmt::Assign(n, e, _) => match &e.kind {
+            ExprKind::With(base, ups) if matches!(&base.kind, ExprKind::Name(b) if b == n) && ups.len() == 1 && ups[0].0.iter().all(|s| matches!(s, PathSeg::Field(_))) => {
+                format!("{n}.{} := {}", path(&ups[0].0, ind), expr(&ups[0].1, ind))
+            }
+            _ => format!("{} := {}", n, expr(e, ind)),
+        },
         Stmt::Expr(e) => expr(e, ind),
         Stmt::For(p, it, body) => match &body.kind {
             ExprKind::Block(stmts) => {

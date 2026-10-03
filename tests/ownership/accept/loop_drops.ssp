@@ -1,0 +1,29 @@
+profile sys
+
+res type Tmp = {n: Int} drop scrub
+
+fn scrub(t: Tmp) -> Unit ! log
+= log("scrub {t.n}")
+
+fn make(n: Int) -> Tmp ! log
+= do
+  log("make {n}")
+  Tmp{n}
+
+fn churn(k: Int) -> Int ! log, div
+= do
+  var total = 0
+  for i in 0..k
+    t = make(i)
+    total := total + t.n
+  var cur = make(100)
+  var j = 0
+  while j < 3
+    cur := make(cur.n + 1)
+    j := j + 1
+  total + cur.n
+
+fn main() -> Unit ! log, div
+= log("churn {churn(3)}")
+
+test c = churn(4) == 109

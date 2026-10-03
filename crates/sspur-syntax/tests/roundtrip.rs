@@ -1,4 +1,4 @@
-use sspur_syntax::{parse, print_module, visit::strip_spans};
+use sspur_syntax::{parse, print_module, visit::strip_spans, Def, Expr, ExprKind, Stmt};
 use std::path::Path;
 
 fn roundtrip(src: &str) {
@@ -13,16 +13,28 @@ fn roundtrip(src: &str) {
 
 #[test]
 fn roundtrip_programs() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs");
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests");
     let mut n = 0;
-    for entry in std::fs::read_dir(root).unwrap() {
-        let path = entry.unwrap().path();
-        if path.extension().is_some_and(|e| e == "ssp") {
-            roundtrip(&std::fs::read_to_string(&path).unwrap());
-            n += 1;
+    for dir in ["programs", "ownership/accept", "ownership/reject"] {
+        for entry in std::fs::read_dir(base.join(dir)).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "ssp") {
+                roundtrip(&std::fs::read_to_string(&path).unwrap());
+                n += 1;
+            }
         }
     }
-    assert!(n > 0);
+    assert!(n > 100);
+}
+
+#[test]
+fn field_assignment_is_sugar_for_with() {
+    let m = parse("fn f(p: P) -> P\n= do\n  var q = p\n  q.a.b := 1\n  q").unwrap();
+    let printed = print_module(&m);
+    assert!(printed.contains("  q.a.b := 1\n"), "{printed}");
+    let Def::Fn(f) = &m.defs[0] else { panic!() };
+    let ExprKind::Block(stmts) = &f.body.kind else { panic!() };
+    assert!(matches!(&stmts[1], Stmt::Assign(n, Expr { kind: ExprKind::With(..), .. }, _) if n == "q"));
 }
 
 #[test]

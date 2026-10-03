@@ -1,0 +1,29 @@
+profile sys
+
+res type Counter = {name: Str, hits: Int} drop report
+
+fn report(c: Counter) -> Unit ! log
+= log("{c.name}: {c.hits}")
+
+fn hit(c: &mut Counter, n: Int)
+= do
+  c.hits := c.hits + n
+  ()
+
+fn count(c: &Counter) -> Int
+= c.hits
+
+fn run() -> Int ! log
+= do
+  var a = Counter{name: "a", hits: 0}
+  var b = Counter{name: "b", hits: 5}
+  a.hit(3)
+  b.hit(a.count)
+  for i in 0..4
+    a.hit(i)
+  a.count + b.count
+
+fn main() -> Unit ! log
+= log("run {run()}")
+
+test r = run() == 17

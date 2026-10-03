@@ -1,0 +1,42 @@
+profile sys
+
+res type Ring = {p: Ptr[Int], cap: Int, head: Int, size: Int} drop ring_free
+
+fn ring_free(r: Ring)
+  unsafe "p is owned by the ring"
+= free(r.p)
+
+fn ring(cap: Int) -> Ring
+  unsafe "fresh allocation"
+= Ring{p: alloc(cap, 0), cap, head: 0, size: 0}
+
+fn enqueue(r: &mut Ring, x: Int) -> Bool
+  unsafe "the index is reduced modulo cap"
+= if r.size == r.cap then false else do
+  r.p.store((r.head + r.size) % r.cap, x)
+  r.size := r.size + 1
+  true
+
+fn dequeue(r: &mut Ring) -> Int
+  unsafe "head is below cap"
+= if r.size == 0 then -1 else do
+  x = r.p.load(r.head)
+  r.head := (r.head + 1) % r.cap
+  r.size := r.size - 1
+  x
+
+fn simulate(n: Int) -> Int
+= do
+  var q = ring(4)
+  var total = 0
+  for i in 0..n
+    ok = enqueue(&mut q, i)
+    if i % 3 == 2 then total := total + dequeue(&mut q) * i
+    if not ok then total := total + 1000
+  total + q.size
+
+fn main() -> Unit ! log
+= log("sim {simulate(10)} {simulate(40)}")
+
+test s = simulate(10) == simulate(10)
+test t = simulate(3) == 2

@@ -1,0 +1,40 @@
+profile sys
+
+type IoErr = Denied{fd: Int} | Broken
+
+res type Conn = {fd: Int} drop hangup
+
+fn hangup(c: Conn) -> Unit ! log
+= log("hangup {c.fd}")
+
+fn dial(fd: Int) -> Conn ! log, fail[IoErr]
+= do
+  if fd < 0 then raise Denied{fd}
+  log("dial {fd}")
+  Conn{fd}
+
+fn send(c: &Conn, n: Int) -> Int ! fail[IoErr]
+= if n > 100 then raise Broken else c.fd + n
+
+fn session(fd: Int, n: Int) -> Int ! log, fail[IoErr]
+= do
+  a = dial(fd)
+  b = dial(fd + 1)
+  x = send(&a, n)
+  y = send(&b, n * 2)
+  x + y
+
+fn safe(fd: Int, n: Int) -> Int ! log
+= catch session(fd, n)
+  | Denied{fd} => -fd
+  | Broken => -1
+
+fn main() -> Unit ! log
+= do
+  log("ok {safe(1, 5)}")
+  log("broken {safe(1, 60)}")
+  log("denied {safe(-3, 5)}")
+
+test ok = safe(1, 5) == 18
+test broken = safe(2, 70) == -1
+test denied = safe(-4, 1) == 4

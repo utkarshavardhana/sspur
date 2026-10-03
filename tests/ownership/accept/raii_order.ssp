@@ -1,0 +1,32 @@
+profile sys
+
+res type File = {name: Str, fd: Int} drop close
+
+fn close(f: File) -> Unit ! log
+= log("close {f.name}")
+
+fn open(name: Str, fd: Int) -> File ! log
+= do
+  log("open {name}")
+  File{name, fd}
+
+fn inner(n: Int) -> Int ! log
+= do
+  a = open("inner-a", n)
+  b = open("inner-b", n + 1)
+  a.fd + b.fd
+
+fn outer() -> Int ! log
+= do
+  x = open("x", 10)
+  y = do
+    t = open("t", 1)
+    t.fd + inner(5)
+  log("after block y={y}")
+  z = open("z", 3)
+  x.fd + y + z.fd
+
+fn main() -> Unit ! log
+= log("total {outer()}")
+
+test order = outer() == 25

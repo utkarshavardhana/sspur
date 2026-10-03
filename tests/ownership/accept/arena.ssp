@@ -1,0 +1,46 @@
+profile sys
+
+res type Arena = {base: Ptr[F64], cap: Int, used: Int} drop arena_free
+
+fn arena_free(a: Arena) -> Unit ! log
+  unsafe "base is owned by the arena"
+= do
+  log("arena used {a.used} of {a.cap}")
+  free(a.base)
+
+fn arena(cap: Int) -> Arena
+  unsafe "fresh allocation"
+= Arena{base: alloc(cap, 0.0), cap, used: 0}
+
+fn take(a: &mut Arena, n: Int) -> Int
+  pre n >= 0
+= if a.used + n > a.cap then -1 else do
+  at = a.used
+  a.used := a.used + n
+  at
+
+fn put(a: &mut Arena, at: Int, x: F64)
+  pre at >= 0 and at < a.cap
+  unsafe "at is checked by the precondition"
+= a.base.store(at, x)
+
+fn get(a: &Arena, at: Int) -> F64
+  pre at >= 0 and at < a.cap
+  unsafe "at is checked by the precondition"
+= a.base.load(at)
+
+fn mean_of_squares(n: Int) -> F64 ! log
+= do
+  var a = arena(64)
+  s = take(&mut a, n)
+  for i in 0..n
+    put(&mut a, s + i, (i * i).to_f64)
+  var acc = 0.0
+  for i in 0..n
+    acc := acc + get(&a, s + i)
+  acc / n.to_f64
+
+fn main() -> Unit ! log
+= log("mean {mean_of_squares(4)} {mean_of_squares(7)}")
+
+test m = mean_of_squares(4) == 3.5

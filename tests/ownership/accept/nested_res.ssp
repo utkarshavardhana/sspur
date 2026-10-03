@@ -1,0 +1,33 @@
+profile sys
+
+res type Sock = {port: Int} drop close_sock
+
+fn close_sock(s: Sock) -> Unit ! log
+= log("close sock {s.port}")
+
+res type Server = {main: Sock, admin: Sock, name: Str} drop stop
+
+fn stop(s: Server) -> Unit ! log
+= do
+  log("stop {s.name}")
+  Server{main, admin, name} = s
+  log("released {name}")
+
+fn port_of(s: &Sock) -> Int
+= s.port
+
+fn serve(name: Str) -> Int ! log
+= do
+  srv = Server{main: Sock{port: 80}, admin: Sock{port: 8080}, name}
+  port_of(&srv.main) + port_of(&srv.admin)
+
+fn rebuild() -> Int ! log
+= do
+  t = Server{main: Sock{port: 1}, admin: Sock{port: 2}, name: "t"}
+  n = serve("web")
+  n + t.main.port
+
+fn main() -> Unit ! log
+= log("rebuild {rebuild()}")
+
+test r = rebuild() == 8161

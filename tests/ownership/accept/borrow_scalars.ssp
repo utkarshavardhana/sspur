@@ -1,0 +1,36 @@
+profile sys
+
+fn inc(n: &mut Int, by: Int)
+= do
+  n := n + by
+  ()
+
+fn swap(a: &mut Int, b: &mut Int)
+= do
+  t = a
+  a := b
+  b := t
+  ()
+
+fn add3(n: &mut Int)
+= do
+  inc(n, 1)
+  inc(n, 2)
+  ()
+
+fn peek(n: &Int) -> Int
+= n * 2
+
+fn run(x0: Int, y0: Int) -> Int
+= do
+  var x = x0
+  var y = y0
+  inc(&mut x, 5)
+  swap(&mut x, &mut y)
+  add3(&mut y)
+  x * 100 + y + peek(&x)
+
+fn main() -> Unit ! log
+= log("run {run(1, 10)} {run(-4, 7)}")
+
+test r = run(1, 10) == 1029

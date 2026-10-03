@@ -1,0 +1,36 @@
+profile sys
+
+res type Buf = {p: Ptr[Int], len: Int} drop release
+
+fn release(b: Buf)
+  unsafe "p was allocated by make and is freed exactly once here"
+= free(b.p)
+
+fn make(n: Int) -> Buf
+  unsafe "allocation of n cells"
+= Buf{p: alloc(n, 0), len: n}
+
+fn set(b: &mut Buf, i: Int, v: Int)
+  pre i >= 0 and i < b.len
+  unsafe "i is checked against len by the precondition"
+= b.p.store(i, v)
+
+fn get(b: &Buf, i: Int) -> Int
+  pre i >= 0 and i < b.len
+  unsafe "i is checked against len by the precondition"
+= b.p.load(i)
+
+fn prefix_sums(n: Int) -> Int
+= do
+  var b = make(n)
+  for i in 0..n
+    set(&mut b, i, i + 1)
+  for i in 1..n
+    set(&mut b, i, get(&b, i) + get(&b, i - 1))
+  get(&b, n - 1)
+
+fn main() -> Unit ! log
+= log("sums {prefix_sums(5)} {prefix_sums(1000)}")
+
+test p = prefix_sums(5) == 15
+test q = prefix_sums(100) == 5050

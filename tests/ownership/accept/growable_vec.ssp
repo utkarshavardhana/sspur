@@ -1,0 +1,48 @@
+profile sys
+
+res type Vec = {p: Ptr[Int], len: Int, cap: Int} drop vec_free
+
+fn vec_free(v: Vec) -> Unit ! log
+  unsafe "p is owned by this Vec"
+= do
+  log("free cap={v.cap}")
+  free(v.p)
+
+fn vec_new() -> Vec
+  unsafe "fresh allocation"
+= Vec{p: alloc(2, 0), len: 0, cap: 2}
+
+fn push(v: &mut Vec, x: Int) -> Unit ! log
+  unsafe "copies len cells into a larger block, then frees the old one"
+= do
+  if v.len == v.cap then do
+    q = alloc(v.cap * 2, 0)
+    for i in 0..v.len
+      q.store(i, v.p.load(i))
+    free(v.p)
+    log("grow {v.cap} -> {v.cap * 2}")
+    v.p := q
+    v.cap := v.cap * 2
+  v.p.store(v.len, x)
+  v.len := v.len + 1
+  ()
+
+fn sum(v: &Vec) -> Int
+  unsafe "reads only below len"
+= do
+  var s = 0
+  for i in 0..v.len
+    s := s + v.p.load(i)
+  s
+
+fn build(n: Int) -> Int ! log
+= do
+  var v = vec_new()
+  for i in 0..n
+    push(&mut v, i * i)
+  sum(&v)
+
+fn main() -> Unit ! log
+= log("built {build(10)}")
+
+test b = build(10) == 285

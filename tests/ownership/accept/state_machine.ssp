@@ -1,0 +1,36 @@
+profile sys
+
+type Phase = Idle | Busy{job: Int} | Done
+
+res type Worker = {id: Int, phase: Phase, load: Int where _ >= 0} drop retire
+
+fn retire(w: Worker) -> Unit ! log
+= log("retire {w.id} in {w.phase} load {w.load}")
+
+fn assign(w: &mut Worker, job: Int) -> Bool
+= match w.phase
+  | Idle => do
+    w.phase := Busy{job}
+    w.load := w.load + job
+    true
+  | _ => false
+
+fn finish(w: &mut Worker)
+= do
+  w.phase := Done
+  ()
+
+fn shift(jobs: List[Int]) -> Int ! log
+= do
+  var a = Worker{id: 1, phase: Idle, load: 0}
+  var b = Worker{id: 2, phase: Idle, load: 0}
+  var placed = 0
+  for j in jobs
+    if assign(&mut a, j) then placed := placed + 1 else if assign(&mut b, j) then placed := placed + 1
+  finish(&mut a)
+  placed * 10 + a.load + b.load
+
+fn main() -> Unit ! log
+= log("shift {shift([3, 4, 5])}")
+
+test s = shift([3, 4, 5]) == 27

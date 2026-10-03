@@ -1,0 +1,52 @@
+profile sys
+
+res type Mat = {p: Ptr[F64], n: Int} drop mat_free
+
+fn mat_free(m: Mat)
+  unsafe "p is owned by the matrix"
+= free(m.p)
+
+fn mat(n: Int, x: F64) -> Mat
+  unsafe "n*n cells"
+= Mat{p: alloc(n * n, x), n}
+
+fn at(m: &Mat, i: Int, j: Int) -> F64
+  unsafe "callers stay below n"
+= m.p.load(i * m.n + j)
+
+fn set(m: &mut Mat, i: Int, j: Int, x: F64)
+  unsafe "callers stay below n"
+= m.p.store(i * m.n + j, x)
+
+fn identity_plus(n: Int) -> Mat
+= do
+  var m = mat(n, 0.5)
+  for i in 0..n
+    set(&mut m, i, i, 1.5)
+  m
+
+fn mul(a: &Mat, b: &Mat) -> Mat
+= do
+  n = a.n
+  var c = mat(n, 0.0)
+  for i in 0..n
+    for j in 0..n
+      var s = 0.0
+      for k in 0..n
+        s := s + at(a, i, k) * at(b, k, j)
+      set(&mut c, i, j, s)
+  c
+
+fn trace_of_square(n: Int) -> F64
+= do
+  m = identity_plus(n)
+  sq = mul(&m, &m)
+  var t = 0.0
+  for i in 0..n
+    t := t + at(&sq, i, i)
+  t
+
+fn main() -> Unit ! log
+= log("trace {trace_of_square(3)} {trace_of_square(8)}")
+
+test t = trace_of_square(2) == 5.0

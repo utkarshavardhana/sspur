@@ -1,0 +1,26 @@
+profile sys
+
+res type Logger = {prefix: Str, lines: Int} drop flush
+
+fn flush(l: Logger) -> Unit ! log
+= log("{l.prefix}flushed {l.lines} lines")
+
+fn say(l: &mut Logger, msg: Str) -> Unit ! log
+= do
+  log("{l.prefix}{msg}")
+  l.lines := l.lines + 1
+  ()
+
+fn chatter(n: Int) -> Int ! log
+= do
+  var lg = Logger{prefix: "[app] ", lines: 0}
+  var words = []
+  for i in 0..n
+    words := words.push("w{i}")
+    if i % 50 == 0 then say(&mut lg, words.join(",").take(12))
+  lg.lines
+
+fn main() -> Unit ! log
+= log("lines {chatter(200)}")
+
+test c = chatter(120) == 3

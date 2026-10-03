@@ -1,0 +1,29 @@
+profile sys
+
+res type Handle = {id: Int} drop fin
+
+fn fin(r: Handle) -> Unit ! log
+= log("fin {r.id}")
+
+fn hold(r: Handle) -> Int ! log
+= r.id * 2
+
+fn run(c: Bool) -> Int ! log
+= do
+  a = Handle{id: 1}
+  b = Handle{id: 2}
+  c2 = Handle{id: 3}
+  drop(b)
+  log("dropped b")
+  leak(c2)
+  n = if c then hold(a) else 0
+  log("end n={n}")
+  n
+
+fn main() -> Unit ! log
+= do
+  log("run {run(true)}")
+  log("run {run(false)}")
+
+test t = run(true) == 2
+test f = run(false) == 0

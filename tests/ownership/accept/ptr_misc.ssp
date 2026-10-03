@@ -1,0 +1,35 @@
+profile sys
+
+fn flags(n: Int) -> Int
+  unsafe "all offsets stay inside the block"
+= do
+  p = alloc(n, false)
+  for i in 0..n
+    if i % 3 == 0 then p.store(i, true)
+  q = p.offset(1)
+  var c = 0
+  for i in 0..n - 1
+    if q.load(i) then c := c + 1
+  free(p)
+  c
+
+fn none_ptr() -> Ptr[Int]
+= null()
+
+fn nulls() -> Int
+= if none_ptr().is_null then 1 else 0
+
+fn same_block() -> Bool
+  unsafe "the block is freed before returning"
+= do
+  p = alloc(4, 7)
+  same = p.offset(2) == p.offset(1).offset(1)
+  free(p)
+  same
+
+fn main() -> Unit ! log
+= log("flags {flags(10)} nulls {nulls()} same {same_block()}")
+
+test f = flags(10) == 3
+test n = nulls() == 1
+test s = same_block()

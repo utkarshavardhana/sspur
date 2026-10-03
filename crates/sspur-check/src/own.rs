@@ -996,6 +996,15 @@ impl<'a> A<'a> {
     fn stmt(&mut self, s: &Stmt, u: Use) -> K {
         match s {
             Stmt::Expr(e) => self.expr(e, u),
+            Stmt::Let(p @ Pat::Ctor { .. }, Expr { kind: ExprKind::Name(n), span }) if self.local(n).is_some_and(|l| l.self_param && l.st == St::Live) => {
+                let (d, i) = self.lookup(n).unwrap();
+                let kind = self.st.scopes[d][i].kind.clone();
+                if !self.st.dead {
+                    self.st.scopes[d][i].st = St::Moved;
+                }
+                self.bind_pat(p, &kind, false, *span);
+                K::Plain
+            }
             Stmt::Let(p, e) => {
                 let k = self.expr(e, Use::Move);
                 let k = if matches!(k, K::Borrow(..)) { K::Plain } else { k };

@@ -1,0 +1,38 @@
+profile sys
+
+res type Lock = {id: Int} drop unlock
+
+fn unlock(l: Lock) -> Unit ! log
+= log("unlock {l.id}")
+
+fn lock(id: Int) -> Lock ! log
+= do
+  log("lock {id}")
+  Lock{id}
+
+fn find(xs: List[Int], k: Int) -> Int ! log
+= do
+  g = lock(1)
+  for x in xs
+    if x == k then return x * 10
+  h = lock(2)
+  -1
+
+fn pick(c: Bool) -> Lock ! log
+= do
+  a = lock(3)
+  b = lock(4)
+  if c then return a
+  b
+
+fn main() -> Unit ! log
+= do
+  log("found {find([1, 2, 3], 2)}")
+  log("found {find([1, 2, 3], 9)}")
+  p = pick(true)
+  log("picked {p.id}")
+  q = pick(false)
+  log("picked {q.id}")
+
+test hit = find([5, 6], 6) == 60
+test miss = find([5, 6], 7) == -1

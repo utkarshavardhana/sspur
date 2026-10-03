@@ -403,6 +403,9 @@ static inline uint64_t hash_S(Str s) {
 static inline int str_eq(Str a, Str b) { return a.len == b.len && (a.p == b.p || memcmp(a.p, b.p, (size_t)a.len) == 0); }
 static inline uint64_t hash_D(double v) { return hmix((uint64_t)dkey(v)); }
 static inline int cmp_S(Str a, Str b) { int64_t n = a.len < b.len ? a.len : b.len; int c = n ? memcmp(a.p, b.p, (size_t)n) : 0; if (c) return c < 0 ? -1 : 1; return cmp_I(a.len, b.len); }
+static int cmp_I_p(const void* a, const void* b) { return cmp_I(*(const int64_t*)a, *(const int64_t*)b); }
+static int cmp_D_p(const void* a, const void* b) { return cmp_D(*(const double*)a, *(const double*)b); }
+static int cmp_S_p(const void* a, const void* b) { return cmp_S(*(const Str*)a, *(const Str*)b); }
 static Str str_cat(Str a, Str b) { if (!b.len) return a; if (!a.len) return b; char* p = (char*)sspur_alloc_atomic((size_t)(a.len + b.len)); memcpy(p, a.p, (size_t)a.len); memcpy(p + a.len, b.p, (size_t)b.len); return (Str){a.len + b.len, p}; }
 static int64_t utf8_len(Str s) { int64_t n = 0; for (int64_t i = 0; i < s.len; i++) if (((unsigned char)s.p[i] & 0xC0) != 0x80) n++; return n; }
 static int64_t utf8_next(Str s, int64_t i) { i++; while (i < s.len && ((unsigned char)s.p[i] & 0xC0) == 0x80) i++; return i; }

@@ -31,6 +31,7 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `for
 ## Expressions
 - `if c then a else b`; `then do` / `else do` + indented block.
 - `match e` then arms on following lines: `| Pat => e`, `| Pat if cond => e`. Patterns: `_`, name, literal, tuple, `Ctor`, `Ctor{f, g: pat}`, `some(p)`, `none`, `ok(p)`, `err(p)`. Must be exhaustive.
+- Effects: `effect ask() -> Int` declares an operation; callers declare `! ask`. `handle e` + arms `| ask() => resume(21)` handle it (each arm resumes at most once; optional `| return(r) =>`; an arm that doesn't resume ends the `handle`). A fn with `! yield[T]` calling `yield(x)` is a generator; `for v in gen()` consumes it.
 - Errors: `raise Ctor{..}`. `catch e` + arms like match handles them; a catch over every variant removes `fail[E]`.
 - Records `Item{sku: "a", qty: 1}`, shorthand `Item{sku, qty}`; update `x with qty := 2, a.b := 3, xs[0] := v`.
 - Lambdas `x => e`, `(a, b) => e`, single expression. `_` makes the innermost call argument a lambda: `xs.map(_.qty * _.p)` is `x => x.qty * x.p`, `sort_by((-_.n, _.name))`; in `f(g(_.a))` it binds inside `g`, so write `x => f(g(x.a))`.

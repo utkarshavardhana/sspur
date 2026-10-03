@@ -17,3 +17,9 @@ sspur-native = { path = "crates/sspur-native" }
 blake3 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

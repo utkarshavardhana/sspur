@@ -318,3 +318,17 @@ pub(super) fn tail_calls(e: &Expr, name: &str, out: &mut Spans) {
         _ => {}
     }
 }
+
+impl Cx<'_> {
+    pub(super) fn inner_capture(&mut self, i: usize, cv: &str, outer: &HashMap<String, (String, String)>) -> String {
+        match outer.get(cv) {
+            Some((_, ct)) => {
+                let cell = format!("(*e_->c{i})");
+                self.mutable.insert(cell.clone());
+                self.boxed.insert(cell.clone(), (format!("e_->c{i}"), ct.clone()));
+                cell
+            }
+            None => format!("e_->c{i}"),
+        }
+    }
+}

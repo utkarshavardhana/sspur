@@ -789,6 +789,9 @@ struct Cx<'a> {
     hit_ok: bool,
     tail_spans: own::Spans,
     tail_split: bool,
+    box_names: HashSet<String>,
+    boxed: HashMap<String, (String, String)>,
+    preboxed: Vec<HashSet<String>>,
 }
 
 impl<'a> Cx<'a> {
@@ -839,6 +842,9 @@ impl<'a> Cx<'a> {
             hit_ok: false,
             tail_spans: own::Spans::new(),
             tail_split: false,
+            box_names: HashSet::new(),
+            boxed: HashMap::new(),
+            preboxed: Vec::new(),
         }
     }
 
@@ -1449,7 +1455,23 @@ impl<'a> Cx<'a> {
     }
 
     fn function(&mut self, f: &FnDef, params: &[Type], ret: &Type, fidx: usize, cname: &str) -> G {
-        self.function_in(f, params, ret, fidx, cname, None)
+        self.box_names.clear();
+        loop {
+            let snap = self.snapshot();
+            self.boxed.clear();
+            self.preboxed.clear();
+            let r = self.function_in(f, params, ret, fidx, cname, None);
+            let Err(e) = &r else { return r };
+            let name = ["lambda captures mutable variable '", "local function captures mutable variable '"]
+                .iter()
+                .find_map(|p| e.strip_prefix(p))
+                .and_then(|x| x.strip_suffix('\''))
+                .map(str::to_string);
+            match name {
+                Some(n) if self.box_names.insert(n.clone()) => self.restore(snap),
+                _ => return r,
+            }
+        }
     }
 
     fn function_in(&mut self, f: &FnDef, params: &[Type], ret: &Type, fidx: usize, cname: &str, env: Option<(String, Scope)>) -> G {
@@ -1671,7 +1693,7 @@ impl<'a> Cx<'a> {
                 continue;
             }
             if let Some((c, t)) = self.lookup(&n) {
-                if self.mutable.contains(&c) {
+                if self.mutable.contains(&c) && !self.boxed.contains_key(&c) {
                     return Err(format!("lambda captures mutable variable '{n}'"));
                 }
                 captures.push((n, c, t));
@@ -1680,8 +1702,11 @@ impl<'a> Cx<'a> {
         let id = self.fresh("lam");
         let env = format!("ENV_{id}");
         let mut fields = String::new();
-        for (i, (_, _, t)) in captures.iter().enumerate() {
-            let c = self.cty(t)?;
+        for (i, (_, cv, t)) in captures.iter().enumerate() {
+            let c = match self.boxed.get(cv) {
+                Some((_, ct)) => format!("{ct}*"),
+                None => self.cty(t)?,
+            };
             write!(fields, "{c} c{i}; ").unwrap();
         }
         writeln!(self.defs, "struct {env} {{ {fields}char pad_; }};").unwrap();
@@ -1693,14 +1718,16 @@ impl<'a> Cx<'a> {
         let saved_know = std::mem::take(&mut self.know);
         let saved_hit = std::mem::replace(&mut self.hit_ok, false);
         let mut scope = HashMap::new();
-        for (i, (n, _, t)) in captures.iter().enumerate() {
-            scope.insert(n.clone(), (format!("e_->c{i}"), t.clone()));
+        let saved_boxed = self.boxed.clone();
+        for (i, (n, cv, t)) in captures.iter().enumerate() {
+            scope.insert(n.clone(), (self.inner_capture(i, cv, &saved_boxed), t.clone()));
         }
         for (i, (p, t)) in params.iter().zip(ps).enumerate() {
             scope.insert(p.clone(), (format!("a{i}"), t.clone()));
         }
         self.scopes = vec![scope];
         let b = self.expr(body);
+        self.boxed = saved_boxed;
         self.scopes = saved_scopes;
         self.catch_stack = saved_catch;
         self.know = saved_know;
@@ -1711,6 +1738,7 @@ impl<'a> Cx<'a> {
         let fc = self.cty(ft)?;
         let mut s = format!("({{ struct {env}* ev_ = (struct {env}*)sspur_alloc(sizeof(struct {env})); ");
         for (i, (_, c, _)) in captures.iter().enumerate() {
+            let c = self.boxed.get(c).map_or(c.as_str(), |(p, _)| p.as_str());
             write!(s, "ev_->c{i} = {c}; ").unwrap();
         }
         write!(s, "({fc}){{{id}, ev_}}; }})").unwrap();
@@ -2910,8 +2938,10 @@ impl<'a> Cx<'a> {
             let mut used = Vec::new();
             for x in f.pres.iter().chain(f.posts.iter()).chain([&f.body]) {
                 visit::walk_expr(x, &mut |e| {
-                    if let ExprKind::Name(n) = &e.kind {
-                        used.push(n.clone());
+                    match &e.kind {
+                        ExprKind::Name(n) => used.push(n.clone()),
+                        ExprKind::Block(stmts) => used.extend(stmts.iter().filter_map(|s| if let Stmt::Assign(n, _, _) = s { Some(n.clone()) } else { None })),
+                        _ => {}
                     }
                     true
                 });
@@ -2921,7 +2951,7 @@ impl<'a> Cx<'a> {
                     continue;
                 }
                 if let Some((c, t)) = self.lookup(&n) {
-                    if self.mutable.contains(&c) {
+                    if self.mutable.contains(&c) && !self.boxed.contains_key(&c) {
                         return Err(format!("local function captures mutable variable '{n}'"));
                     }
                     captures.push((n, c, t));
@@ -2931,8 +2961,11 @@ impl<'a> Cx<'a> {
         let gid = self.fresh("lg");
         let env = format!("ENV_{gid}");
         let mut fields = String::new();
-        for (i, (_, _, t)) in captures.iter().enumerate() {
-            let c = self.cty(t)?;
+        for (i, (_, cv, t)) in captures.iter().enumerate() {
+            let c = match self.boxed.get(cv) {
+                Some((_, ct)) => format!("{ct}*"),
+                None => self.cty(t)?,
+            };
             write!(fields, "{c} c{i}; ").unwrap();
         }
         writeln!(self.defs, "struct {env} {{ {fields}char pad_; }};").unwrap();
@@ -2947,8 +2980,9 @@ impl<'a> Cx<'a> {
             infos.push(((*f).clone(), ps, r, ft, cl, lname));
         }
         let mut inner_scope = HashMap::new();
-        for (i, (n, _, t)) in captures.iter().enumerate() {
-            inner_scope.insert(n.clone(), (format!("e_->c{i}"), t.clone()));
+        let saved_boxed = self.boxed.clone();
+        for (i, (n, cv, t)) in captures.iter().enumerate() {
+            inner_scope.insert(n.clone(), (self.inner_capture(i, cv, &saved_boxed), t.clone()));
         }
         for (f, _, _, ft, cl, lname) in &infos {
             inner_scope.insert(f.name.clone(), (format!("(({cl}){{{lname}, env}})"), ft.clone()));
@@ -2977,12 +3011,14 @@ impl<'a> Cx<'a> {
         self.fname = saved_name;
         self.inplace = saved_inplace;
         self.know = saved_know;
+        self.boxed = saved_boxed;
         (self.own_fn, self.own_spans, self.fn_has_catch) = saved_own;
         (self.fn_decls, self.hits, self.hit_ok) = saved_hits;
         out?;
         let gv = self.fresh("gv");
         let mut s = format!("struct {env}* {gv} = (struct {env}*)sspur_alloc(sizeof(struct {env})); ");
         for (i, (_, c, _)) in captures.iter().enumerate() {
+            let c = self.boxed.get(c).map_or(c.as_str(), |(p, _)| p.as_str());
             write!(s, "{gv}->c{i} = {c}; ").unwrap();
         }
         for (f, _, _, ft, cl, lname) in &infos {
@@ -2995,15 +3031,50 @@ impl<'a> Cx<'a> {
         self.scopes.push(HashMap::new());
         let mark = self.know.facts.len();
         let mut s = String::from("({ ");
-        match self.local_group(stmts) {
-            Ok(g) => s.push_str(&g),
-            Err(e) => {
-                self.scopes.pop();
-                return Err(e);
-            }
+        let mut pre = HashSet::new();
+        for (i, st) in stmts.iter().enumerate() {
+            if let Stmt::Var(v, init) = st
+                && self.box_names.contains(v) && !pre.contains(v) {
+                    if stmts[..i].iter().any(|x| stmt_mentions(x, v)) {
+                        self.scopes.pop();
+                        return Err(format!("cannot box variable '{v}'"));
+                    }
+                    let t = match self.ty(init) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            self.scopes.pop();
+                            return Err(e);
+                        }
+                    };
+                    let c = self.cty(&t)?;
+                    let bx = self.fresh("bx");
+                    write!(s, "{c}* {bx} = ({c}*)sspur_alloc(sizeof({c})); ").unwrap();
+                    let cell = format!("(*{bx})");
+                    self.scopes.last_mut().unwrap().insert(v.clone(), (cell.clone(), t));
+                    self.mutable.insert(cell.clone());
+                    self.boxed.insert(cell, (bx, c));
+                    pre.insert(v.clone());
+                }
         }
+        self.preboxed.push(pre);
+        let first_fn = stmts.iter().position(|x| matches!(x, Stmt::Fn(_)));
+        let fn_names: Vec<&str> = stmts.iter().filter_map(|x| if let Stmt::Fn(f) = x { Some(f.name.as_str()) } else { None }).collect();
+        let group_at = match first_fn {
+            Some(k) if !stmts[..k].iter().any(|x| fn_names.iter().any(|n| stmt_mentions(x, n))) => k,
+            _ => 0,
+        };
         let n = stmts.len();
         for (i, st) in stmts.iter().enumerate() {
+            if i == group_at {
+                match self.local_group(stmts) {
+                    Ok(g) => s.push_str(&g),
+                    Err(e) => {
+                        self.scopes.pop();
+                        self.preboxed.pop();
+                        return Err(e);
+                    }
+                }
+            }
             let last = i + 1 == n;
             if let Stmt::Var(v, init) = st
                 && is_fresh_map(init) && var_linear(&stmts[i + 1..], v) {
@@ -3038,6 +3109,7 @@ impl<'a> Cx<'a> {
             }
         }
         self.scopes.pop();
+        self.preboxed.pop();
         self.know.facts.truncate(mark);
         s.push_str("})");
         Ok(s)
@@ -3061,6 +3133,11 @@ impl<'a> Cx<'a> {
                     write!(out, "__auto_type {c} = {expr}; ").unwrap();
                 }
                 Ok(out)
+            }
+            Stmt::Var(n, e) if self.preboxed.last().is_some_and(|p| p.contains(n)) => {
+                let v = self.expr(e)?;
+                let (cell, _) = self.lookup(n).ok_or("lost boxed variable")?;
+                Ok(format!("{cell} = {v}; "))
             }
             Stmt::Var(n, e) => {
                 let t = self.ty(e)?;
@@ -3178,6 +3255,20 @@ impl<'a> Cx<'a> {
         write!(s, "{w}; }})").unwrap();
         Ok(s)
     }
+}
+
+fn stmt_mentions(s: &Stmt, v: &str) -> bool {
+    let e = Expr::new(ExprKind::Block(vec![s.clone()]), Span::default());
+    let mut found = false;
+    visit::walk_expr(&e, &mut |x| {
+        match &x.kind {
+            ExprKind::Name(n) if n == v => found = true,
+            ExprKind::Block(stmts) if stmts.iter().any(|s| matches!(s, Stmt::Assign(n, _, _) if n == v)) => found = true,
+            _ => {}
+        }
+        !found
+    });
+    found
 }
 
 fn mentions_method(e: &Expr, m: &str) -> bool {

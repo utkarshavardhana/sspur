@@ -63,13 +63,18 @@ fn boot(target: &str, elf: &Path) -> (String, Option<i32>) {
 }
 
 fn boots(target: &str, example: &str, expect: &str) {
+    boots_with(target, &format!("examples/bare/{example}.ssp"), expect, 0);
+}
+
+fn boots_with(target: &str, path: &str, expect: &str, status: i32) {
+    let example = Path::new(path).file_stem().unwrap().to_string_lossy().into_owned();
     let d = scratch(&format!("{target}-{example}"));
     let elf = d.join("kernel.elf");
-    if build(target, &root().join(format!("examples/bare/{example}.ssp")), &elf).is_none() {
+    if build(target, &root().join(path), &elf).is_none() {
         return;
     }
     let (out, code) = boot(target, &elf);
-    assert_eq!(code, Some(0), "{target} {example}: exit {code:?}, output {out:?}");
+    assert_eq!(code, Some(status), "{target} {example}: exit {code:?}, output {out:?}");
     assert_eq!(out, expect, "{target} {example}");
     let _ = std::fs::remove_dir_all(&d);
 }
@@ -92,6 +97,13 @@ fn timer_interrupt_on_riscv64() {
 #[test]
 fn timer_interrupt_on_aarch64() {
     boots("aarch64-qemu", "timer", "arming timer\ntimer interrupt\n");
+}
+
+#[test]
+fn records_options_tuples_generics_and_drops_on_both_targets() {
+    for target in ["riscv64-qemu", "aarch64-qemu"] {
+        boots_with(target, "tests/bare/values.ssp", "107581\n7", 42);
+    }
 }
 
 const TRAP: &str = "profile bare

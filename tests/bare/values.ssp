@@ -1,0 +1,43 @@
+profile bare
+
+type Pt = {x: Int, y: Int}
+
+res type Guard = {id: Int} drop release
+
+fn putc(c: Int) ! mmio
+= if arch() == "riscv64" then mmio[U8](0x10000000).write(c) else mmio[U32](0x09000000).write(c)
+
+fn digit(n: Int) ! mmio
+= putc(48 + n % 10)
+
+fn release(g: Guard) ! mmio
+= digit(g.id)
+
+fn pick[T](a: T, b: T, first: Bool) -> T
+= if first then a else b
+
+fn find(n: Int) -> Opt[Int]
+= if n > 3 then some(n * 2) else none
+
+fn swap(t: (Int, Int)) -> (Int, Int)
+= (t.1, t.0)
+
+fn main() -> Int ! mmio
+= do
+  g = Guard{id: 7}
+  p = Pt{x: 1, y: 2}
+  q = p with x := 5
+  same = if p == Pt{x: 1, y: 2} then 1 else 0
+  o = match find(5)
+    | some(v) => v
+    | none => 0
+  (a, b) = swap((3, 4))
+  k = pick(2 ** 3, 1, true)
+  digit(same)
+  digit(o)
+  digit(a + b)
+  digit(q.x)
+  digit(k)
+  if "ab" == "ab" then digit(1) else digit(0)
+  putc(10)
+  42

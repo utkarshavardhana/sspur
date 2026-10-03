@@ -93,8 +93,8 @@ fn rdtsc() -> U64 ! unsafe
 - Portable vectors `Vec[F32, 8]`, auto-vectorization, and generated function multi-versioning (one build, best path per CPU).
 - Intrinsics live under `intr.*` per architecture.
 - Inline assembly has typed operands and explicit clobbers, under `unsafe`.
-- `Volatile[T]` and the `mmio` effect cover memory-mapped I/O.
-- `@interrupt(vec)` handlers in `bare`.
+- `Volatile[T]` and the `mmio` effect cover memory-mapped I/O. Implemented as `mmio[U32](addr)` with `.read` and `.write(v)` (ADR 0017).
+- Interrupt handlers in `bare`, written as an `interrupt vec` clause line (ADR 0017).
 - Float semantics are strict IEEE 754 by default. `@fastmath` opts in per node.
 
 ## 8. Compile-time execution and metaprogramming

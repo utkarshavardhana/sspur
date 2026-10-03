@@ -257,6 +257,59 @@ fn run() -> Int ! log
 | `unsafe` | Declare `! unsafe`, or discharge it with an `unsafe "reason"` line after the signature (reported as `A_UNSAFE`). Otherwise `E_UNSAFE` |
 | Tasks | A `par` task can't use a resource or borrow from outside it (`E_PAR_SHARE`); move resources between tasks with `c.send(x)` and receive them with `for x in c` |
 
+## Bare profile (`bare`)
+
+A first line `profile bare` is for kernels, firmware and bootloaders (ADR 0017). All `sys` rules apply, and there is no runtime: no GC heap, no host log, no threads, no error runtime.
+
+```
+profile bare
+
+fn putc(c: Int) ! mmio, div
+= do
+  lsr = mmio[U8](0x10000005)
+  while lsr.read.band(0x20) == 0
+    ()
+  mmio[U8](0x10000000).write(c)
+
+fn puts(s: Str) ! mmio, div
+= do
+  for i in 0..s.byte_len
+    putc(s.byte(i))
+
+fn tick() ! mmio, div
+  interrupt timer
+= do
+  puts("tick\n")
+  halt(0)
+
+fn main() ! mmio, div
+= do
+  puts("hello from sspur\n")
+  timer_start(tick_hz() / 100)
+  while true
+    wait_irq()
+```
+
+| Feature | Rules |
+|---|---|
+| Allowed values | `Int`, `Bool`, `Unit`, records and tuples of them, `Opt`, `res` types, `Ptr`, `Mmio[W]`, and static `Str` literals with `len byte_len byte(i) is_empty` and `==`. Everything else is `E_PROFILE_BARE`: lists, maps, sum types (heap-allocated), lambdas and function values, local functions, `F64`, interpolation, string concatenation, `.str`, `alloc`/`free`, `log`, `raise`/`catch`/`fail`, `par`, atomics, channels, effect handlers, externs, stores and services |
+| Effects | `div`, `unsafe` and `mmio` only |
+| `mmio[W](addr)` | A volatile register of width `W` (`U8 U16 U32 U64`, else `E_MMIO_WIDTH`). `r.read` gives an `Int` (zero-extended) and `r.write(v)` stores the low `W` bits. Both perform `mmio` |
+| `interrupt v` | A clause line after the signature of `fn h()` (no parameters, `Unit`) makes `h` the handler for vector `v`: `timer`, or the target's number (riscv64 `mcause` code, aarch64 GIC INTID). Wrong shape is `E_INTERRUPT_SIG`, an unknown vector `E_INTERRUPT_VEC`, a second handler `E_INTERRUPT_DUP`. Handlers run with interrupts masked; the timer is one-shot and is disarmed before its handler runs |
+| Builtins | `timer_start(ticks)` arms the one-shot timer and enables its interrupt; `tick_hz()`, `ticks()`; `irq_enable(n)` unmasks line `n` and enables interrupts; `wait_irq()` (`wfi`); `halt(code)` powers off with exit status `code`; `arch()` is `"riscv64"`, `"aarch64"`, or `"host"` in the interpreter. All but `tick_hz` and `arch` perform `mmio` |
+| `main` | `fn main()` or `fn main() -> Int`; returning halts with status 0 or the result |
+| Traps | Contract failures, overflow and other traps call `fn on_trap(code: Int)` if defined, then halt with status 64 + code (65 is integer overflow). An unexpected CPU exception halts with 63. Drops don't run |
+| Tests | Tests run on the host; pure functions work as usual, and performing `mmio` in a test is `E_PROFILE_BARE`. `sspur run` traps at the first hardware access |
+
+`sspur build --target riscv64-qemu|aarch64-qemu file.ssp -o kernel.elf` writes `kernel.elf.build/` with `kernel.c` (freestanding C), `start.S` and `link.ld`, compiles with clang (`-ffreestanding -nostdlib`) and links with `ld.lld`. It needs a clang with the target's backend (Apple's clang has no riscv64; set `SSPUR_BARE_CC` or install LLVM) and prints the QEMU command:
+
+| Target | Machine | Load address | Console | Power off |
+|---|---|---|---|---|
+| `riscv64-qemu` | `virt -bios none`, M-mode | `0x80000000` | NS16550 at `0x10000000` | SiFive test device |
+| `aarch64-qemu` | `virt -cpu cortex-a53 -semihosting`, EL1 | `0x40100000` | PL011 at `0x09000000` | semihosting `SYS_EXIT`, then PSCI |
+
+`sspur fmt` prints integer literals in decimal, so `0x10000000` becomes `268435456`.
+
 ## Services
 
 ```
@@ -327,11 +380,11 @@ Global: `log(Str)`, `some(x)`, `ok(x)`, `err(e)`, `empty_map()`, `min(a, b)`, `m
 | Receiver | Methods |
 |---|---|
 | `List[A]` | `len is_empty map flat_map filter fold(init, (acc, x) => ..) any all find sort_by(key) sum push(x) concat(ys) take(n) drop(n) reverse sort unique contains(x) first last get(i) min max counts zip(ys) enumerate join(sep)` |
-| `Str` | `len is_empty lower upper trim split(sep) words chars take(n) drop(n) reverse get(i) first last contains starts_with ends_with replace(a, b) repeat(n) to_int is_alpha` (single characters are `Str`) |
+| `Str` | `len is_empty lower upper trim split(sep) words chars take(n) drop(n) reverse get(i) first last contains starts_with ends_with replace(a, b) repeat(n) to_int is_alpha byte_len byte(i)` (single characters are `Str`; `byte(i)` is the UTF-8 byte at `i`, and traps out of range) |
 | `Opt[A]` | `or(default) is_some is_none get map(f) ok_or(err)` (`ok_or` raises `err` when the option is `none`; `get` traps on `none`) |
 | `Res[A, E]` | `is_ok get` (`get` raises the error) |
 | `Map[K, V]` | `get(k) put(k, v) remove(k) has(k) keys values items len` (immutable: `put` returns a new map) |
-| `Int` | `abs to_f64` |
+| `Int` | `abs to_f64 band(m) bor(m) bxor(m) shl(n) shr(n)` (bitwise on the 64-bit pattern; `shr` is logical; a shift outside `0..63` gives 0) |
 | `F64` | `abs round floor sqrt` |
 | any value | `str` (display string) |
 
@@ -339,7 +392,7 @@ Notes: `first`, `last`, `get`, `min`, `max`, and `find` return `Opt`. `counts` r
 
 ## CLI and agent tools
 
-`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local file`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. `sspur bind header.h` generates extern declarations.
+`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local file`, `sspur build --target riscv64-qemu|aarch64-qemu file -o kernel.elf`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. `sspur bind header.h` generates extern declarations.
 
 `sspur fuzz` turns contracts into property tests. It generates inputs that satisfy `pre` and `where`, then reports shrunk counterexamples for any `post` violation or trap.
 

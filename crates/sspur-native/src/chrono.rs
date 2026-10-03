@@ -90,7 +90,7 @@ pub fn dur_str(d: i64) -> String {
         }
         s += &sec.to_string();
         if ms > 0 {
-            s += &format!(".{ms:03}").trim_end_matches('0').to_string();
+            s += format!(".{ms:03}").trim_end_matches('0');
         }
         s.push('s');
     }

@@ -176,7 +176,7 @@ impl Ord for Value {
             (Chan(a), Chan(b)) => a.id.cmp(&b.id),
             (Time(a), Time(b)) | (Dur(a), Dur(b)) => a.cmp(b),
             (Bits(n, a), Bits(m, b)) => n.cmp(m).then_with(|| a.cmp(b)),
-            (Big(a), Big(b)) => a.cmp(b),
+            (Big(a), Big(b)) => a.compare(b),
             (Regex(a), Regex(b)) => a.src.cmp(&b.src),
             (Dec(a, sa), Dec(b, sb)) => crate::stdbig::dec_order(a, *sa, b, *sb),
             _ => self.rank().cmp(&other.rank()),

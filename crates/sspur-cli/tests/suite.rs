@@ -336,3 +336,83 @@ test t_ok = chunk(2) == 2 and g(12, 18) == 6 and unwrap(\"5\") == 5
     assert!(!native.contains("interp "), "{native}");
     assert_eq!(outputs[0], outputs[1]);
 }
+
+fn assert_trap_parity(tag: &str, src: &str, expected: &[&str]) {
+    let path = std::env::temp_dir().join(format!("sspur_{tag}_{}.ssp", std::process::id()));
+    std::fs::write(&path, src).unwrap();
+    let mut outputs = Vec::new();
+    for mode in ["--interp", "--release"] {
+        let out = std::process::Command::new(env!("CARGO_BIN_EXE_sspur")).arg("test").arg(mode).arg(&path).output().unwrap();
+        let out = String::from_utf8(out.stdout).unwrap();
+        for line in expected {
+            assert!(out.lines().any(|l| l == *line), "{mode}: missing {line:?} in\n{out}");
+        }
+        outputs.push(out);
+    }
+    let native = std::process::Command::new(env!("CARGO_BIN_EXE_sspur")).arg("native").arg("--release").arg(&path).output().unwrap();
+    let native = String::from_utf8(native.stdout).unwrap();
+    std::fs::remove_file(&path).ok();
+    assert!(!native.contains("interp "), "{native}");
+    assert_eq!(outputs[0], outputs[1]);
+}
+
+#[test]
+fn std_extras_traps_are_identical_in_both_tiers() {
+    if std::process::Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let src = "fn spec(s: Str) -> Str
+= 5.format(s)
+fn bit(i: Int) -> Bool
+= bits(4).has(i)
+fn sizes() -> Int
+= bits(4).union(bits(5)).count
+fn tfmt(p: Str) -> Str
+= time_ms(0).format(p)
+fn scale(k: Int) -> Str
+= decimal(\"1\").get.round(k).str
+fn bdiv(n: Int) -> Str
+= big(1).div(big(n)).str
+fn bpow(e: Int) -> Str
+= big(2).pow(e).str
+fn dur(n: Int) -> Int
+= days(n).ms
+fn neg_bits(n: Int) -> Int
+= bits(n).len
+fn step(k: Int) -> Int
+= do
+  var s = 0
+  for i in range(0, 5, k)
+    s := s + i
+  s
+fn fused(k: Int) -> Int
+= range(0, 5, k).map(x => x * 2).sum
+test t_spec = spec(\"q\") == \"\"
+test t_bit = bit(4)
+test t_sizes = sizes() == 0
+test t_tfmt = tfmt(\"%Q\") == \"\"
+test t_scale = scale(-1) == \"\"
+test t_bdiv = bdiv(0) == \"\"
+test t_bpow = bpow(-1) == \"\"
+test t_dur = dur(9223372036854775807) == 0
+test t_neg = neg_bits(-1) == 0
+test t_step = step(0) == 0
+test t_fused = fused(0) == 0
+test t_ok = spec(\"03\") == \"005\" and not bit(3) and step(2) == 6 and fused(2) == 12
+";
+    let expected = [
+        "FAIL  t_spec: bad format spec 'q'",
+        "FAIL  t_bit: bit index 4 out of range for 4 bits",
+        "FAIL  t_sizes: bit sets differ in size (4 and 5)",
+        "FAIL  t_tfmt: bad time format '%Q'",
+        "FAIL  t_scale: decimal scale must be in 0..=10000",
+        "FAIL  t_bdiv: division by zero",
+        "FAIL  t_bpow: negative exponent",
+        "FAIL  t_dur: integer overflow",
+        "FAIL  t_neg: bits size must be >= 0",
+        "FAIL  t_step: range step must not be 0",
+        "FAIL  t_fused: range step must not be 0",
+        "1 passed, 11 failed",
+    ];
+    assert_trap_parity("std_extras", src, &expected);
+}

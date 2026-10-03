@@ -24,8 +24,8 @@ fn mag_add(a: &[u32], b: &[u32]) -> Vec<u32> {
     let (a, b) = if a.len() >= b.len() { (a, b) } else { (b, a) };
     let mut out = Vec::with_capacity(a.len() + 1);
     let mut carry = 0u64;
-    for i in 0..a.len() {
-        let t = u64::from(a[i]) + u64::from(*b.get(i).unwrap_or(&0)) + carry;
+    for (i, &x) in a.iter().enumerate() {
+        let t = u64::from(x) + u64::from(*b.get(i).unwrap_or(&0)) + carry;
         out.push(t as u32);
         carry = t >> 32;
     }
@@ -38,8 +38,8 @@ fn mag_add(a: &[u32], b: &[u32]) -> Vec<u32> {
 fn mag_sub(a: &[u32], b: &[u32]) -> Vec<u32> {
     let mut out = Vec::with_capacity(a.len());
     let mut borrow = 0i64;
-    for i in 0..a.len() {
-        let mut t = i64::from(a[i]) - i64::from(*b.get(i).unwrap_or(&0)) - borrow;
+    for (i, &x) in a.iter().enumerate() {
+        let mut t = i64::from(x) - i64::from(*b.get(i).unwrap_or(&0)) - borrow;
         borrow = 0;
         if t < 0 {
             t += 1 << 32;
@@ -251,7 +251,7 @@ impl Big {
         Ok(result)
     }
 
-    pub fn cmp(&self, o: &Big) -> Ordering {
+    pub fn compare(&self, o: &Big) -> Ordering {
         match (self.neg, o.neg) {
             (false, true) => Ordering::Greater,
             (true, false) => Ordering::Less,
@@ -355,7 +355,7 @@ pub fn dec_cmp(a: &Big, sa: i64, b: &Big, sb: i64) -> Ordering {
     let s = sa.max(sb);
     let x = if s > sa { norm(a.neg, mag_mul(&a.mag, &Big::pow10(s - sa).mag)) } else { a.clone() };
     let y = if s > sb { norm(b.neg, mag_mul(&b.mag, &Big::pow10(s - sb).mag)) } else { b.clone() };
-    x.cmp(&y).then(sa.cmp(&sb))
+    x.compare(&y).then(sa.cmp(&sb))
 }
 
 pub fn rescale(m: &Big, from: i64, to: i64) -> Big {

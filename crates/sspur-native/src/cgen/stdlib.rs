@@ -345,6 +345,10 @@ impl Cx<'_> {
                 self.std("fsx");
                 format!("({{ Str p_ = {}; int64_t o_ = 0; Str e_ = {{0, 0}}; int k_ = ss_stat_num(p_, {}, &o_, &e_); {}}})", v(0), i32::from(n == "modified_ms"), res("k_", "e_").replace("r_.ok = 1;", "{ r_.ok = 1; r_.v = o_; }"))
             }
+            "run_cmd" => {
+                self.std("proc");
+                format!("({{ Str p_ = {}; __auto_type a_ = {}; Str i_ = {}; int64_t c_ = 0; Str o_ = {{0, 0}}, x_ = {{0, 0}}, e_ = {{0, 0}}; int k_ = ss_run_cmd(p_, a_.data, a_.len, i_, &c_, &o_, &x_, &e_); {}}})", v(0), v(1), v(2), res("k_", "e_").replace("r_.ok = 1;", "{ r_.ok = 1; r_.v.f0 = c_; r_.v.f1 = o_; r_.v.f2 = x_; }"))
+            }
             "eprint" => {
                 self.std("eprint");
                 format!("({{ ss_eprint({}); 0LL; }})", v(0))

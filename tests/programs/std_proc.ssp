@@ -1,0 +1,28 @@
+fn sh(script: Str) -> Res[(Int, Str, Str), Str] ! proc
+= run_cmd("/bin/sh", ["-c", script], "")
+
+fn word_count(text: Str) -> Int ! proc
+= match run_cmd("wc", ["-w"], text)
+  | ok((0, out, _)) => out.trim.to_int.or(-1)
+  | _ => -1
+
+fn status_of(code: Int) -> Int ! proc
+= sh("exit {code}").map(_.0).or(-1)
+
+fn missing() -> Str ! proc
+= match run_cmd("/no/such/program", [], "")
+  | ok(_) => "ran"
+  | err(e) => e
+
+fn big_echo(n: Int) -> Int ! proc
+= match run_cmd("cat", [], "x".repeat(n))
+  | ok((_, out, _)) => out.len
+  | err(_) => -1
+
+test stdout_capture = sh("echo hello; echo world") == ok((0, "hello\nworld\n", ""))
+test stderr_capture = sh("echo oops >&2; exit 2") == ok((2, "", "oops\n"))
+test stdin_feed = word_count("the quick brown fox") == 4
+test exit_codes = [0, 1, 7, 255].map(status_of) == [0, 1, 7, 255]
+test signal_code = sh("kill -9 $$").map(_.0).or(0) == 137
+test not_found = missing() == "/no/such/program: not found"
+test large_pipe = big_echo(300000) == 300000

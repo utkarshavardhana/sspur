@@ -517,3 +517,53 @@ static int ss_stat_num(Str path, int mtime, int64_t* out, Str* err) {
 }
 //@ eprint
 static void ss_eprint(Str s) { int64_t off = 0; while (off < s.len) { ssize_t k = write(2, s.p + off, (size_t)(s.len - off)); if (k <= 0) break; off += k; } (void)!write(2, "\n", 1); }
+//@ proc fs
+#include <spawn.h>
+#include <poll.h>
+#include <sys/wait.h>
+extern char** environ;
+static Str ss_proc_why(Str prog, const char* w) { SB_INIT(b); sb_put(&b, prog.p, prog.len); sb_put(&b, ": ", 2); sb_put(&b, w, (int64_t)strlen(w)); return sb_done(&b); }
+static int ss_run_cmd(Str prog, const Str* args, int64_t na, Str input, int64_t* code, Str* out, Str* errs, Str* why) {
+    char* p0 = ss_cpath(prog); if (!p0) { *why = ss_why(prog, -1); return 0; }
+    char** argv = (char**)sspur_alloc((size_t)(na + 2) * sizeof(char*)); argv[0] = p0;
+    for (int64_t i = 0; i < na; i++) { argv[i + 1] = ss_cpath(args[i]); if (!argv[i + 1]) { *why = ss_proc_why(prog, "invalid argument"); return 0; } }
+    argv[na + 1] = 0;
+    int pi[2], po[2], pe[2];
+    if (pipe(pi)) { *why = ss_why(prog, errno); return 0; }
+    if (pipe(po)) { int e = errno; close(pi[0]); close(pi[1]); *why = ss_why(prog, e); return 0; }
+    if (pipe(pe)) { int e = errno; close(pi[0]); close(pi[1]); close(po[0]); close(po[1]); *why = ss_why(prog, e); return 0; }
+    posix_spawn_file_actions_t fa; posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, pi[0], 0); posix_spawn_file_actions_adddup2(&fa, po[1], 1); posix_spawn_file_actions_adddup2(&fa, pe[1], 2);
+    int fds[6] = {pi[0], pi[1], po[0], po[1], pe[0], pe[1]};
+    for (int i = 0; i < 6; i++) if (fds[i] > 2) posix_spawn_file_actions_addclose(&fa, fds[i]);
+    pid_t pid; int rc = posix_spawnp(&pid, p0, &fa, 0, argv, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    close(pi[0]); close(po[1]); close(pe[1]);
+    if (rc != 0) { close(pi[1]); close(po[0]); close(pe[0]); *why = ss_why(prog, rc); return 0; }
+    fcntl(pi[1], F_SETFL, fcntl(pi[1], F_GETFL) | O_NONBLOCK);
+    SB_INIT(ob); SB_INIT(eb);
+    int64_t off = 0; int win = 1, rout = 1, rerr = 1;
+    if (!input.len) { close(pi[1]); win = 0; }
+    char buf[65536];
+    while (rout || rerr || win) {
+        struct pollfd pf[3]; int np = 0, io = -1, ie = -1, iw = -1;
+        if (rout) { io = np; pf[np].fd = po[0]; pf[np].events = POLLIN; np++; }
+        if (rerr) { ie = np; pf[np].fd = pe[0]; pf[np].events = POLLIN; np++; }
+        if (win) { iw = np; pf[np].fd = pi[1]; pf[np].events = POLLOUT; np++; }
+        for (int i = 0; i < np; i++) pf[i].revents = 0;
+        if (poll(pf, (nfds_t)np, -1) < 0) { if (errno == EINTR) continue; break; }
+        if (io >= 0 && pf[io].revents) { ssize_t k = read(po[0], buf, sizeof buf); if (k > 0) sb_put(&ob, buf, k); else if (k == 0 || errno != EINTR) { rout = 0; close(po[0]); } }
+        if (ie >= 0 && pf[ie].revents) { ssize_t k = read(pe[0], buf, sizeof buf); if (k > 0) sb_put(&eb, buf, k); else if (k == 0 || errno != EINTR) { rerr = 0; close(pe[0]); } }
+        if (iw >= 0 && pf[iw].revents) {
+            ssize_t k = write(pi[1], input.p + off, (size_t)(input.len - off));
+            if (k > 0) off += k;
+            if ((k < 0 && errno != EAGAIN && errno != EINTR) || off >= input.len || (pf[iw].revents & (POLLERR | POLLHUP))) { win = 0; close(pi[1]); }
+        }
+    }
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    *code = WIFEXITED(status) ? WEXITSTATUS(status) : WIFSIGNALED(status) ? 128 + WTERMSIG(status) : status;
+    *out = sb_done(&ob); *errs = sb_done(&eb);
+    if (!ss_utf8_ok((const unsigned char*)out->p, out->len) || !ss_utf8_ok((const unsigned char*)errs->p, errs->len)) { *why = ss_why(prog, -2); return 0; }
+    return 1;
+}

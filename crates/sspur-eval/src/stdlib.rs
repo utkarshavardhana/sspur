@@ -120,6 +120,29 @@ pub fn mono_ns() -> i64 {
     t[0].saturating_mul(1_000_000_000).saturating_add(t[1])
 }
 
+fn run_cmd(prog: &str, args: &[String], input: String) -> Result<Value, String> {
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::{Command, Stdio};
+    if prog.contains('\0') {
+        return Err("invalid path".into());
+    }
+    if args.iter().any(|a| a.contains('\0')) {
+        return Err("invalid argument".into());
+    }
+    let mut child = Command::new(prog).args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| os_reason(&e))?;
+    let mut stdin = child.stdin.take().ok_or("no stdin")?;
+    let writer = std::thread::spawn(move || {
+        use std::io::Write;
+        let _ = stdin.write_all(input.as_bytes());
+    });
+    let out = child.wait_with_output().map_err(|e| os_reason(&e))?;
+    let _ = writer.join();
+    let code = out.status.code().map_or_else(|| 128 + i64::from(out.status.signal().unwrap_or(0)), i64::from);
+    let text = |b: Vec<u8>| String::from_utf8(b).map_err(|_| "invalid UTF-8".to_string());
+    let (so, se) = (text(out.stdout)?, text(out.stderr)?);
+    Ok(Value::Tuple(Rc::new(vec![Value::Int(code), Value::str(&so), Value::str(&se)])))
+}
+
 fn mkdir_all(p: &str) -> Result<Value, std::io::Error> {
     if p.is_empty() {
         return Err(std::io::Error::from_raw_os_error(2));
@@ -396,6 +419,14 @@ impl Interp {
                 use std::os::unix::fs::MetadataExt;
                 let p = s(&a[0])?;
                 io_res(p, std::fs::metadata(p).map(|m| Value::Int(if n == "file_size" { m.size() as i64 } else { m.mtime() * 1000 + m.mtime_nsec() / 1_000_000 })))
+            }
+            "run_cmd" => {
+                let prog = s(&a[0])?;
+                let args = list(&a[1])?.iter().map(|x| s(x).map(str::to_string)).collect::<R<Vec<_>>>()?;
+                Value::Res(match run_cmd(prog, &args, s(&a[2])?.to_string()) {
+                    Ok(v) => Ok(Rc::new(v)),
+                    Err(m) => Err(Rc::new(Value::str(&format!("{prog}: {m}")))),
+                })
             }
             "eprint" => {
                 use std::io::Write;

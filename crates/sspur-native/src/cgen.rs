@@ -1082,7 +1082,7 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
 }
 
 fn precheck(f: &FnDef, bare: bool) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe" | "fs" | "io" | "time" | "env") && !(bare && e.name == "mmio") && !f.tparams.iter().any(|p| p.name == e.name)) {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe" | "fs" | "io" | "time" | "env" | "proc") && !(bare && e.name == "mmio") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())

@@ -158,6 +158,7 @@ struct Checker {
     gen_loops: HashSet<(u32, u32)>,
     clause_effects: HashMap<(u32, u32), BTreeSet<String>>,
     clause_depth: u32,
+    alias_stack: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -235,6 +236,7 @@ pub fn check(m: &Module) -> CheckOutput {
         gen_loops: HashSet::new(),
         clause_effects: HashMap::new(),
         clause_depth: 0,
+        alias_stack: vec![],
     };
     c.load_builtins();
     c.collect(m);
@@ -458,12 +460,14 @@ impl Checker {
                 }
                 match &info.kind {
                     TypeKind::Alias(target) => {
-                        if depth > 32 {
+                        if depth > 32 || self.alias_stack.contains(name) {
                             self.err("E_TYPE_CYCLE", *span, format!("type alias '{name}' is cyclic"));
                             return self.fresh();
                         }
                         let saved = std::mem::replace(&mut self.tparams, info.params.clone());
+                        self.alias_stack.push(name.clone());
                         let base = self.conv_ty_depth(target, depth + 1);
+                        self.alias_stack.pop();
                         self.tparams = saved;
                         let map: HashMap<String, Type> = info.params.iter().cloned().zip(conv).collect();
                         subst_params(&base, &map)
@@ -1784,33 +1788,33 @@ impl Checker {
     }
 
     fn type_has(&self, t: &Type, name: &str) -> bool {
-        self.type_has_depth(t, name, 0)
-    }
-
-    fn type_has_depth(&self, t: &Type, name: &str, depth: u32) -> bool {
-        if depth > 8 {
-            return false;
-        }
-        if contains_con(t, name) {
-            return true;
-        }
-        let mut stack = vec![t.clone()];
-        while let Some(t) = stack.pop() {
-            match t {
-                Type::Con(n, args) => {
-                    stack.extend(args);
-                    let fields: Vec<Type> = match self.types.get(&n).map(|i| &i.kind) {
-                        Some(TypeKind::Record(fs)) => fs.iter().map(|(_, t)| t.clone()).collect(),
-                        Some(TypeKind::Sum(vs)) => vs.iter().filter_map(|v| self.ctors.get(v)).flat_map(|c| c.fields.clone().unwrap_or_default()).map(|(_, t)| t).collect(),
-                        _ => vec![],
-                    };
-                    if fields.iter().any(|f| self.type_has_depth(f, name, depth + 1)) {
-                        return true;
+        let mut seen: HashSet<&str> = HashSet::new();
+        let mut level = vec![t];
+        for _ in 0..=8 {
+            let mut next = Vec::new();
+            for t in level {
+                if contains_con(t, name) {
+                    return true;
+                }
+                let mut stack = vec![t];
+                while let Some(t) = stack.pop() {
+                    match t {
+                        Type::Con(n, args) => {
+                            stack.extend(args);
+                            let Some(info) = self.types.get_key_value(n).filter(|_| !seen.contains(n.as_str())) else { continue };
+                            seen.insert(info.0);
+                            match &info.1.kind {
+                                TypeKind::Record(fs) => next.extend(fs.iter().map(|(_, t)| t)),
+                                TypeKind::Sum(vs) => next.extend(vs.iter().filter_map(|v| self.ctors.get(v)).filter_map(|c| c.fields.as_ref()).flatten().map(|(_, t)| t)),
+                                _ => {}
+                            }
+                        }
+                        Type::Tuple(xs) => stack.extend(xs),
+                        _ => {}
                     }
                 }
-                Type::Tuple(xs) => stack.extend(xs),
-                _ => {}
             }
+            level = next;
         }
         false
     }

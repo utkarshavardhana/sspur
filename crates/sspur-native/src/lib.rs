@@ -448,6 +448,9 @@ fn kind_name(k: &ExprKind) -> &'static str {
 }
 
 fn local_check(f: &FnDef, fns: &HashSet<String>) -> Result<(), String> {
+    if f.ext.is_some() {
+        return Err("is extern".into());
+    }
     if !f.tparams.is_empty() {
         return Err("is generic".into());
     }

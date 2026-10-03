@@ -153,6 +153,8 @@ impl<'a> Hasher<'a> {
                 exprs.push(&f.body);
             }
             Def::Test(t) => exprs.push(&t.body),
+            Def::Store(st) => tys.extend([&st.key, &st.val]),
+            Def::Svc(sv) => sv.eps.iter().for_each(|e| add(&e.handler)),
             Def::Effect(e) => {
                 for op in &e.ops {
                     tys.extend(op.params.iter().map(|p| &p.ty));
@@ -358,10 +360,30 @@ impl<'a> Hasher<'a> {
                 }
                 enc.locals = saved;
                 self.expr(&mut enc, &f.body, group);
+                if let Some(x) = &f.ext {
+                    enc.tag(b'C');
+                    enc.str(x.lib.as_deref().unwrap_or(""));
+                    enc.str(&x.symbol);
+                }
             }
             Def::Test(t) => {
                 enc.tag(b'X');
                 self.expr(&mut enc, &t.body, group);
+            }
+            Def::Store(st) => {
+                enc.tag(b'S');
+                enc.str(&st.kind);
+                self.ty(&mut enc, &st.key, group);
+                self.ty(&mut enc, &st.val, group);
+            }
+            Def::Svc(sv) => {
+                enc.tag(b'V');
+                enc.uint(sv.eps.len() as u64);
+                for e in &sv.eps {
+                    enc.str(&e.method);
+                    enc.str(&e.path);
+                    self.name(&mut enc, &e.handler, group);
+                }
             }
             Def::Effect(e) => {
                 enc.tag(b'E');

@@ -195,6 +195,7 @@ impl Parser {
             Tok::Kw("type") => self.type_def().map(Def::Type),
             Tok::Kw("fn") => self.fn_def().map(Def::Fn),
             Tok::Kw("rule") => self.rule_def().map(Def::Fn),
+            Tok::Ident(w) if w == "extern" && matches!(self.peek_at(1), Tok::Kw("fn")) => self.extern_def().map(Def::Fn),
             Tok::Kw("test") => {
                 self.bump();
                 let name = self.expect_ident()?;
@@ -203,12 +204,56 @@ impl Parser {
                 Ok(Def::Test(TestDef { name, span: start.to(self.prev_span()), body }))
             }
             Tok::Kw("effect") => self.effect_def().map(Def::Effect),
-            Tok::Kw(k @ ("trait" | "impl" | "store" | "svc" | "queue")) => {
+            Tok::Kw("store") => self.store_def().map(Def::Store),
+            Tok::Kw("svc") => self.svc_def().map(Def::Svc),
+            Tok::Kw(k @ ("trait" | "impl" | "queue")) => {
                 let k = *k;
                 self.err("E_UNSUPPORTED", format!("'{k}' definitions are not supported by this compiler version yet"))
             }
             _ => self.err("E_PARSE_DEF", format!("expected a definition, found {}", self.describe())),
         }
+    }
+
+    fn store_def(&mut self) -> PResult<StoreDef> {
+        let start = self.expect_kw("store")?;
+        let name = self.expect_ident()?;
+        self.expect_sym("=")?;
+        let kind = self.expect_ident()?;
+        if kind != "table" {
+            return self.err("E_UNSUPPORTED", format!("store kind '{kind}' is not supported yet; use table[K, V]"));
+        }
+        self.expect_sym("[")?;
+        let key = self.ty()?;
+        self.expect_sym(",")?;
+        let val = self.ty()?;
+        self.expect_sym("]")?;
+        Ok(StoreDef { name, kind, key, val, span: start.to(self.prev_span()) })
+    }
+
+    fn svc_def(&mut self) -> PResult<SvcDef> {
+        let start = self.expect_kw("svc")?;
+        let name = self.expect_ident()?;
+        let mut eps = Vec::new();
+        while let Some(c) = self.newline_then(|t| matches!(t, Tok::Ident(n) if n == "ep")) {
+            if c == 0 {
+                break;
+            }
+            self.bump();
+            let es = self.span();
+            self.bump();
+            let method = if self.eat_kw("post") { "post".to_string() } else { self.expect_ident()? };
+            let Tok::Str(path) = self.peek().clone() else {
+                return self.err("E_PARSE_EP", format!("expected a path string after 'ep {method}', found {}", self.describe()));
+            };
+            self.bump();
+            self.expect_sym("=")?;
+            let handler = self.expect_ident()?;
+            eps.push(Endpoint { method, path, handler, span: es.to(self.prev_span()) });
+        }
+        if eps.is_empty() {
+            return self.err("E_PARSE_SVC", "a svc needs at least one endpoint: indented lines 'ep get \"/path/{id}\" = handler'");
+        }
+        Ok(SvcDef { name, eps, span: start.to(self.prev_span()) })
     }
 
     fn effect_def(&mut self) -> PResult<EffectDef> {
@@ -500,6 +545,27 @@ impl Parser {
         Ok(Cell::Cond(self.binary(1)?))
     }
 
+    fn extern_def(&mut self) -> PResult<FnDef> {
+        let start = self.span();
+        self.bump();
+        let mut f = self.fn_header(start)?;
+        if !f.pres.is_empty() || !f.posts.is_empty() || !f.examples.is_empty() {
+            return self.err("E_PARSE_EXTERN", "extern functions have no contracts or examples");
+        }
+        let mut ext = Extern { lib: None, symbol: f.name.clone() };
+        for key in ["from", "as"] {
+            if matches!(self.peek(), Tok::Ident(w) if w == key) {
+                self.bump();
+                let Tok::Str(v) = self.peek().clone() else { return self.err("E_PARSE_EXTERN", format!("expected a string after '{key}'")) };
+                self.bump();
+                if key == "from" { ext.lib = Some(v) } else { ext.symbol = v }
+            }
+        }
+        f.ext = Some(ext);
+        f.span = start.to(self.prev_span());
+        Ok(f)
+    }
+
     fn fn_def(&mut self) -> PResult<FnDef> {
         let start = self.span();
         let mut f = self.fn_header(start)?;
@@ -540,7 +606,7 @@ impl Parser {
             }
         }
         let body = Expr::new(ExprKind::Unit, self.prev_span());
-        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, body, span: start.to(self.prev_span()), sig_span })
+        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, body, span: start.to(self.prev_span()), sig_span, ext: None })
     }
 
     fn expr_seq(&mut self) -> PResult<Expr> {

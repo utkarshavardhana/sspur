@@ -1,10 +1,12 @@
 mod builtins;
+mod deploy;
 pub mod types;
 
 use serde::Serialize;
 use serde_json::json;
 use sspur_syntax::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+pub use deploy::{db_op, HTTP_METHODS};
 pub use types::{Row, Type};
 
 #[derive(Clone, Debug, Serialize)]
@@ -41,6 +43,7 @@ pub struct CheckOutput {
     pub local_fn_types: HashMap<(u32, u32), (Vec<Type>, Type)>,
     pub gen_loops: HashSet<(u32, u32)>,
     pub clause_effects: HashMap<(u32, u32), BTreeSet<String>>,
+    pub stores: BTreeMap<String, (Type, Type)>,
 }
 
 pub type ExprKey = (u32, u32, u8);
@@ -159,6 +162,7 @@ struct Checker {
     clause_effects: HashMap<(u32, u32), BTreeSet<String>>,
     clause_depth: u32,
     alias_stack: Vec<String>,
+    stores: BTreeMap<String, (Type, Type)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -237,6 +241,7 @@ pub fn check(m: &Module) -> CheckOutput {
         clause_effects: HashMap::new(),
         clause_depth: 0,
         alias_stack: vec![],
+        stores: BTreeMap::new(),
     };
     c.load_builtins();
     c.collect(m);
@@ -249,7 +254,8 @@ pub fn check(m: &Module) -> CheckOutput {
             }
             Def::Test(t) => c.check_test(t),
             Def::Type(t) => c.check_type_refines(t),
-            Def::Effect(_) => {}
+            Def::Effect(_) | Def::Store(_) => {}
+            Def::Svc(sv) => c.check_svc(sv, m),
         }
         for (k, t) in std::mem::take(&mut c.pending_types) {
             let r = c.resolve(&t);
@@ -286,7 +292,7 @@ pub fn check(m: &Module) -> CheckOutput {
             fix: vec![],
         });
     }
-    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects }
+    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, stores: c.stores }
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -536,10 +542,18 @@ impl Checker {
             }
         }
         self.cur_def = None;
+        self.collect_stores(m);
         for d in &m.defs {
             if let Def::Fn(f) = d {
                 self.cur_def = Some(f.name.clone());
-                let s = self.scheme_of(f);
+                self.check_db_sig(f);
+                let s = match &f.ext {
+                    Some(_) => {
+                        self.check_extern(f);
+                        self.scheme_of(&sspur_syntax::ffi::sspur_view(f))
+                    }
+                    None => self.scheme_of(f),
+                };
                 self.fns.insert(f.name.clone(), s);
             }
         }
@@ -609,7 +623,25 @@ impl Checker {
         }
     }
 
+    fn check_extern(&mut self, f: &FnDef) {
+        if !f.tparams.is_empty() {
+            self.err("E_EXTERN", f.sig_span, "extern functions can't be generic".into());
+        }
+        if f.effects.len() != 1 || f.effects[0].name != "ffi" || !f.effects[0].args.is_empty() {
+            self.err("E_EXTERN", f.sig_span, "extern functions declare exactly the effect 'ffi': add '! ffi'".into());
+        }
+        if f.params.iter().any(|p| p.refine.is_some()) {
+            self.err("E_EXTERN", f.sig_span, "extern parameters can't have 'where' refinements".into());
+        }
+        if let Err(e) = sspur_syntax::ffi::signature(f) {
+            self.push_diag("E_EXTERN", "error", f.sig_span, e, Some("C-compatible types: Int I8 I16 I32 U8 U16 U32 U64 F32 F64 Bool Str Opt[Str] (and List[scalar] parameters)".into()), vec![]);
+        }
+    }
+
     fn check_fn(&mut self, f: &FnDef) {
+        if f.ext.is_some() {
+            return;
+        }
         self.cur_def = Some(f.name.clone());
         let scheme = self.fns[&f.name].clone();
         self.tparams = scheme.tparams.clone();
@@ -1126,6 +1158,7 @@ impl Checker {
                 }
                 self.method(x, xt, f, &[], e.span)
             }
+            ExprKind::Method { recv, name, args, .. } if self.is_db_recv(recv) => self.infer_db(name, args, e.span),
             ExprKind::Method { recv, name, targs, args } => {
                 if !targs.is_empty() {
                     self.err("E_UNSUPPORTED", e.span, "explicit type arguments on methods are not supported yet".into());

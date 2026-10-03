@@ -1,0 +1,98 @@
+fn collatz_len(n: Int where _ > 0) -> Int ! div
+= do
+  var x = n
+  var steps = 0
+  while x != 1
+    x := if x % 2 == 0 then x / 2 else 3 * x + 1
+    steps := steps + 1
+  steps
+
+fn is_prime(n: Int) -> Bool ! div
+= do
+  var d = 2
+  var ok = n >= 2
+  while ok and d * d <= n
+    if n % d == 0 then ok := false
+    d := d + 1
+  ok
+
+fn mix(x: Int) -> Int
+= do
+  var h = x
+  for r in 0..40
+    h := (h * 31 + r) % 1000003
+  h
+
+fn down(k: Int) -> Int
+= if k == 0 then 0 else 1 + down(k - 1)
+
+fn spike(i: Int, a: Int, b: Int) -> Int
+= if i == a or i == b then 5000000000000000000 else if i == b + 1 then -5000000000000000000 else 1
+
+fn faulty(i: Int, a: Int, b: Int) -> Int
+= if i == a then 1 / (i - i) else if i == b then 9223372036854775807 * 2 else i
+
+fn collatz_total(n: Int) -> Int ! div
+= (1..n).map(collatz_len).sum
+
+fn prime_count(n: Int) -> Int ! div
+= (0..n).filter(is_prime).len
+
+fn prime_sum(n: Int) -> Int ! div
+= (0..n).filter(is_prime).sum
+
+fn mixed(n: Int) -> List[Int]
+= (0..n).map(i => mix(i))
+
+fn scaled(xs: List[Int], k: Int) -> List[Int]
+= xs.map(x => mix(x) * k)
+
+fn dot(xs: List[Int], ys: List[Int]) -> Int
+= (0..xs.len).map(i => mix(xs[i]) * ys[i % ys.len]).sum
+
+fn ratios(n: Int) -> List[F64]
+= (0..n).map(i => mix(i).to_f64 / 7.0)
+
+fn spiky_sum(n: Int, a: Int, b: Int) -> Int
+= (0..n).map(i => spike(i, a, b)).sum
+
+fn first_fault(n: Int, a: Int, b: Int) -> Int
+= (0..n).map(i => faulty(i, a, b)).sum
+
+fn deep_at(n: Int, at: Int) -> Int
+= (0..n).map(i => if i == at then down(2000000) else mix(i)).sum
+
+fn escape(i: Int, w: Int) -> Int ! div
+= do
+  cx = (i % w).to_f64 * 3.0 / w.to_f64 - 2.0
+  cy = (i / w).to_f64 * 2.0 / w.to_f64 - 1.0
+  var x = 0.0
+  var y = 0.0
+  var k = 0
+  while k < 200 and x * x + y * y <= 4.0
+    t = x * x - y * y + cx
+    y := 2.0 * x * y + cy
+    x := t
+    k := k + 1
+  k
+
+fn mandel(w: Int) -> Int ! div
+= (0..w * w).map(i => escape(i, w)).sum
+
+fn main() -> Unit ! log, div
+= do
+  log("mandel {mandel(120)}")
+  log("collatz {collatz_total(30000)}")
+  log("primes {prime_count(60000)} sum {prime_sum(60000)}")
+  log("mixed {mixed(20000).sum}")
+
+test collatz = collatz_total(30000) == 2864133
+test primes = prime_count(60000) == 6057 and prime_sum(60000) == 171848738
+test mixed_ok = mixed(20000).len == 20000 and mixed(20000)[19999] == mix(19999)
+test scaled_ok = scaled(mixed(5000), 3).sum == mixed(5000).map(mix).sum * 3
+test dot_ok = dot(mixed(6000), [1, 2, 3]) == dot(mixed(6000), [1, 2, 3, 1, 2, 3])
+test ratios_ok = ratios(9000).len == 9000 and ratios(9000)[8999] == mix(8999).to_f64 / 7.0
+test spiky_ok = spiky_sum(20000, -5, 15000) == 19998
+test fault_free = first_fault(20000, -1, -1) == 199990000
+test deep_free = deep_at(20000, -1) == mixed(20000).sum
+test mandel_ok = mandel(120) == 806074

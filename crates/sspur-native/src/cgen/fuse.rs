@@ -79,6 +79,10 @@ fn vloop<'s>(end: &End, worker: bool, vb: &'s VBody, i: &'s str, head: &'s str, 
 }
 
 impl Cx<'_> {
+    pub(super) fn range_call(&self, e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Call(f, args) if args.len() == 3 && matches!(&f.kind, ExprKind::Name(n) if n == "range" && self.lookup(n).is_none() && !self.check.fn_types.contains_key(n)))
+    }
+
     pub(super) fn fused(&mut self, e: &Expr, name: &str, recv: &Expr, args: &[Expr], t: &Type) -> Option<G> {
         let end = match name {
             "sum" if args.is_empty() => End::Sum,
@@ -99,7 +103,8 @@ impl Cx<'_> {
             cur = r;
         }
         stages.reverse();
-        if stages.is_empty() {
+        let ranged = self.range_call(cur);
+        if stages.is_empty() && !(ranged && !matches!(end, End::Collect)) {
             return None;
         }
         let src_t = self.ty(cur).ok()?;
@@ -132,11 +137,12 @@ impl Cx<'_> {
             }
             false
         };
-        let par = self.par_plan(cur, &et0, &stages, scans, &end, int_sum, t);
+        let par = if ranged { None } else { self.par_plan(cur, &et0, &stages, scans, &end, int_sum, t) };
         if stages.len() < 2 && matches!(end, End::Collect) && par.is_none() {
             return None;
         }
-        let vec = stages.iter().all(|(_, f, _)| self.vstage(f))
+        let vec = !ranged
+            && stages.iter().all(|(_, f, _)| self.vstage(f))
             && (matches!(cur.kind, ExprKind::Range(..)) || list_of_scalar(&src_t))
             && match end {
                 End::Sum => is(t, "Int"),
@@ -435,6 +441,12 @@ impl Cx<'_> {
                 riv = Some((self.range(a).0, self.range(b).1 - 1));
                 self.for_range_facts(&x, a, b);
                 (format!("int64_t s_ = {av}; int64_t re_ = {bv}; int64_t {n} = re_ > s_ ? re_ - s_ : 0; "), format!("int64_t {x} = s_ + {i}; "))
+            }
+            ExprKind::Call(_, args) if self.range_call(src) => {
+                self.std("fail");
+                let (av, bv, kv) = (self.expr(&args[0])?, self.expr(&args[1])?, self.expr(&args[2])?);
+                let oom = if matches!(end, End::Collect) { format!("if (UNLIKELY({n} > ((int64_t)1 << 26))) TRAPV({T_OOM}, 0, 0); ") } else { String::new() };
+                (format!("int64_t s_ = {av}; int64_t re_ = {bv}; int64_t k_ = {kv}; if (UNLIKELY(k_ == 0)) ss_fail(st, \"range step must not be 0\"); {} {oom}", super::range_count(&n, "s_", "re_", "k_")), format!("int64_t {x} = (int64_t)(s_ + (__int128){i} * k_); "))
             }
             _ => {
                 let lv = self.expr(src)?;

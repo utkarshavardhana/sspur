@@ -1073,6 +1073,10 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
     }
 }
 
+pub(super) fn range_count(n: &str, s: &str, e: &str, k: &str) -> String {
+    format!("int64_t {n} = ({k} > 0 && {e} > {s}) ? (int64_t)(((__int128){e} - {s} - 1) / {k} + 1) : ({k} < 0 && {e} < {s}) ? (int64_t)(((__int128){s} - {e} - 1) / -(__int128){k} + 1) : 0;")
+}
+
 fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
     let safe = match op {
         BinOp::Div | BinOp::Rem => (rb.0 > 0 || rb.1 < 0) && (rb.0 > -1 || rb.1 < -1 || ra.0 > FULL.0),
@@ -3917,6 +3921,17 @@ impl<'a> Cx<'a> {
                     self.scopes.pop();
                     return Ok(format!("{{ int64_t {s_} = {av}; int64_t {e_} = {bv}; {reserve}for (int64_t {iv} = {s_}; {iv} < {e_}; {iv}++) {{ (void)({}); }} }} ", body?));
                 }
+                if let (Pat::Bind(i), ExprKind::Call(_, args)) = (p, &it.kind)
+                    && self.range_call(it) {
+                        self.std("fail");
+                        let (av, bv, kv) = (self.expr(&args[0])?, self.expr(&args[1])?, self.expr(&args[2])?);
+                        let (s_, e_, k_, n_, c_) = (self.fresh("fs"), self.fresh("fe"), self.fresh("fk"), self.fresh("fn"), self.fresh("fc"));
+                        self.scopes.push(HashMap::new());
+                        let iv = self.bind(i, Type::int());
+                        let body = self.expr(body);
+                        self.scopes.pop();
+                        return Ok(format!("{{ int64_t {s_} = {av}; int64_t {e_} = {bv}; int64_t {k_} = {kv}; if (UNLIKELY({k_} == 0)) ss_fail(st, \"range step must not be 0\"); {} for (int64_t {c_} = 0; {c_} < {n_}; {c_}++) {{ int64_t {iv} = (int64_t)({s_} + (__int128){c_} * {k_}); (void)({}); }} }} ", range_count(&n_, &s_, &e_, &k_), body?));
+                    }
                 let lt = self.ty(it)?;
                 let et = match elem(&lt, "List") {
                     Some(t) => t,

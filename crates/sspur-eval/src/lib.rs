@@ -1070,6 +1070,22 @@ impl Interp {
                 Ok(Value::Unit)
             }
             Stmt::For(p, it, body) => {
+                if let Some((s, e, k)) = self.lazy_range(it, env)? {
+                    let n = if k > 0 && e > s {
+                        (e as i128 - s as i128 - 1) / k as i128 + 1
+                    } else if k < 0 && e < s {
+                        (s as i128 - e as i128 - 1) / -(k as i128) + 1
+                    } else {
+                        0
+                    };
+                    for c in 0..n {
+                        let inner = Env::child(env);
+                        if self.bind_pat(p, &Value::Int((s as i128 + c * k as i128) as i64), &inner) {
+                            self.eval(body, &inner)?;
+                        }
+                    }
+                    return Ok(Value::Unit);
+                }
                 let xs = match self.eval(it, env)? {
                     Value::List(xs) => xs,
                     Value::Chan(c) => {
@@ -1092,6 +1108,24 @@ impl Interp {
                 }
                 Ok(Value::Unit)
             }
+        }
+    }
+
+    fn lazy_range(&self, it: &Expr, env: &Rc<Env>) -> R<Option<(i64, i64, i64)>> {
+        let int = |v: Value| match v {
+            Value::Int(n) => Ok(n),
+            _ => trap("range bounds must be Int"),
+        };
+        match &it.kind {
+            ExprKind::Range(a, b) => Ok(Some((int(self.eval(a, env)?)?, int(self.eval(b, env)?)?, 1))),
+            ExprKind::Call(f, args) if args.len() == 3 && matches!(&f.kind, ExprKind::Name(n) if n == "range" && !self.fns.contains_key(n) && env.get(n).is_none()) => {
+                let (s, e, k) = (int(self.eval(&args[0], env)?)?, int(self.eval(&args[1], env)?)?, int(self.eval(&args[2], env)?)?);
+                if k == 0 {
+                    return trap("range step must not be 0");
+                }
+                Ok(Some((s, e, k)))
+            }
+            _ => Ok(None),
         }
     }
 

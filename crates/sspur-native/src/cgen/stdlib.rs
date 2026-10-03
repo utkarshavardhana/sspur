@@ -878,6 +878,30 @@ impl Cx<'_> {
                     wrap(format!("{core}{oc} o_ = {{0}}; if (lo_ < {l}.len && {c}({l}.data[lo_], {x}) == 0) {{ o_.some = 1; o_.v = lo_; }} o_;"))
                 }
             }
+            "upper_bound" => {
+                let v = self.expr(&args[0])?;
+                let c = self.helper_cmp(et)?;
+                wrap(format!("__auto_type {x} = {v}; int64_t lo_ = 0, hi_ = {l}.len; while (lo_ < hi_) {{ int64_t m_ = lo_ + (hi_ - lo_) / 2; if ({c}({l}.data[m_], {x}) <= 0) lo_ = m_ + 1; else hi_ = m_; }} lo_;"))
+            }
+            "take_while" | "drop_while" => {
+                let body = self.apply(&args[0], vec![(x.clone(), et.clone())])?;
+                let view = if name == "take_while" { format!("({lc}){{k_, {l}.data, {l}.hdr}}") } else { format!("({lc}){{{l}.len - k_, {l}.data + k_, {l}.hdr}}") };
+                wrap(format!("int64_t k_ = 0; while (k_ < {l}.len) {{ __auto_type {x} = {l}.data[k_]; if (!({body})) break; k_++; }} {view};"))
+            }
+            "rotate" => {
+                let k = self.expr(&args[0])?;
+                wrap(format!("int64_t k_ = {k}; int64_t n_ = {l}.len; if (n_) {{ k_ %= n_; if (k_ < 0) k_ += n_; }} RawL r_ = raw_alloc(n_, sizeof({ec})); {ec}* d_ = ({ec}*)r_.data; for (int64_t {i} = 0; {i} < n_; {i}++) d_[{i}] = {l}.data[({i} + k_) % n_]; r_.hdr[1] = n_; ({lc}){{n_, d_, r_.hdr}};"))
+            }
+            "merge" => {
+                let ys = self.expr(&args[0])?;
+                let c = self.helper_cmp(et)?;
+                wrap(format!("__auto_type m_ = {ys}; int64_t n_ = {l}.len + m_.len; RawL r_ = raw_alloc(n_, sizeof({ec})); {ec}* d_ = ({ec}*)r_.data; int64_t p_ = 0, q_ = 0, k_ = 0; while (p_ < {l}.len && q_ < m_.len) {{ if ({c}(m_.data[q_], {l}.data[p_]) < 0) d_[k_++] = m_.data[q_++]; else d_[k_++] = {l}.data[p_++]; }} while (p_ < {l}.len) d_[k_++] = {l}.data[p_++]; while (q_ < m_.len) d_[k_++] = m_.data[q_++]; r_.hdr[1] = n_; ({lc}){{n_, d_, r_.hdr}};"))
+            }
+            "next_perm" => {
+                let c = self.helper_cmp(et)?;
+                let oc = self.cty(t)?;
+                wrap(format!("int64_t n_ = {l}.len; {oc} o_ = {{0}}; int64_t i_ = n_ - 2; while (i_ >= 0 && {c}({l}.data[i_], {l}.data[i_ + 1]) >= 0) i_--; if (n_ >= 2 && i_ >= 0) {{ RawL r_ = raw_alloc(n_, sizeof({ec})); {ec}* d_ = ({ec}*)r_.data; memcpy(d_, {l}.data, (size_t)n_ * sizeof({ec})); int64_t j_ = n_ - 1; while ({c}(d_[j_], d_[i_]) <= 0) j_--; {ec} t_ = d_[i_]; d_[i_] = d_[j_]; d_[j_] = t_; for (int64_t a_ = i_ + 1, b_ = n_ - 1; a_ < b_; a_++, b_--) {{ t_ = d_[a_]; d_[a_] = d_[b_]; d_[b_] = t_; }} r_.hdr[1] = n_; o_.some = 1; o_.v = ({lc}){{n_, d_, r_.hdr}}; }} o_;"))
+            }
             "sort_with" => {
                 let y = self.fresh("y");
                 let body = self.apply(&args[0], vec![(x.clone(), et.clone()), (y.clone(), et.clone())])?;

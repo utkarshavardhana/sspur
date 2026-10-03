@@ -518,6 +518,58 @@ impl Interp {
                 opt((i < xs.len() && xs[i] == a[0]).then_some(Value::Int(i as i64)))
             }
             "lower_bound" => Value::Int(lower(&a[0]) as i64),
+            "upper_bound" => Value::Int(xs.partition_point(|y| *y <= a[0]) as i64),
+            "take_while" | "drop_while" => {
+                let mut k = 0;
+                while k < xs.len() && boolean(self.apply(&a[0], vec![xs[k].clone()])?)? {
+                    k += 1;
+                }
+                Value::list(if name == "take_while" { xs[..k].to_vec() } else { xs[k..].to_vec() })
+            }
+            "rotate" => {
+                let mut v = (**xs).clone();
+                if !v.is_empty() {
+                    let k = int(&a[0])?.rem_euclid(v.len() as i64) as usize;
+                    v.rotate_left(k);
+                }
+                Value::list(v)
+            }
+            "merge" => {
+                let ys = list(&a[0])?;
+                let (mut i, mut j) = (0, 0);
+                let mut out = Vec::with_capacity(xs.len() + ys.len());
+                while i < xs.len() && j < ys.len() {
+                    if ys[j] < xs[i] {
+                        out.push(ys[j].clone());
+                        j += 1;
+                    } else {
+                        out.push(xs[i].clone());
+                        i += 1;
+                    }
+                }
+                out.extend_from_slice(&xs[i..]);
+                out.extend_from_slice(&ys[j..]);
+                Value::list(out)
+            }
+            "next_perm" => {
+                let mut v = (**xs).clone();
+                let n = v.len();
+                let mut i = n.wrapping_sub(2);
+                while i < n && v[i] >= v[i + 1] {
+                    i = i.wrapping_sub(1);
+                }
+                if n < 2 || i >= n {
+                    opt(None)
+                } else {
+                    let mut j = n - 1;
+                    while v[j] <= v[i] {
+                        j -= 1;
+                    }
+                    v.swap(i, j);
+                    v[i + 1..].reverse();
+                    opt(Some(Value::list(v)))
+                }
+            }
             "sort_with" => {
                 let mut v = (**xs).clone();
                 self.msort(&mut v, &a[0])?;

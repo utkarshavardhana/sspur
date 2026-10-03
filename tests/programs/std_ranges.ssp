@@ -1,0 +1,67 @@
+fn evens_sum(n: Int) -> Int
+= range(0, n, 2).map(x => x * x).sum
+
+fn countdown(n: Int) -> List[Int]
+= range(n, 0, -3).filter(x => x % 2 == 0).map(x => x + 1)
+
+fn stepped_len(a: Int, b: Int, k: Int) -> Int
+= range(a, b, k).filter(x => x % 3 == 0).len
+
+fn plain_sum(a: Int, b: Int, k: Int) -> Int
+= range(a, b, k).sum
+
+fn loop_sum(a: Int, b: Int, k: Int) -> Int
+= do
+  var s = 0
+  for i in range(a, b, k)
+    s := s + i % 1000
+  s
+
+fn big_loop(n: Int) -> Int
+= do
+  var c = 0
+  for i in range(0, n, 7)
+    c := c + 1
+  c
+
+fn huge_count() -> Int
+= range(-9223372036854775807 - 1, 9223372036854775807, 4611686018427387904).len
+
+fn first_words(s: Str) -> List[Str]
+= s.words.take_while(w => w != "stop")
+
+fn after_header(lines: List[Str]) -> List[Str]
+= lines.drop_while(l => l.starts_with("#"))
+
+fn bounds(xs: List[Int], x: Int) -> (Int, Int)
+= (xs.sort.lower_bound(x), xs.sort.upper_bound(x))
+
+fn spin(xs: List[Int], k: Int) -> List[Int]
+= xs.rotate(k)
+
+fn merged(a: List[Int], b: List[Int]) -> List[Int]
+= a.sort.merge(b.sort)
+
+fn perms(xs: List[Int]) -> List[List[Int]] ! div
+= do
+  var out = [xs.sort]
+  var cur = xs.sort.next_perm
+  while cur.is_some
+    out := out.push(cur.get)
+    cur := cur.get.next_perm
+  out
+
+fn nth_perm(xs: List[Int]) -> Opt[List[Int]]
+= xs.next_perm
+
+test sums = evens_sum(10) == 120 and plain_sum(10, 0, -2) == 30 and plain_sum(0, 0, 1) == 0
+test down = countdown(12) == [13, 7] and countdown(13) == [11, 5]
+test lengths = stepped_len(0, 100, 7) == 5 and stepped_len(100, 0, -7) == 5
+test loops = loop_sum(0, 10, 3) == 18 and loop_sum(10, 0, -4) == 18 and loop_sum(5, 5, 1) == 0
+test lazy_loop = big_loop(100000000) == 14285715
+test extreme = huge_count() == 4
+test while_ops = first_words("go left stop right") == ["go", "left"] and first_words("") == [] and after_header(["# a", "#b", "x", "# c"]) == ["x", "# c"]
+test binary = bounds([5, 1, 3, 3, 3, 9], 3) == (1, 4) and bounds([], 1) == (0, 0) and bounds([1, 2], 5) == (2, 2)
+test rotation = spin([1, 2, 3, 4, 5], 2) == [3, 4, 5, 1, 2] and spin([1, 2, 3], -1) == [3, 1, 2] and spin([], 5) == [] and spin([1, 2, 3], 9) == [1, 2, 3]
+test merging = merged([5, 1, 9], [2, 8, 1]) == [1, 1, 2, 5, 8, 9] and merged([], [3]) == [3]
+test permutations = perms([3, 1, 2]) == [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]] and perms([1, 1, 2]).len == 3 and nth_perm([3, 2, 1]) == none and nth_perm([]) == none

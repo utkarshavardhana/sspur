@@ -67,7 +67,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -468,6 +468,9 @@ fn emit_gpu(l: &Loaded, label: &str, args: &Args) -> ExitCode {
 }
 
 fn build_bare(l: &Loaded, label: &str, args: &Args) -> ExitCode {
+    if args.val("--backend").is_some_and(|b| b == "llvm") {
+        return build_llvm(l, label, args);
+    }
     let Some(target) = args.val("--target") else {
         eprintln!("build needs --target {}", sspur_native::bare::TARGETS.join("|"));
         return ExitCode::from(2);
@@ -649,6 +652,22 @@ fn report(src: &str, path: &str, diags: &[Diag], json: bool) {
         eprintln!("{path}:{line}:{col} {sev}{} {}", d.code, d.msg);
         if let Some(h) = &d.hint {
             eprintln!("  hint: {h}");
+        }
+    }
+}
+
+fn build_llvm(l: &Loaded, label: &str, args: &Args) -> ExitCode {
+    let stem = std::path::Path::new(label).file_stem().map_or("prog".into(), |s| s.to_string_lossy().into_owned());
+    let out = std::path::PathBuf::from(args.val("-o").cloned().unwrap_or(stem));
+    let opt = if args.has("--O3") { "-O3" } else { "-O2" };
+    match sspur_native::llvm::emit(&l.module, &l.check).and_then(|ir| sspur_native::llvm::build(&ir, &out, opt).map(|d| (ir, d))) {
+        Ok((ir, dir)) => {
+            println!("built {} (direct LLVM IR, {} functions; IR in {})", out.display(), ir.functions.len(), dir.join("prog.ll").display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{label}: {e}");
+            ExitCode::FAILURE
         }
     }
 }

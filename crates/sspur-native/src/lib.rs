@@ -12,6 +12,7 @@ pub mod bigint;
 pub mod cgen;
 pub mod chrono;
 pub mod json;
+pub mod llvm;
 pub mod nval;
 pub mod rnd;
 pub mod tz;

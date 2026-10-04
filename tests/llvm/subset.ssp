@@ -1,0 +1,44 @@
+type Pt = {x: Int, y: Int}
+
+type Body = {pos: Pt, mass: F64, live: Bool}
+
+fn add(a: Pt, b: Pt) -> Pt
+= Pt{x: a.x + b.x, y: a.y + b.y}
+
+fn manhattan(p: Pt) -> Int
+= p.x.abs + p.y.abs
+
+fn step(b: Body, k: Int) -> Body
+= if b.live then b with pos := add(b.pos, Pt{x: k, y: 0 - k}), mass := b.mass * 0.5 else b
+
+fn first_over(n: Int, t: Int) -> Int
+= do
+  for i in 0..n
+    if i * i % 97 > t then return i
+  -1
+
+fn bits(n: Int) -> Int
+= n.band(255).bor(n.shl(3)).bxor(n.shr(2))
+
+fn clamp(v: Int, lo: Int, hi: Int) -> Int
+  pre lo <= hi
+  post r >= lo and r <= hi
+= if v < lo then lo else if v > hi then hi else v
+
+fn half(n: Int where _ >= 0) -> Int
+= n / 2
+
+fn order(a: F64, b: F64) -> Bool
+= a < b or a == b
+
+fn main() -> Unit ! log
+= do
+  var b = Body{pos: Pt{x: 1, y: 2}, mass: 64.0, live: true}
+  var i = 0
+  while i < 5
+    b := step(b, i)
+    i := i + 1
+  log("pos {b.pos.x} {b.pos.y} dist {manhattan(b.pos)} mass {(b.mass * 100.0).round} live {b.live}")
+  log("first {first_over(1000, 90)} none {first_over(10, 1000)} bits {bits(12345)}")
+  log("clamp {clamp(15, 0, 9)} {clamp(-3, 0, 9)} half {half(41)}")
+  log("order {order(-0.0, 0.0)} {order(0.0, -0.0)} {order(1.5, 1.5)} {not order(2.0, 1.0) and true}")

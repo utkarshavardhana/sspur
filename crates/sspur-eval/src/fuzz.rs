@@ -289,6 +289,11 @@ impl Interp {
                 let xs: Vec<Value> = (0..n).filter(|_| rng.chance(40)).map(Value::Int).collect();
                 crate::stdx::bits_from(&xs, n).ok()?
             }
+            "Complex" if !self.types.contains_key(name) => {
+                let f_ty = Ty::Named { name: "F64".into(), args: vec![], span: Span::default() };
+                let (re, im) = (self.generate(&f_ty, rng, opts, depth)?, self.generate(&f_ty, rng, opts, depth)?);
+                Value::Record("#Complex".into(), Rc::new(vec![("re".into(), re), ("im".into(), im)]))
+            }
             "Rng" if !self.types.contains_key(name) => {
                 let int_ty = Ty::Named { name: "Int".into(), args: vec![], span: Span::default() };
                 let (Value::Int(a), Value::Int(b)) = (self.generate(&int_ty, rng, opts, depth)?, self.generate(&int_ty, rng, opts, depth)?) else { return None };

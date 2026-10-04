@@ -254,6 +254,9 @@ impl Interp {
         if let Some(v) = crate::stdrng::global(n, &a)? {
             return Ok(v);
         }
+        if let Some(v) = crate::stdcx::global(n, &a)? {
+            return Ok(v);
+        }
         Ok(match n {
             "empty_set" => Value::Set(Rc::new(BTreeSet::new())),
             "empty_heap" => Value::Heap(Rc::new(Vec::new())),

@@ -17,6 +17,7 @@ mod own;
 mod prove;
 mod simd;
 mod stdlib;
+mod stdcx;
 mod stdrng;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
@@ -3296,6 +3297,9 @@ impl<'a> Cx<'a> {
         }
         if matches!(&rt, Type::Con(n, _) if n == "#Rng") {
             return self.rng_method(&r, name, args, t);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "#Complex") {
+            return self.cx_method(&r, name, args);
         }
         if matches!(&rt, Type::Con(n, _) if n == "Atomic" || n == "Chan") {
             return self.conc_method(&r, &rt, name, args, t);

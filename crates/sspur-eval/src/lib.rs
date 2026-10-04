@@ -6,6 +6,7 @@ pub mod kernel;
 mod sched;
 mod stdlib;
 mod stdbig;
+mod stdcx;
 mod stdre;
 mod stdrng;
 mod stdtime;

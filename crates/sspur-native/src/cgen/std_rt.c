@@ -1414,3 +1414,58 @@ static int64_t ss_r_weighted(SsR* r, const double* w, int64_t n, Status* st) {
     for (int64_t i = 0; i < n; i++) { if (w[i] > 0.0) last = i; c += w[i]; if (u < c) return i; }
     return last;
 }
+//@ cx
+typedef struct { double re, im; } SsC;
+static SsC ss_cx_mul(SsC a, SsC b) {
+#pragma clang fp contract(off)
+    double ac = a.re * b.re; double bd = a.im * b.im; double ad = a.re * b.im; double bc = a.im * b.re; return (SsC){ac - bd, ad + bc};
+}
+static SsC ss_cx_div(SsC a, SsC b) {
+#pragma clang fp contract(off)
+    if (fabs(b.re) >= fabs(b.im)) { double r = b.im / b.re; double dr = b.im * r; double den = b.re + dr; double br = a.im * r; double ar = a.re * r; return (SsC){(a.re + br) / den, (a.im - ar) / den}; }
+    double r = b.re / b.im; double cr = b.re * r; double den = cr + b.im; double ar = a.re * r; double br = a.im * r; return (SsC){(ar + a.im) / den, (br - a.re) / den};
+}
+static SsC ss_cx_add(SsC a, SsC b) { return (SsC){a.re + b.re, a.im + b.im}; }
+static SsC ss_cx_sub(SsC a, SsC b) { return (SsC){a.re - b.re, a.im - b.im}; }
+static double ss_cx_abs(SsC a) { return hypot(a.re, a.im); }
+static SsC ss_cx_exp(SsC a) { double e = exp(a.re); return (SsC){e * cos(a.im), e * sin(a.im)}; }
+static SsC ss_cx_ln(SsC a) { return (SsC){log(ss_cx_abs(a)), atan2(a.im, a.re)}; }
+static SsC ss_cx_sqrt(SsC a) {
+    if (a.re == 0.0 && a.im == 0.0) return (SsC){0.0, a.im};
+    double s = ss_cx_abs(a) + fabs(a.re); double t = sqrt(s / 2.0); double t2 = 2.0 * t;
+    if (a.re >= 0.0) return (SsC){t, a.im / t2};
+    return (SsC){fabs(a.im) / t2, copysign(t, a.im)};
+}
+static SsC ss_cx_sin(SsC a) { return (SsC){sin(a.re) * cosh(a.im), cos(a.re) * sinh(a.im)}; }
+static SsC ss_cx_cos(SsC a) { return (SsC){cos(a.re) * cosh(a.im), -(sin(a.re) * sinh(a.im))}; }
+static SsC ss_cx_sinh(SsC a) { return (SsC){sinh(a.re) * cos(a.im), cosh(a.re) * sin(a.im)}; }
+static SsC ss_cx_cosh(SsC a) { return (SsC){cosh(a.re) * cos(a.im), sinh(a.re) * sin(a.im)}; }
+static SsC ss_cx_ti(SsC a) { return (SsC){-a.im, a.re}; }
+static SsC ss_cx_asin(SsC z) { SsC one = {1.0, 0.0}; SsC w = ss_cx_ln(ss_cx_add(ss_cx_ti(z), ss_cx_sqrt(ss_cx_sub(one, ss_cx_mul(z, z))))); return (SsC){w.im, -w.re}; }
+static SsC ss_cx_atan(SsC z) { SsC one = {1.0, 0.0}; SsC iz = ss_cx_ti(z); SsC d = ss_cx_sub(ss_cx_ln(ss_cx_sub(one, iz)), ss_cx_ln(ss_cx_add(one, iz))); return (SsC){-d.im / 2.0, d.re / 2.0}; }
+static SsC ss_cx_un(SsC z, int op) {
+    SsC one = {1.0, 0.0};
+    switch (op) {
+    case 0: return (SsC){-z.re, -z.im};
+    case 1: return (SsC){z.re, -z.im};
+    case 2: return ss_cx_exp(z);
+    case 3: return ss_cx_ln(z);
+    case 4: return ss_cx_sqrt(z);
+    case 5: return ss_cx_sin(z);
+    case 6: return ss_cx_cos(z);
+    case 7: return ss_cx_div(ss_cx_sin(z), ss_cx_cos(z));
+    case 8: return ss_cx_sinh(z);
+    case 9: return ss_cx_cosh(z);
+    case 10: return ss_cx_div(ss_cx_sinh(z), ss_cx_cosh(z));
+    case 11: return ss_cx_asin(z);
+    case 12: { SsC a = ss_cx_asin(z); return (SsC){1.5707963267948966 - a.re, -a.im}; }
+    case 13: return ss_cx_atan(z);
+    case 14: return ss_cx_ln(ss_cx_add(z, ss_cx_sqrt(ss_cx_add(ss_cx_mul(z, z), one))));
+    case 15: return ss_cx_ln(ss_cx_add(z, ss_cx_mul(ss_cx_sqrt(ss_cx_add(z, one)), ss_cx_sqrt(ss_cx_sub(z, one)))));
+    default: { SsC d = ss_cx_sub(ss_cx_ln(ss_cx_add(one, z)), ss_cx_ln(ss_cx_sub(one, z))); return (SsC){d.re / 2.0, d.im / 2.0}; }
+    }
+}
+static SsC ss_cx_pow(SsC z, SsC w) {
+    if (z.re == 0.0 && z.im == 0.0) return (w.re == 0.0 && w.im == 0.0) ? (SsC){1.0, 0.0} : (SsC){0.0, 0.0};
+    return ss_cx_exp(ss_cx_mul(w, ss_cx_ln(z)));
+}

@@ -115,9 +115,9 @@ pub const METHODS: &[(&str, &str)] = &[
     ("*", "str[A](x: A) -> Str"),
 ];
 
-pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0), ("Regex", "#Regex", 0), ("DevBuf", "#DevBuf", 1), ("Rng", "#Rng", 0)];
+pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0), ("Regex", "#Regex", 0), ("DevBuf", "#DevBuf", 1), ("Rng", "#Rng", 0), ("Complex", "#Complex", 0)];
 
-pub const STD_RECORDS: &[(&str, &str)] = &[("#Rng", "type Rng = {state: Int, gamma: Int}")];
+pub const STD_RECORDS: &[(&str, &str)] = &[("#Rng", "type Rng = {state: Int, gamma: Int}"), ("#Complex", "type Complex = {re: F64, im: F64}")];
 
 pub const STD_GLOBALS: &[&str] = &[
     "dev_f32(xs: List[F64]) -> DevBuf[F32] ! dev",
@@ -171,6 +171,8 @@ pub const STD_GLOBALS: &[&str] = &[
     "rand_beta(seed: Int, a: F64, b: F64) -> (F64, Int)",
     "rand_weighted(seed: Int, ws: List[F64]) -> (Int, Int)",
     "rng(seed: Int) -> Rng",
+    "complex(re: F64, im: F64) -> Complex",
+    "polar(r: F64, theta: F64) -> Complex",
     "bits(n: Int) -> Bits",
     "regex(p: Str) -> Res[Regex, Str]",
     "big(n: Int) -> BigInt",
@@ -418,10 +420,36 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("#Rng", "weighted(r: Rng, ws: List[F64]) -> (Int, Rng)"),
     ("#Rng", "split(r: Rng) -> (Rng, Rng)"),
     ("#Rng", "stream(r: Rng, k: Int) -> Rng"),
+    ("#Complex", "add(z: Complex, w: Complex) -> Complex"),
+    ("#Complex", "sub(z: Complex, w: Complex) -> Complex"),
+    ("#Complex", "mul(z: Complex, w: Complex) -> Complex"),
+    ("#Complex", "div(z: Complex, w: Complex) -> Complex"),
+    ("#Complex", "pow(z: Complex, w: Complex) -> Complex"),
+    ("#Complex", "neg(z: Complex) -> Complex"),
+    ("#Complex", "conj(z: Complex) -> Complex"),
+    ("#Complex", "exp(z: Complex) -> Complex"),
+    ("#Complex", "ln(z: Complex) -> Complex"),
+    ("#Complex", "sqrt(z: Complex) -> Complex"),
+    ("#Complex", "sin(z: Complex) -> Complex"),
+    ("#Complex", "cos(z: Complex) -> Complex"),
+    ("#Complex", "tan(z: Complex) -> Complex"),
+    ("#Complex", "sinh(z: Complex) -> Complex"),
+    ("#Complex", "cosh(z: Complex) -> Complex"),
+    ("#Complex", "tanh(z: Complex) -> Complex"),
+    ("#Complex", "asin(z: Complex) -> Complex"),
+    ("#Complex", "acos(z: Complex) -> Complex"),
+    ("#Complex", "atan(z: Complex) -> Complex"),
+    ("#Complex", "asinh(z: Complex) -> Complex"),
+    ("#Complex", "acosh(z: Complex) -> Complex"),
+    ("#Complex", "atanh(z: Complex) -> Complex"),
+    ("#Complex", "abs(z: Complex) -> F64"),
+    ("#Complex", "arg(z: Complex) -> F64"),
+    ("#Complex", "norm(z: Complex) -> F64"),
+    ("#Complex", "scale(z: Complex, k: F64) -> Complex"),
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "rand_binomial", "rand_poisson", "rand_geometric", "rand_gamma", "rand_beta", "rand_weighted", "rng", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "exit", "regex", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days", "dev_f32", "dev_f64", "dev_i32", "dev_u32", "dev_int",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "rand_binomial", "rand_poisson", "rand_geometric", "rand_gamma", "rand_beta", "rand_weighted", "rng", "complex", "polar", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "exit", "regex", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days", "dev_f32", "dev_f64", "dev_i32", "dev_u32", "dev_int",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

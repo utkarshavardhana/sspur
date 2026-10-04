@@ -209,4 +209,11 @@ SSPUR is designed, written, and maintained by [Utkarsha Vardhana](https://github
 
 ## License
 
-Copyright © 2026 Utkarsha Vardhana. All rights reserved. SSPUR isn't open source yet; a license will be chosen before the first public release.
+SSPUR is dual-licensed under either of
+
+- [MIT license](LICENSE-MIT)
+- [Apache License, Version 2.0](LICENSE-APACHE)
+
+at your option. Unless you explicitly state otherwise, any contribution you submit for inclusion in SSPUR is dual-licensed as above, without any additional terms or conditions.
+
+Copyright © 2026 Utkarsha Vardhana.

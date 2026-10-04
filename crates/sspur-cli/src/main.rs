@@ -274,7 +274,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             }
         },
         None => match cwd_store() {
-            Some(s) => ("HEAD".to_string(), String::new(), s.load_head()),
+            Some(s) => ("HEAD".to_string(), String::new(), if cmd == "check" && !args.has("--no-cache") { s.check_head() } else { s.load_head() }),
             None => return no_store(),
         },
     };

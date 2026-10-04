@@ -59,3 +59,5 @@ Toolchain used: Homebrew `qemu` 11.1, `llvm` 23 and `lld` (Apple's clang has no 
 ## Not yet
 
 Flat (unboxed) sum types and fixed arrays `[T; N]` in bare code; static mutable state shared between handlers and `main` (today a handler can only use registers and memory through `mmio`/`Ptr`); `alloc` handlers over caller-provided memory (doc 05 section 5); inline assembly and `intr.*`; the PLIC on riscv64 and external interrupt routing; multi-hart and SMP boot; MMU setup; other boards and a board description format; `F64` with FPU setup; and preserving hex literals in `sspur fmt`.
+
+Update (ADR 0024): fixed arrays (`Array[T, N]`), static state shared with handlers, inline asm and a Cortex-M4 target (`thumbv7em-mps2`) are now implemented.

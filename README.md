@@ -43,7 +43,7 @@ Most languages are designed around a human at a keyboard. SSPUR starts from a di
 - Errors as typed effects (`raise`, `catch`), with exhaustiveness checking
 - Structured concurrency with `par`, `Atomic[Int]`, and channels, with data races rejected by the type checker
 - A `sys` profile with owned resources, borrows, deterministic cleanup, and raw pointers behind `unsafe`
-- A `bare` profile with no runtime for bare-metal code, memory-mapped I/O, and interrupt handlers
+- A `bare` profile with no runtime for bare-metal code, memory-mapped I/O, interrupt handlers, fixed arrays, static state with atomic access, and inline asm, for QEMU riscv64 and aarch64 and Cortex-M4 firmware
 
 **Standard library**
 - Collections: `List`, `Map`, `Set`, `HashMap`, `HashSet`, `Heap`, `Bits`, `FlatMap`, `MdSpan`, deques, lazy `View` pipelines, and a broad set of list algorithms
@@ -137,7 +137,7 @@ More examples:
 |---|---|
 | [`examples/crud/`](examples/crud) | A CRUD HTTP service, with `sspur deploy plan` and `sspur deploy local` |
 | [`examples/ffi/`](examples/ffi) | Calling libc and libm, and calling SSPUR from C |
-| [`examples/bare/`](examples/bare) | Bare-metal hello world and a timer interrupt on QEMU riscv64 and aarch64 |
+| [`examples/bare/`](examples/bare) | Bare-metal hello world, a timer interrupt, inline asm, and statics shared with an interrupt handler on QEMU riscv64 and aarch64 and a Cortex-M4 (MPS2 AN386) |
 | [`tests/programs/`](tests/programs) | 47 runnable programs covering every language feature and library area |
 
 ## Using SSPUR with AI agents
@@ -178,7 +178,7 @@ SSPUR is at version 0.1 and under active development. The language and tools are
 | 2. Compiler core and spec-only model evaluation | Done |
 | 3. Agent loop: codebase, transactions, queries, MCP, effect handlers | Done |
 | 4. Native compiler, `sys` profile, ownership, concurrency, SMT contracts | Done |
-| 5. Bare-metal profile, SIMD, C interop | Done; an LLVM backend and embedded targets beyond QEMU remain |
+| 5. Bare-metal profile, SIMD, C interop, LLVM, PGO and LTO, inline asm, embedded | Done: C through clang stays the production path (a direct LLVM IR prototype was measured at 0.98x to 1.04x, ADR 0024), opt-in PGO and explicit LTO, inline asm, a Cortex-M4 firmware target, fixed arrays and static state shared with interrupt handlers; real boards beyond QEMU and a board description format remain |
 | 6. Deployment, migrations, hot swap, replay, GPU kernels, standard library | Mostly done: 22 of 23 C++ library areas covered, locale partial by decision; a first real AWS deploy is pending |
 | 7. Multi-agent sync, replica sync, global build cache, proven rewrites, cost-driven optimization | Done: 100 concurrent agents with no lost work, per-definition native objects, proven rewrites with `sspur explain-opt`, cost-driven inlining and fusion; an authenticated sync server remains |
 

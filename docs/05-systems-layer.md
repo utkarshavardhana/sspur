@@ -50,7 +50,7 @@ type Packet = repr(packed) {hdr: Header, body: [U8; ..]}
 
 - Layout control: `repr(c)`, `repr(packed)`, `repr(transparent)`, `align(N)`, explicit `at(offset)` for fields.
 - Bitfields: `Bits[N]`. Endian-explicit integers: `U32be`, `U16le`.
-- Fixed arrays `[T; N]`, slices `[T]`, and unsized tail fields.
+- Fixed arrays (implemented as `Array[T, N]` with literals `[v; N]`, ADR 0024), slices `[T]`, and unsized tail fields.
 - The default layout is compiler-chosen (field reordering for size and cache behavior). It's stable per hash.
 
 ## 5. Allocators are effect handlers
@@ -86,13 +86,13 @@ fn dot(a: &[F32], b: &[F32]) -> F32  pre a.len == b.len
 
 fn crc(x: U64) -> U32 @target(sse4.2) = intr.crc32(x)
 
-fn rdtsc() -> U64 ! unsafe
-= asm "rdtsc; shl rdx, 32; or rax, rdx" out(rax: U64) clobber(rdx)
+fn ticks() -> Int ! unsafe
+= asm "isb\n mrs {t}, cntvct_el0" out(t: Int) clobber("memory")
 ```
 
 - Portable vectors `Vec[F32, 8]`, auto-vectorization, and generated function multi-versioning (one build, best path per CPU).
 - Intrinsics live under `intr.*` per architecture.
-- Inline assembly has typed operands and explicit clobbers, under `unsafe`.
+- Inline assembly has typed operands and explicit clobbers, under `unsafe`. Implemented as `asm "..." in(x: e) out(r: Int) clobber("memory")` (ADR 0024).
 - `Volatile[T]` and the `mmio` effect cover memory-mapped I/O. Implemented as `mmio[U32](addr)` with `.read` and `.write(v)` (ADR 0017).
 - Interrupt handlers in `bare`, written as an `interrupt vec` clause line (ADR 0017).
 - Float semantics are strict IEEE 754 by default. `@fastmath` opts in per node.
@@ -143,7 +143,7 @@ Operators are trait methods: `Add`, `Mul`, `Index`, `Deref`, `Call`, `Cmp`, and 
 | Rust, Zig | Through the C ABI |
 | Python, JVM, Node | Generated bindings (pillar 23) |
 | Outputs | Executables, static and shared libraries, object files, WASM modules, firmware images |
-| Optimization | LTO, PGO, and BOLT-style post-link layout, on by default for release builds |
+| Optimization | Opt-in PGO (`--pgo`) and explicit LTO (`--lto`); measured gains were too small to make them the default (ADR 0024). BOLT-style layout is future work |
 | Targets | x86_64, aarch64, riscv64, wasm32, thumbv7/8 (embedded), PTX and SPIR-V (GPU) |
 
 ## 13. GPU and accelerators
@@ -197,11 +197,12 @@ Early phases wrap mature C libraries through FFI. Native rewrites come later and
 | Namespaces, modules | Graph namespaces | 1 |
 | std::thread, atomics | `thread`, `Atomic[T]`, C++20 memory model | 4 |
 | Coroutines | Effect handlers | 3 |
-| Inline asm | `asm` with typed operands | 5 |
+| Inline asm | `asm` with named, typed operands (ADR 0024) | 5 |
 | Intrinsics, SIMD | `intr.*`, `Vec[T, N]`, multi-versioning | 5 |
 | Bitfields, packing, alignment | `Bits[N]`, `repr`, `align` | 4 |
 | volatile, MMIO | `Volatile[T]`, `mmio` | 5 |
-| Freestanding builds | `bare` profile | 5 |
+| Freestanding builds | `bare` profile, QEMU riscv64 and aarch64, Cortex-M4 firmware (ADR 0017, 0024) | 5 |
+| `std::array`, globals | `Array[T, N]`, `static` with atomic access (ADR 0024) | 5 |
 | Variadic templates | `..Ts` variadics | 4 |
 | Template specialization | Ordered impl specialization | 4 |
 | RTTI, dynamic_cast | `dyn Any` with checked downcast | 4 |

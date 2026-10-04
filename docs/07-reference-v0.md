@@ -263,6 +263,19 @@ fn run() -> Int ! log
 | `Ptr[T]` | Raw memory of `Int`, `F64` or `Bool`: `alloc(n, init)`, `free(p)`, `p.load(i)`, `p.store(i, v)`, `p.offset(n)`, plus `null()` and `p.is_null`. All but the last two perform `unsafe`. Native code does no checks; the interpreter traps on out-of-bounds access, use after free and double free |
 | `unsafe` | Declare `! unsafe`, or discharge it with an `unsafe "reason"` line after the signature (reported as `A_UNSAFE`). Otherwise `E_UNSAFE` |
 | Tasks | A `par` task can't use a resource or borrow from outside it (`E_PAR_SHARE`); move resources between tasks with `c.send(x)` and receive them with `for x in c` |
+| Inline asm | `asm "template" in(x: e, ...) out(r: Int, ...) clobber("cc", "memory")` (ADR 0024). The template names operands as `{x}` (`\{` is a literal brace) and lowers to GCC extended asm, always volatile, every operand in a general register. Inputs are `Int`, `Bool` or `Ptr`, outputs `Int` or `Bool` (`E_ASM_OPERAND`, also for an unknown `{name}`). The value is `Unit`, the single output, or a tuple of the outputs. It performs `unsafe`. The interpreter traps ("inline asm needs native code"), so asm runs in compiled `sys` code on the host and in `bare` kernels |
+| Fixed arrays and statics | `Array[T, N]`, `[v; N]` and `static x: T = init`, as in the bare profile below |
+
+```
+fn counter() -> Int
+  unsafe "reads the virtual counter register"
+= asm "isb\n mrs {t}, cntvct_el0" out(t: Int)
+
+fn divmod(a: Int, b: Int) -> (Int, Int)
+  pre b > 0
+  unsafe "b is positive"
+= asm "sdiv {q}, {x}, {y}\n msub {m}, {q}, {y}, {x}" in(x: a, y: b) out(q: Int, m: Int)
+```
 
 ## Bare profile (`bare`)
 
@@ -299,22 +312,27 @@ fn main() ! mmio, div
 
 | Feature | Rules |
 |---|---|
-| Allowed values | `Int`, `Bool`, `Unit`, records and tuples of them, `Opt`, `res` types, `Ptr`, `Mmio[W]`, and static `Str` literals with `len byte_len byte(i) is_empty` and `==`. Everything else is `E_PROFILE_BARE`: lists, maps, sum types (heap-allocated), lambdas and function values, local functions, `F64`, interpolation, string concatenation, `.str`, `alloc`/`free`, `log`, `raise`/`catch`/`fail`, `par`, atomics, channels, effect handlers, externs, stores and services |
-| Effects | `div`, `unsafe` and `mmio` only |
+| Allowed values | `Int`, `Bool`, `Unit`, records and tuples of them, `Array[T, N]` of them, `Opt`, `res` types, `Ptr`, `Mmio[W]`, and static `Str` literals with `len byte_len byte(i) is_empty` and `==`. Everything else is `E_PROFILE_BARE`: lists, maps, sum types (heap-allocated), lambdas and function values, local functions, `F64`, interpolation, string concatenation, `.str`, `alloc`/`free`, `log`, `raise`/`catch`/`fail`, `par`, atomics, channels, effect handlers, externs, stores and services |
+| Effects | `div`, `unsafe`, `mmio` and `static` only |
 | `mmio[W](addr)` | A volatile register of width `W` (`U8 U16 U32 U64`, else `E_MMIO_WIDTH`). `r.read` gives an `Int` (zero-extended) and `r.write(v)` stores the low `W` bits. Both perform `mmio` |
-| `interrupt v` | A clause line after the signature of `fn h()` (no parameters, `Unit`) makes `h` the handler for vector `v`: `timer`, or the target's number (riscv64 `mcause` code, aarch64 GIC INTID). Wrong shape is `E_INTERRUPT_SIG`, an unknown vector `E_INTERRUPT_VEC`, a second handler `E_INTERRUPT_DUP`. Handlers run with interrupts masked; the timer is one-shot and is disarmed before its handler runs |
-| Builtins | `timer_start(ticks)` arms the one-shot timer and enables its interrupt; `tick_hz()`, `ticks()`; `irq_enable(n)` unmasks line `n` and enables interrupts; `wait_irq()` (`wfi`); `halt(code)` powers off with exit status `code`; `arch()` is `"riscv64"`, `"aarch64"`, or `"host"` in the interpreter. All but `tick_hz` and `arch` perform `mmio` |
+| `interrupt v` | A clause line after the signature of `fn h()` (no parameters, `Unit`) makes `h` the handler for vector `v`: `timer`, or the target's number (riscv64 `mcause` code, aarch64 GIC INTID, Cortex-M NVIC IRQ number). Wrong shape is `E_INTERRUPT_SIG`, an unknown vector `E_INTERRUPT_VEC`, a second handler `E_INTERRUPT_DUP`. Handlers run with interrupts masked; the timer is one-shot and is disarmed before its handler runs |
+| Builtins | `timer_start(ticks)` arms the one-shot timer and enables its interrupt; `tick_hz()`, `ticks()`; `irq_enable(n)` unmasks line `n` and enables interrupts; `wait_irq()` (`wfi`); `halt(code)` powers off with exit status `code`; `arch()` is `"riscv64"`, `"aarch64"`, `"thumbv7em"`, or `"host"`; comparing it with a literal is folded at compile time, so the other branches (and their asm) are not emitted. All but `tick_hz` and `arch` perform `mmio` |
 | `main` | `fn main()` or `fn main() -> Int`; returning halts with status 0 or the result |
 | Traps | Contract failures, overflow and other traps call `fn on_trap(code: Int)` if defined, then halt with status 64 + code (65 is integer overflow). An unexpected CPU exception halts with 63. Drops don't run |
 | Tests | Tests run on the host; pure functions work as usual, and performing `mmio` in a test is `E_PROFILE_BARE`. `sspur run` traps at the first hardware access |
+| Fixed arrays (`sys` and `bare`) | `Array[T, N]` with a literal `N`; `[v; N]` builds one. `a[i]` (bounds-checked), `a.len`, `a[i] := v`, `a with [i] := v`. Values, on the stack (a C struct in native code) |
+| `static x: T = init` (`sys` and `bare`) | Module state. `T` is `Int`, `Bool` or `Array[Int or Bool, N]` (`E_STATIC_TYPE`); `init` is a literal or `[literal; N]` (`E_STATIC_INIT`). Only `x.load`, `x.store(v)`, `x.swap(v)`, `x.add(d)` (traps on overflow), `x.cas(old, new) -> Bool`, with an index first for arrays, and `x.len`; anything else is `E_STATIC_ACCESS`. Each access performs `static` and is atomic with respect to interrupts (a masked critical section). Code reachable from `main` may not `store`/`swap` a value read from a static that interrupt code also writes (`E_STATIC_RACE`: use `add` or `cas`). On the host, statics live in the interpreter and reset before `main` and each test |
+| `asm` (`sys` and `bare`) | `asm "template" in(x: e, ...) out(r: Int, ...) clobber("memory", ...)`, see the systems profile |
 
-`sspur build --target riscv64-qemu|aarch64-qemu file.ssp -o kernel.elf` writes `kernel.elf.build/` with `kernel.c` (freestanding C), `start.S` and `link.ld`, compiles with clang (`-ffreestanding -nostdlib`) and links with `ld.lld`. It needs a clang with the target's backend (Apple's clang has no riscv64; set `SSPUR_BARE_CC` or install LLVM) and prints the QEMU command:
+`sspur build --target riscv64-qemu|aarch64-qemu|thumbv7em-mps2 file.ssp -o kernel.elf` writes `kernel.elf.build/` with `kernel.c` (freestanding C), `start.S` and `link.ld`, compiles with clang (`-ffreestanding -nostdlib`) and links with `ld.lld`. It needs a clang with the target's backend (Apple's clang has no riscv64; set `SSPUR_BARE_CC` or install LLVM) and prints the QEMU command:
 
 | Target | Machine | Load address | Console | Power off |
 |---|---|---|---|---|
 | `riscv64-qemu` | `virt -bios none`, M-mode | `0x80000000` | NS16550 at `0x10000000` | SiFive test device |
 | `aarch64-qemu` | `virt -cpu cortex-a53 -semihosting`, EL1 | `0x40100000` | PL011 at `0x09000000` | semihosting `SYS_EXIT`, then PSCI |
+| `thumbv7em-mps2` (Cortex-M4, `thumbv7em-none-eabihf`) | `qemu-system-arm -M mps2-an386 -semihosting` | flash at `0x0` (vector table first), RAM at `0x20000000`; startup copies `.data` and zeroes `.bss` | CMSDK UART0 at `0x40004000` (set bit 0 of `CTRL` at `+8` first, poll `STATE` at `+4`) | semihosting `SYS_EXIT_EXTENDED` |
 
+On Cortex-M, `interrupt timer` is SysTick (25 MHz, 24-bit one-shot), `interrupt n` is NVIC IRQ `n`, `ticks()` reads CMSDK timer 0, and 64-bit `Int` division and checked multiplication use helpers built into the freestanding runtime.
 `sspur fmt` prints integer literals in decimal, so `0x10000000` becomes `268435456`.
 
 ## GPU kernels
@@ -535,7 +553,7 @@ Errors are `"{path}: not found"`, `permission denied`, `is a directory`, `not a 
 
 ## CLI and agent tools
 
-`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status`, `sspur build --target riscv64-qemu|aarch64-qemu file -o kernel.elf`, `sspur gpu file --emit metal|opencl|spirv|ptx [-o out]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. `sspur bind header.h` generates extern declarations.
+`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status`, `sspur build --target riscv64-qemu|aarch64-qemu|thumbv7em-mps2 file -o kernel.elf`, `sspur gpu file --emit metal|opencl|spirv|ptx [-o out]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. `run`, `test` and `build` take `--pgo` (one training run, cached per source; `--retrain` repeats it) and `--lto off|thin|full` (default `off`); `sspur build --backend llvm file -o prog` is the direct LLVM IR prototype for scalars, control flow and records (ADR 0024). `sspur bind header.h` generates extern declarations.
 
 `sspur fuzz` turns contracts into property tests. It generates inputs that satisfy `pre` and `where`, then reports shrunk counterexamples for any `post` violation or trap.
 

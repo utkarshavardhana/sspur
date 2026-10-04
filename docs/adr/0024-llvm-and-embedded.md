@@ -120,3 +120,56 @@ after irq
 It writes and reads back the LED register, reads `PRIMASK` with inline asm, divides 64-bit values at runtime, and pends NVIC interrupt 5 through `STIR` to run an `interrupt 5` handler. The test harness boots it, `hello`, `timer` (SysTick), `tests/bare/values.ssp` (records, `Opt`, tuples, generics, drops, exit status 42) and the trap test (status 65) under QEMU with a 30-second limit, and skips when `qemu-system-arm` or a clang with the ARM backend is missing.
 
 Moving to a real board means a different memory map and UART, which is board data, not compiler work; a board description format is still future work.
+
+## 6. Fixed arrays and static state
+
+```
+profile bare
+
+static count: Int = 0
+static seen: Array[Int, 4] = [0; 4]
+static done: Bool = false
+
+fn record_tick() ! static
+= do
+  count.add(1)
+  seen.store(count.load % seen.len, count.load)
+  if count.load >= 5 then done.store(true)
+
+fn on_tick() ! mmio, static
+  interrupt timer
+= do
+  if not done.load then record_tick()
+  timer_start(tick_hz() / 1000)
+
+fn histogram(n: Int) -> Int
+= do
+  var a = [0; 8]
+  for i in 0..n
+    a[i % 8] := a[i % 8] + i
+  var s = 0
+  for i in 0..a.len
+    s := s + a[i] * (i + 1)
+  s
+```
+
+| # | Decision | Reason |
+|---|---|---|
+| 1 | `Array[T, N]` is a fixed-size value type with a literal length (the type parser accepts integer arguments; `N` is stored as a type constructor named by its digits, so unification needs no new type form). `[v; N]` builds one. `a[i]` reads with a bounds check (the list trap message), `a.len` is `N`, `a[i] := v` and `a with [i] := v` update. Allowed in `profile sys` and `bare` (`E_PROFILE` elsewhere; `E_TYPE_ARITY` for a missing length) | Doc 05 section 4 promised `[T; N]`; `Array[T, N]` reads like the other generic types. Value semantics match the rest of the language, so an array behaves like a record with numbered fields |
+| 2 | Native code makes an array a C struct `{T v[N];}` passed and returned by value, on the stack. The interpreter uses its list representation, so both tiers share the update and trap code. Functions with an array in their signature get no interpreter entry point; the interpreter runs them itself when it calls them | No heap, so arrays are legal in bare code (the element type must be bare-legal). Entry points would need an array encoding for no benefit |
+| 3 | `static name: T = init` is a module-level definition (`Def::Static`) in `sys` and `bare`. `T` is `Int`, `Bool` or `Array[Int or Bool, N]` (`E_STATIC_TYPE`); `init` is a literal or `[literal; N]` (`E_STATIC_INIT`), so it lives in `.data`/`.bss` with no constructor | The storage is laid out by the linker and initialized by the startup copy, which is what firmware expects |
+| 4 | A static is used only through `x.load`, `x.store(v)`, `x.swap(v)`, `x.add(d)` (Int, traps on overflow like `Atomic.add`), `x.cas(old, new) -> Bool`, and for arrays the same with an index first plus `x.len`. Any other use of the name, including passing it, borrowing it or `:=`, is `E_STATIC_ACCESS` | There is no way to hold a reference to shared state, so every access is a single atomic operation and the compiler sees all of them |
+| 5 | Accesses perform the new `static` effect, declared like `mmio`. Handlers that touch statics declare it, and nothing pure (inlining, `par`, fusion) can be fooled into caching or reordering them | Keeps shared state visible in signatures, as ADR 0017 did for hardware access |
+| 6 | Bare targets implement each operation in a critical section: `csrrci mstatus` on riscv64, `msr daifset` on aarch64, `cpsid i` on Cortex-M, restored afterwards, on `volatile` storage. A 64-bit access on the 32-bit M4 is therefore not torn | All three targets run one core with handlers that don't nest, so masking interrupts is both correct and cheaper than atomic instructions, which the M4 lacks for 64-bit values |
+| 7 | `E_STATIC_RACE`: if interrupt code (handlers, `on_trap`, and what they call) writes a static and code reachable from `main` uses it, or the reverse, then code reachable from `main` may not `store` or `swap` a value computed from the same static. `x.store(x.load + 1)` there must be `x.add(1)` or a `cas` loop. Handlers themselves may read-modify-write | `main` can be interrupted between the load and the store, and the handler's update would be lost. Handlers are not preempted by `main` |
+| 8 | On the host, `sspur test` runs statics in the interpreter, reset before `main` and before each test; functions that perform `static` are not compiled natively there | One copy of the state, in one tier, so interpreter and native code can't disagree about it |
+
+Verified: `examples/bare/ticks.ssp` (a timer handler counting into a static `Int`, a static array and a `Bool` flag that `main` waits on, a static with a non-zero initializer in `.data`, and an 8-element stack array) prints `hist 804` and `ticks 5 seen 14 base 1005` on riscv64, aarch64 and Cortex-M4 under QEMU; its three host tests pass; `tests/bare/arrays.ssp` (arrays in records, a ring buffer, nested `[[0; 3]; 3]` arrays updated with `g[i][j] := v`, arrays of records and of `Bool`, an out-of-bounds trap) prints the same in native code and the interpreter, with every function native; the rejection codes are checked in `crates/sspur-cli/tests/bare.rs`.
+
+## Not yet
+
+Direct IR beyond the prototype subset, debug info, BOLT-style layout, `intr.*` intrinsics, asm operands other than general registers (fixed registers, memory operands, `inout`), boards beyond MPS2 AN386 and a board description format, the PLIC, SMP, MMU setup, nested interrupt priorities, statics of records, and arrays in `app` code.
+
+## Verification summary
+
+`cargo test --release` (including `crates/sspur-cli/tests/llvm.rs` and `bare.rs`), `cargo clippy --release --all-targets`, the 199-program corpus (`199/199 programs identical; 270/270 functions native; 0 native build failures`), `sspur fuzz --differential` on every `tests/programs` file, and the benchmarks on the default path (unchanged within noise: compute_big 1.056 s, simd 0.223 s, typical 0.145 s, strings_big 0.084 s, app 0.158 s, churn 0.092 s, parallel 0.324 s).

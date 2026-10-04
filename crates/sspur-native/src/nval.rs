@@ -310,6 +310,7 @@ impl fmt::Display for NVal {
             NVal::Bool(b) => write!(f, "{b}"),
             NVal::Float(x) => write!(f, "{x:?}"),
             NVal::Str(s) => write!(f, "{s:?}"),
+            NVal::Rec(n, fs) if n == "#File" => write!(f, "File({})", fs[1].1),
             NVal::Rec(n, fs) => {
                 write!(f, "{}", n.trim_start_matches('#'))?;
                 fields(f, fs)

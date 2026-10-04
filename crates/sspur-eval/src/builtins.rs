@@ -102,6 +102,7 @@ impl Interp {
             Value::Record(n, fs) if &*n == "#Rng" => crate::stdrng::method(name, &fs, &a),
             Value::Record(n, fs) if &*n == "#Complex" => crate::stdcx::method(name, &fs, &a),
             Value::Record(ref n, _) if &**n == "#Zone" => crate::stdtz::method(name, &recv, &a),
+            Value::Record(ref n, _) if &**n == "#File" => self.file_method(name, &recv, &a),
             Value::Record(n, fs) if &*n == "#FlatMap" => crate::stdflat::flat_method(name, &fs, &a),
             Value::Record(n, fs) if &*n == "#MdSpan" => crate::stdflat::md_method(name, &fs, &a),
             Value::Big(b) => crate::stdbig::big_method(name, &b, &a),

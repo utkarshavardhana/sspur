@@ -479,6 +479,12 @@ fn zfmt(p: Str) -> Str
 = time_ms(0).format_in(fixed_zone(60), p)
 fn zlocal(t: Int) -> Int
 = fixed_zone(60).local(time_ms(t)).unix_ms
+fn fmode(m: Str) -> Bool ! fs
+= open_file(\"/\", m).is_ok
+fn fneg(n: Int) -> Bool ! fs
+= with_file(\"/\", \"r\", f => f.read(n).is_ok).or(false)
+test t_fmode = fmode(\"rw\")
+test t_fneg = fneg(-1)
 test t_fz = fz(1440) == \"\"
 test t_zfmt = zfmt(\"%Z %Q\") == \"\"
 test t_zlocal = zlocal(9223372036854775807) == 0
@@ -497,10 +503,12 @@ test t_ok = gam(2.0) > 0.0 and bin(10) <= 10 and wpick([0.0, 1.0]) == 1 and mdba
         "FAIL  t_mdr: mdspan slice 1..3 out of range for extent 2",
         "FAIL  t_mdbad: malformed mdspan",
         "FAIL  t_mdneg: mdspan extents must be >= 0",
+        "FAIL  t_fmode: bad file mode 'rw'",
+        "FAIL  t_fneg: read size must be >= 0",
         "FAIL  t_fz: fixed_zone needs -1440 < minutes < 1440",
         "FAIL  t_zfmt: bad time format '%Z %Q'",
         "FAIL  t_zlocal: integer overflow",
-        "1 passed, 15 failed",
+        "1 passed, 17 failed",
     ];
     assert_trap_parity("std_round3", src, &expected);
 }

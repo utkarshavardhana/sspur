@@ -18,6 +18,7 @@ mod prove;
 mod simd;
 mod stdlib;
 mod stdcx;
+mod stdfile;
 mod stdflat;
 mod stdrng;
 mod stdtz;
@@ -2794,6 +2795,10 @@ impl<'a> Cx<'a> {
                 s.push_str("sb_put(b, \")\", 1);");
                 s
             }
+            Type::Con(n, _) if n == "#File" => {
+                let e = self.helper_show(&Type::con("Str"))?;
+                format!("sb_put(b, \"File(\", 5); {e}(b, v.path, 1); sb_put(b, \")\", 1);")
+            }
             Type::Con(n, a) if self.layouts.records.contains_key(n) => {
                 let mut s = lit(&format!("{}{{", n.trim_start_matches('#')));
                 for (i, (f, ft)) in self.layouts.record_fields(n, a).unwrap().iter().enumerate() {
@@ -3302,6 +3307,9 @@ impl<'a> Cx<'a> {
         }
         if matches!(&rt, Type::Con(n, _) if n == "#Complex") {
             return self.cx_method(&r, name, args);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "#File") {
+            return self.file_method(&r, name, args, t);
         }
         if matches!(&rt, Type::Con(n, _) if n == "#Zone") {
             return self.tz_method(&r, name, args, t);

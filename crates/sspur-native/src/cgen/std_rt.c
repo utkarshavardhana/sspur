@@ -1726,3 +1726,100 @@ static Str ss_tz_format(const SsZ* z, int64_t t, Str pat, Status* st) {
     }
     return ss_tfmt(l, q, st);
 }
+//@ file fs failstr
+#include <sys/stat.h>
+typedef struct { int64_t fd; Str path; int64_t dev, ino; } SsF;
+static Str ss_f_why(Str path, int e) { if (e == EBADF) { SB_INIT(b); sb_put(&b, path.p, path.len); sb_put(&b, ": not open for this operation", 29); return sb_done(&b); } return ss_why(path, e); }
+static int ss_f_id(int fd, int64_t* dev, int64_t* ino) { struct stat sb; if (fstat(fd, &sb) != 0) return 0; *dev = (int64_t)sb.st_dev; *ino = (int64_t)sb.st_ino; return 1; }
+static int ss_f_live(SsF f, Str* err) {
+    int64_t d, i;
+    if (ss_f_id((int)f.fd, &d, &i) && d == f.dev && i == f.ino) return 1;
+    SB_INIT(b); sb_put(&b, f.path.p, f.path.len); sb_put(&b, ": file is closed", 16); *err = sb_done(&b); return 0;
+}
+static int ss_f_open(Str path, Str mode, SsF* out, Str* err, Status* st) {
+    int fl;
+    if (mode.len == 1 && mode.p[0] == 'r') fl = O_RDONLY;
+    else if (mode.len == 1 && mode.p[0] == 'w') fl = O_WRONLY | O_CREAT | O_TRUNC;
+    else if (mode.len == 1 && mode.p[0] == 'a') fl = O_WRONLY | O_CREAT | O_APPEND;
+    else if (mode.len == 2 && mode.p[0] == 'r' && mode.p[1] == '+') fl = O_RDWR;
+    else if (mode.len == 2 && mode.p[0] == 'w' && mode.p[1] == '+') fl = O_RDWR | O_CREAT | O_TRUNC;
+    else if (mode.len == 2 && mode.p[0] == 'a' && mode.p[1] == '+') fl = O_RDWR | O_CREAT | O_APPEND;
+    else { SB_INIT(e); sb_put(&e, "bad file mode '", 15); sb_put(&e, mode.p, mode.len); sb_put(&e, "'", 1); ss_failstr(st, sb_done(&e)); }
+    char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
+    int fd = open(c, fl | O_CLOEXEC, 0666); if (fd < 0) { *err = ss_f_why(path, errno); return 0; }
+    out->fd = fd; out->path = path; out->dev = 0; out->ino = 0; ss_f_id(fd, &out->dev, &out->ino);
+    return 1;
+}
+static int ss_f_close(SsF f, Str* err) { if (!ss_f_live(f, err)) return 0; if (close((int)f.fd) != 0) { *err = ss_f_why(f.path, errno); return 0; } return 1; }
+static void ss_f_cleanup(SsF* f) { Str e; if (f->path.p) ss_f_close(*f, &e); }
+static int ss_f_read(SsF f, int64_t n, RawL* out, Str* err) {
+    RawL r = raw_alloc_a(n < 4096 ? n : 4096, 8, 1); unsigned char buf[4096];
+    while (r.len < n) {
+        int64_t want = n - r.len; if (want > 4096) want = 4096;
+        ssize_t k = read((int)f.fd, buf, (size_t)want);
+        if (k < 0) { if (errno == EINTR) continue; *err = ss_f_why(f.path, errno); return 0; }
+        if (k == 0) break;
+        for (ssize_t i = 0; i < k; i++) { int64_t v = buf[i]; r = raw_push(r, &v, 8); }
+    }
+    *out = r; return 1;
+}
+static int ss_f_all(SsF f, Str* out, Str* err) {
+    int64_t cap = 4096, n = 0; char* b = (char*)malloc((size_t)cap);
+    for (;;) {
+        if (cap - n < 4096) { cap *= 2; b = (char*)realloc(b, (size_t)cap); }
+        ssize_t k = read((int)f.fd, b + n, 4096);
+        if (k < 0) { if (errno == EINTR) continue; int e = errno; free(b); *err = ss_f_why(f.path, e); return 0; }
+        if (k == 0) break;
+        n += k;
+    }
+    if (!ss_utf8_ok((const unsigned char*)b, n)) { free(b); *err = ss_why(f.path, -2); return 0; }
+    char* o = (char*)sspur_alloc_atomic((size_t)n + 1); memcpy(o, b, (size_t)n); free(b); *out = (Str){n, o}; return 1;
+}
+static int ss_f_line(SsF f, Str* out, int* got_out, Str* err) {
+    int64_t cap = 128, n = 0; char* b = (char*)malloc((size_t)cap); int got = 0;
+    off_t pos = lseek((int)f.fd, 0, SEEK_CUR);
+    if (pos >= 0) {
+        unsigned char buf[4096]; int64_t used = 0;
+        for (;;) {
+            ssize_t k = pread((int)f.fd, buf, sizeof buf, pos + used);
+            if (k < 0) { if (errno == EINTR) continue; int e = errno; free(b); *err = ss_f_why(f.path, e); return 0; }
+            if (k == 0) break;
+            got = 1;
+            ssize_t j = 0; while (j < k && buf[j] != '\n') j++;
+            if (n + j > cap) { while (n + j > cap) cap *= 2; b = (char*)realloc(b, (size_t)cap); }
+            memcpy(b + n, buf, (size_t)j); n += j;
+            if (j < k) { used += j + 1; break; }
+            used += k;
+        }
+        lseek((int)f.fd, pos + used, SEEK_SET);
+    } else {
+        for (;;) {
+            unsigned char ch; ssize_t k = read((int)f.fd, &ch, 1);
+            if (k < 0 && errno == EINTR) continue;
+            if (k < 0) { int e = errno; free(b); *err = ss_f_why(f.path, e); return 0; }
+            if (k == 0) break;
+            got = 1;
+            if (ch == '\n') break;
+            if (n == cap) { cap *= 2; b = (char*)realloc(b, (size_t)cap); }
+            b[n++] = (char)ch;
+        }
+    }
+    *got_out = got;
+    if (!got) { free(b); return 1; }
+    if (n && b[n - 1] == '\r') n--;
+    if (!ss_utf8_ok((const unsigned char*)b, n)) { free(b); *err = ss_why(f.path, -2); return 0; }
+    char* o = (char*)sspur_alloc_atomic((size_t)n + 1); memcpy(o, b, (size_t)n); free(b); *out = (Str){n, o}; return 1;
+}
+static int ss_f_write(SsF f, const char* p, int64_t len, Str* err) {
+    int64_t off = 0;
+    while (off < len) { ssize_t k = write((int)f.fd, p + off, (size_t)(len - off)); if (k < 0) { if (errno == EINTR) continue; *err = ss_f_why(f.path, errno); return 0; } off += k; }
+    return 1;
+}
+static int ss_f_write_bytes(SsF f, const int64_t* d, int64_t n, Str* err) {
+    for (int64_t i = 0; i < n; i++) if (d[i] < 0 || d[i] > 255) { *err = ss_why(f.path, -3); return 0; }
+    char* b = (char*)sspur_alloc_atomic((size_t)n + 1);
+    for (int64_t i = 0; i < n; i++) b[i] = (char)d[i];
+    return ss_f_write(f, b, n, err);
+}
+static int ss_f_seek(SsF f, int64_t pos, int64_t* out, int whence, Str* err) { off_t r = lseek((int)f.fd, (off_t)pos, whence); if (r < 0) { *err = ss_f_why(f.path, errno); return 0; } *out = (int64_t)r; return 1; }
+static int ss_f_size(SsF f, int64_t* out, Str* err) { struct stat sb; if (fstat((int)f.fd, &sb) != 0) { *err = ss_f_why(f.path, errno); return 0; } *out = (int64_t)sb.st_size; return 1; }

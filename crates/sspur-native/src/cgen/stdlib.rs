@@ -412,6 +412,9 @@ impl Cx<'_> {
         if let Some(x) = self.tz_global(n, &vals, t)? {
             return Ok(Some(x));
         }
+        if let Some(x) = self.file_global(n, args, &vals, t)? {
+            return Ok(Some(x));
+        }
         let v = |i: usize| vals[i].clone();
         let c = self.cty(t)?;
         let res = |ok: &str, err: &str| format!("{c} r_; memset(&r_, 0, sizeof r_); if ({ok}) r_.ok = 1; else r_.e = {err}; r_; ");

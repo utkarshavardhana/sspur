@@ -247,6 +247,7 @@ impl fmt::Display for Value {
             Value::Str(s) => write!(f, "{s}"),
             Value::List(xs) => write_seq(f, "[", "]", xs),
             Value::Tuple(xs) => write_seq(f, "(", ")", xs),
+            Value::Record(n, fs) if &**n == "#File" => write!(f, "File({})", Quoted(&fs[1].1)),
             Value::Record(n, fs) => {
                 write!(f, "{}", n.trim_start_matches('#'))?;
                 write_fields(f, fs)

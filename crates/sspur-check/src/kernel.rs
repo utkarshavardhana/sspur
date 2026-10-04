@@ -260,6 +260,8 @@ struct SAcc {
     top: bool,
 }
 
+type GAcc = (usize, KExpr, Span, bool, Vec<KExpr>, Option<String>);
+
 type Lin = (std::collections::BTreeMap<String, i128>, i128);
 
 struct Lower<'a> {
@@ -273,7 +275,7 @@ struct Lower<'a> {
     locals: Vec<KTy>,
     defs: Vec<Def>,
     body: bool,
-    accesses: Vec<(usize, KExpr, Span, bool, Vec<KExpr>, Option<String>)>,
+    accesses: Vec<GAcc>,
     errs: Vec<KErr>,
     float: KTy,
     group: u32,
@@ -1470,7 +1472,7 @@ impl Lower<'_> {
                 let mut c = self.sacc[i].clone();
                 c.segs = b.clone();
                 let d = c.loops.iter().position(|l| *l == slot).unwrap_or(0);
-                for l in c.loops[d..].to_vec() {
+                for l in c.loops[d..].iter().copied() {
                     *c.ver.entry(l).or_insert(0) += 1;
                 }
                 self.sacc.push(c);

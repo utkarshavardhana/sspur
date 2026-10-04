@@ -452,7 +452,28 @@ test t_bin = bin(-1) == 0
 test t_poi = poi(-1.0) == 0
 test t_geo = geo(0.0) == 0
 test t_wpick = wpick([0.0, 0.0]) == 0
-test t_ok = gam(2.0) > 0.0 and bin(10) <= 10 and wpick([0.0, 1.0]) == 1
+fn md(n: Int) -> Int
+= mdspan([1, 2, 3, 4], [2, n]).size
+fn mdi(i: Int) -> Int
+= mdspan([1, 2, 3, 4], [2, 2]).get([1, i])
+fn mdc() -> Int
+= mdspan([1, 2, 3, 4], [2, 2]).get([1])
+fn mds(d: Int) -> Int
+= mdspan([1, 2, 3, 4], [2, 2]).slice(d, 0, 1).size
+fn mdr(h: Int) -> Int
+= mdspan([1, 2, 3, 4], [2, 2]).slice(1, 1, h).size
+fn mdbad(o: Int) -> Int
+= json.decode[MdSpan[Int]](\"\\{\\\"data\\\": [1], \\\"offset\\\": {o}, \\\"shape\\\": [1], \\\"strides\\\": [1]}\").or(mdspan([0], [1])).get([0])
+fn mdneg() -> Int
+= mdspan([1].take(0), [0, -1]).size
+test t_md = md(3) == 0
+test t_mdi = mdi(2) == 0
+test t_mdc = mdc() == 0
+test t_mds = mds(2) == 0
+test t_mdr = mdr(3) == 0
+test t_mdbad = mdbad(5) == 0
+test t_mdneg = mdneg() == 0
+test t_ok = gam(2.0) > 0.0 and bin(10) <= 10 and wpick([0.0, 1.0]) == 1 and mdbad(0) == 1 and mdi(1) == 4
 ";
     let expected = [
         "FAIL  t_gam: rand_gamma needs a finite shape > 0 and scale > 0",
@@ -460,7 +481,14 @@ test t_ok = gam(2.0) > 0.0 and bin(10) <= 10 and wpick([0.0, 1.0]) == 1
         "FAIL  t_poi: rand_poisson needs 0 <= mean <= 4e15",
         "FAIL  t_geo: rand_geometric needs 0 < p <= 1",
         "FAIL  t_wpick: rand_weighted needs finite weights >= 0 with a positive sum",
-        "1 passed, 5 failed",
+        "FAIL  t_md: mdspan shape needs 6 elements, got 4",
+        "FAIL  t_mdi: mdspan index 2 out of range for extent 2",
+        "FAIL  t_mdc: mdspan index needs 2 coordinates, got 1",
+        "FAIL  t_mds: mdspan dimension 2 out of range for rank 2",
+        "FAIL  t_mdr: mdspan slice 1..3 out of range for extent 2",
+        "FAIL  t_mdbad: malformed mdspan",
+        "FAIL  t_mdneg: mdspan extents must be >= 0",
+        "1 passed, 12 failed",
     ];
     assert_trap_parity("std_round3", src, &expected);
 }

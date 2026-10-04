@@ -289,6 +289,21 @@ impl Interp {
                 let xs: Vec<Value> = (0..n).filter(|_| rng.chance(40)).map(Value::Int).collect();
                 crate::stdx::bits_from(&xs, n).ok()?
             }
+            "FlatMap" if !self.types.contains_key(name) => {
+                let mut m = BTreeMap::new();
+                for _ in 0..if deep { 0 } else { rng.below(6) } {
+                    m.insert(self.generate(&arg(0), rng, opts, depth + 1)?, self.generate(&arg(1), rng, opts, depth + 1)?);
+                }
+                let pairs: Vec<Value> = m.into_iter().map(|(k, v)| Value::Tuple(Rc::new(vec![k, v]))).collect();
+                crate::stdflat::to_flat(&pairs).ok()?
+            }
+            "MdSpan" if !self.types.contains_key(name) => {
+                let shape: Vec<i64> = (0..rng.below(4)).map(|_| rng.below(4) as i64).collect();
+                let n: i64 = shape.iter().product();
+                let data = Value::list((0..n).map(|_| self.generate(&arg(0), rng, opts, depth + 1)).collect::<Option<_>>()?);
+                let v = crate::stdflat::mdspan(&data, &Value::list(shape.iter().map(|e| Value::Int(*e)).collect())).ok()?;
+                if rng.chance(30) { crate::stdflat::md_method("transpose", match &v { Value::Record(_, fs) => fs, _ => return None }, &[]).ok()? } else { v }
+            }
             "Complex" if !self.types.contains_key(name) => {
                 let f_ty = Ty::Named { name: "F64".into(), args: vec![], span: Span::default() };
                 let (re, im) = (self.generate(&f_ty, rng, opts, depth)?, self.generate(&f_ty, rng, opts, depth)?);

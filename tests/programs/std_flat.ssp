@@ -1,0 +1,67 @@
+type Cell = {row: Int, col: Int}
+
+fn index(words: List[Str]) -> FlatMap[Str, Int]
+= words.fold(empty_flat_map(), (m, w) => m.put(w, m.get(w).or(0) + 1))
+
+fn prices() -> FlatMap[Int, Str]
+= [(30, "c"), (10, "a"), (20, "b"), (10, "z")].to_flat_map
+
+fn window(m: FlatMap[Int, Str], lo: Int, hi: Int) -> List[Int]
+= m.between(lo, hi).keys
+
+fn churn(xs: List[Int]) -> FlatMap[Int, Int]
+= xs.fold(empty_flat_map(), (m, x) => if m.has(x) then m.remove(x) else m.put(x, x * x))
+
+fn as_map(xs: List[Int]) -> Map[Int, Int]
+= xs.fold(empty_map(), (m, x) => if m.has(x) then m.remove(x) else m.put(x, x * x))
+
+fn cells(n: Int) -> FlatMap[Cell, Str]
+= (0..n).map(i => (Cell{row: i % 3, col: i}, "v{i}")).to_flat_map
+
+fn grid(r: Int, c: Int) -> MdSpan[Int]
+= mdspan((0..r * c), [r, c])
+
+fn matmul(a: MdSpan[F64], b: MdSpan[F64]) -> MdSpan[F64]
+= do
+  (n, k, m) = (a.shape[0], a.shape[1], b.shape[1])
+  mdspan((0..n * m).map(p => (0..k).map(j => a.get([p / m, j]) * b.get([j, p % m])).sum), [n, m])
+
+fn trace(s: MdSpan[Int]) -> Int
+= (0..s.shape[0]).map(i => s.get([i, i])).sum
+
+fn column(s: MdSpan[Int], j: Int) -> List[Int]
+= s.transpose.sub(j).to_list
+
+fn block(s: MdSpan[Int], r0: Int, r1: Int, c0: Int, c1: Int) -> List[Int]
+= s.slice(0, r0, r1).slice(1, c0, c1).to_list
+
+fn cube_sum(n: Int) -> Int
+= do
+  c = mdspan((0..n * n * n), [n, n, n])
+  (0..n).map(i => c.sub(i).sub(i).get([i])).sum
+
+fn poke(s: MdSpan[Int], i: Int, j: Int, v: Int) -> List[Int]
+= s.set([i, j], v).to_list
+
+test flat_counts = do
+  m = index(["b", "a", "c", "a", "b", "a"])
+  m.keys == ["a", "b", "c"] and m.values == [3, 2, 1] and m.get("a") == some(3) and m.get("q") == none and m.len == 3
+test flat_build = prices().keys == [10, 20, 30] and prices().get(10) == some("z") and prices().items == [(10, "z"), (20, "b"), (30, "c")]
+test flat_bounds = prices().lower_bound(15) == 1 and prices().lower_bound(99) == 3 and window(prices(), 15, 31) == [20, 30] and window(prices(), 30, 10) == []
+test flat_matches_map = do
+  xs = [5, 3, 9, 3, 1, 5, 7, 9, 2, 8, 1]
+  churn(xs).items == as_map(xs).items and churn(xs).remove(100).len == churn(xs).len
+test flat_records = cells(7).keys.map(_.row) == [0, 0, 0, 1, 1, 2, 2] and cells(7).get(Cell{row: 1, col: 4}) == some("v4")
+test flat_empty = empty_flat_map().is_empty and empty_flat_map().put(1, 2).len == 1 and "{prices()}" == "FlatMap\{keys: [10, 20, 30], values: [\"z\", \"b\", \"c\"]}"
+test md_basics = do
+  g = grid(3, 4)
+  g.rank == 2 and g.size == 12 and g.get([1, 2]) == 6 and g.strides == [4, 1] and g.shape == [3, 4]
+test md_views = column(grid(3, 4), 1) == [1, 5, 9] and block(grid(4, 4), 1, 3, 2, 4) == [6, 7, 10, 11] and grid(2, 3).transpose.to_list == [0, 3, 1, 4, 2, 5]
+test md_rank3 = cube_sum(3) == 0 + 13 + 26 and mdspan([7], []).get([]) == 7 and mdspan([7], []).rank == 0
+test md_matmul = do
+  a = mdspan([1.0, 2.0, 3.0, 4.0], [2, 2])
+  b = mdspan([5.0, 6.0, 7.0, 8.0], [2, 2])
+  matmul(a, b).to_list == [19.0, 22.0, 43.0, 50.0]
+test md_trace = trace(grid(4, 4)) == 30 and poke(grid(2, 2), 1, 0, 9) == [0, 1, 9, 3] and grid(2, 2).to_list == [0, 1, 2, 3]
+test md_empty = mdspan([], [0, 5]).size == 0 and mdspan([], [0, 5]).to_list == [] and grid(3, 3).slice(0, 1, 1).to_list == []
+test md_json = json.decode[MdSpan[Int]](json.encode(grid(2, 2))) == ok(grid(2, 2))

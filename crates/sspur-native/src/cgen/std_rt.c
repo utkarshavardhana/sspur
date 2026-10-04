@@ -1469,3 +1469,50 @@ static SsC ss_cx_pow(SsC z, SsC w) {
     if (z.re == 0.0 && z.im == 0.0) return (w.re == 0.0 && w.im == 0.0) ? (SsC){1.0, 0.0} : (SsC){0.0, 0.0};
     return ss_cx_exp(ss_cx_mul(w, ss_cx_ln(z)));
 }
+//@ md fail failstr
+static void __attribute__((noreturn)) ss_md_bad(Status* st) { ss_fail(st, "malformed mdspan"); }
+static void ss_md_check(const int64_t* sh, int64_t rank, int64_t srank, Status* st) { if (srank != rank) ss_md_bad(st); for (int64_t d = 0; d < rank; d++) if (sh[d] < 0) ss_md_bad(st); }
+static int64_t ss_md_prod(const int64_t* sh, int64_t rank, Status* st) { int64_t p = 1; for (int64_t d = 0; d < rank; d++) if (__builtin_mul_overflow(p, sh[d], &p)) ss_fail(st, "integer overflow"); return p; }
+static void __attribute__((noreturn)) ss_md_coord(int64_t i, int64_t e, Status* st) { SB_INIT(b); sb_put(&b, "mdspan index ", 13); sb_int(&b, i); sb_put(&b, " out of range for extent ", 25); sb_int(&b, e); ss_failstr(st, sb_done(&b)); }
+static void __attribute__((noreturn)) ss_md_dim(int64_t d, int64_t r, Status* st) { SB_INIT(b); sb_put(&b, "mdspan dimension ", 17); sb_int(&b, d); sb_put(&b, " out of range for rank ", 23); sb_int(&b, r); ss_failstr(st, sb_done(&b)); }
+static int64_t ss_md_at(int64_t off, const int64_t* sd, const int64_t* idx, int64_t rank, int64_t dlen, Status* st) {
+    __int128 f = off; __int128 lim = (__int128)1 << 64;
+    for (int64_t d = 0; d < rank; d++) { f += (__int128)idx[d] * sd[d]; if (f > lim || f < -lim) ss_md_bad(st); }
+    if (f < 0 || f >= dlen) ss_md_bad(st);
+    return (int64_t)f;
+}
+static int64_t ss_md_index(int64_t off, const int64_t* sh, const int64_t* sd, int64_t rank, int64_t dlen, const int64_t* idx, int64_t n, Status* st) {
+    if (n != rank) { SB_INIT(b); sb_put(&b, "mdspan index needs ", 19); sb_int(&b, rank); sb_put(&b, " coordinates, got ", 18); sb_int(&b, n); ss_failstr(st, sb_done(&b)); }
+    for (int64_t d = 0; d < rank; d++) if (idx[d] < 0 || idx[d] >= sh[d]) ss_md_coord(idx[d], sh[d], st);
+    return ss_md_at(off, sd, idx, rank, dlen, st);
+}
+static int64_t ss_md_shift(int64_t off, int64_t i, int64_t s, Status* st) { __int128 f = (__int128)off + (__int128)i * s; if (f > INT64_MAX || f < INT64_MIN) ss_md_bad(st); return (int64_t)f; }
+static RawL ss_md_ints(const int64_t* src, int64_t n, int rev) { RawL r = raw_alloc_a(n, 8, 1); int64_t* o = (int64_t*)r.data; for (int64_t i = 0; i < n; i++) o[i] = rev ? src[n - 1 - i] : src[i]; r.len = n; r.hdr[1] = n; return r; }
+static RawL ss_md_new(const int64_t* sh, int64_t rank, int64_t dlen, Status* st) {
+    for (int64_t d = 0; d < rank; d++) if (sh[d] < 0) ss_fail(st, "mdspan extents must be >= 0");
+    int64_t p = ss_md_prod(sh, rank, st);
+    if (p != dlen) { SB_INIT(b); sb_put(&b, "mdspan shape needs ", 19); sb_int(&b, p); sb_put(&b, " elements, got ", 15); sb_int(&b, dlen); ss_failstr(st, sb_done(&b)); }
+    RawL r = raw_alloc_a(rank, 8, 1); int64_t* s = (int64_t*)r.data;
+    if (rank) s[rank - 1] = 1;
+    for (int64_t d = rank - 2; d >= 0; d--) if (__builtin_mul_overflow(s[d + 1], sh[d + 1], &s[d])) ss_fail(st, "integer overflow");
+    r.len = rank; r.hdr[1] = rank; return r;
+}
+static RawL ss_md_flats(int64_t off, const int64_t* sh, const int64_t* sd, int64_t rank, int64_t dlen, Status* st) {
+    int64_t n = ss_md_prod(sh, rank, st);
+    if (n > dlen) ss_md_bad(st);
+    RawL r = raw_alloc_a(n, 8, 1); int64_t* o = (int64_t*)r.data;
+    int64_t* idx = (int64_t*)sspur_alloc_atomic((size_t)(rank + 1) * 8); memset(idx, 0, (size_t)(rank + 1) * 8);
+    for (int64_t k = 0; k < n; k++) {
+        o[k] = ss_md_at(off, sd, idx, rank, dlen, st);
+        for (int64_t d = rank - 1; d >= 0; d--) { idx[d]++; if (idx[d] < sh[d]) break; idx[d] = 0; }
+    }
+    r.len = n; r.hdr[1] = n; return r;
+}
+static int64_t ss_md_slice(int64_t off, const int64_t* sh, const int64_t* sd, int64_t rank, int64_t dim, int64_t lo, int64_t hi, RawL* nsh, Status* st) {
+    if (dim < 0 || dim >= rank) ss_md_dim(dim, rank, st);
+    int64_t e = sh[dim];
+    if (lo < 0 || hi < lo || hi > e) { SB_INIT(b); sb_put(&b, "mdspan slice ", 13); sb_int(&b, lo); sb_put(&b, "..", 2); sb_int(&b, hi); sb_put(&b, " out of range for extent ", 25); sb_int(&b, e); ss_failstr(st, sb_done(&b)); }
+    int64_t no = ss_md_shift(off, lo, sd[dim], st);
+    RawL r = ss_md_ints(sh, rank, 0); ((int64_t*)r.data)[dim] = hi - lo; *nsh = r;
+    return no;
+}

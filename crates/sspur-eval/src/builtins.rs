@@ -98,6 +98,8 @@ impl Interp {
             Value::Bits(n, w) => crate::stdx::bits_method(name, n, &w, &a),
             Value::Record(n, fs) if &*n == "#Rng" => crate::stdrng::method(name, &fs, &a),
             Value::Record(n, fs) if &*n == "#Complex" => crate::stdcx::method(name, &fs, &a),
+            Value::Record(n, fs) if &*n == "#FlatMap" => crate::stdflat::flat_method(name, &fs, &a),
+            Value::Record(n, fs) if &*n == "#MdSpan" => crate::stdflat::md_method(name, &fs, &a),
             Value::Big(b) => crate::stdbig::big_method(name, &b, &a),
             Value::Regex(r) => crate::stdre::method(name, &r, &a),
             Value::Dec(m, s) => crate::stdbig::dec_method(name, &m, s, &a),

@@ -257,6 +257,11 @@ impl Interp {
         if let Some(v) = crate::stdcx::global(n, &a)? {
             return Ok(v);
         }
+        match n {
+            "empty_flat_map" => return Ok(crate::stdflat::empty_flat()),
+            "mdspan" => return crate::stdflat::mdspan(&a[0], &a[1]),
+            _ => {}
+        }
         Ok(match n {
             "empty_set" => Value::Set(Rc::new(BTreeSet::new())),
             "empty_heap" => Value::Heap(Rc::new(Vec::new())),
@@ -662,6 +667,7 @@ impl Interp {
             "pop_front" => opt(xs.first().map(|x| pair(x.clone(), Value::list(xs[1..].to_vec())))),
             "pop_back" => opt(xs.last().map(|x| pair(x.clone(), Value::list(xs[..xs.len() - 1].to_vec())))),
             "to_set" => Value::Set(Rc::new(xs.iter().cloned().collect())),
+            "to_flat_map" => crate::stdflat::to_flat(xs)?,
             "to_bits" => crate::stdx::bits_from(xs, int(&a[0])?)?,
             "to_hash_set" => Value::Set(Rc::new(xs.iter().cloned().collect())),
             "to_hash_map" => {

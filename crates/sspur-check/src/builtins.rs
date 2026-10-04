@@ -115,9 +115,9 @@ pub const METHODS: &[(&str, &str)] = &[
     ("*", "str[A](x: A) -> Str"),
 ];
 
-pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0), ("Regex", "#Regex", 0), ("DevBuf", "#DevBuf", 1), ("Rng", "#Rng", 0), ("Complex", "#Complex", 0)];
+pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0), ("Regex", "#Regex", 0), ("DevBuf", "#DevBuf", 1), ("Rng", "#Rng", 0), ("Complex", "#Complex", 0), ("FlatMap", "#FlatMap", 2), ("MdSpan", "#MdSpan", 1)];
 
-pub const STD_RECORDS: &[(&str, &str)] = &[("#Rng", "type Rng = {state: Int, gamma: Int}"), ("#Complex", "type Complex = {re: F64, im: F64}")];
+pub const STD_RECORDS: &[(&str, &str)] = &[("#Rng", "type Rng = {state: Int, gamma: Int}"), ("#Complex", "type Complex = {re: F64, im: F64}"), ("#FlatMap", "type FlatMap[K, V] = {keys: List[K], values: List[V]}"), ("#MdSpan", "type MdSpan[T] = {data: List[T], offset: Int, shape: List[Int], strides: List[Int]}")];
 
 pub const STD_GLOBALS: &[&str] = &[
     "dev_f32(xs: List[F64]) -> DevBuf[F32] ! dev",
@@ -173,6 +173,8 @@ pub const STD_GLOBALS: &[&str] = &[
     "rng(seed: Int) -> Rng",
     "complex(re: F64, im: F64) -> Complex",
     "polar(r: F64, theta: F64) -> Complex",
+    "empty_flat_map[K, V]() -> FlatMap[K, V]",
+    "mdspan[T](data: List[T], shape: List[Int]) -> MdSpan[T]",
     "bits(n: Int) -> Bits",
     "regex(p: Str) -> Res[Regex, Str]",
     "big(n: Int) -> BigInt",
@@ -446,10 +448,28 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("#Complex", "arg(z: Complex) -> F64"),
     ("#Complex", "norm(z: Complex) -> F64"),
     ("#Complex", "scale(z: Complex, k: F64) -> Complex"),
+    ("List", "to_flat_map[K, V](xs: List[(K, V)]) -> FlatMap[K, V]"),
+    ("#FlatMap", "get[K, V](m: FlatMap[K, V], k: K) -> Opt[V]"),
+    ("#FlatMap", "has[K, V](m: FlatMap[K, V], k: K) -> Bool"),
+    ("#FlatMap", "put[K, V](m: FlatMap[K, V], k: K, v: V) -> FlatMap[K, V]"),
+    ("#FlatMap", "remove[K, V](m: FlatMap[K, V], k: K) -> FlatMap[K, V]"),
+    ("#FlatMap", "len[K, V](m: FlatMap[K, V]) -> Int"),
+    ("#FlatMap", "is_empty[K, V](m: FlatMap[K, V]) -> Bool"),
+    ("#FlatMap", "items[K, V](m: FlatMap[K, V]) -> List[(K, V)]"),
+    ("#FlatMap", "lower_bound[K, V](m: FlatMap[K, V], k: K) -> Int"),
+    ("#FlatMap", "between[K, V](m: FlatMap[K, V], lo: K, hi: K) -> FlatMap[K, V]"),
+    ("#MdSpan", "rank[T](s: MdSpan[T]) -> Int"),
+    ("#MdSpan", "size[T](s: MdSpan[T]) -> Int"),
+    ("#MdSpan", "get[T](s: MdSpan[T], idx: List[Int]) -> T"),
+    ("#MdSpan", "set[T](s: MdSpan[T], idx: List[Int], x: T) -> MdSpan[T]"),
+    ("#MdSpan", "slice[T](s: MdSpan[T], dim: Int, lo: Int, hi: Int) -> MdSpan[T]"),
+    ("#MdSpan", "sub[T](s: MdSpan[T], i: Int) -> MdSpan[T]"),
+    ("#MdSpan", "transpose[T](s: MdSpan[T]) -> MdSpan[T]"),
+    ("#MdSpan", "to_list[T](s: MdSpan[T]) -> List[T]"),
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "rand_binomial", "rand_poisson", "rand_geometric", "rand_gamma", "rand_beta", "rand_weighted", "rng", "complex", "polar", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "exit", "regex", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days", "dev_f32", "dev_f64", "dev_i32", "dev_u32", "dev_int",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "rand_binomial", "rand_poisson", "rand_geometric", "rand_gamma", "rand_beta", "rand_weighted", "rng", "complex", "polar", "empty_flat_map", "mdspan", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "exit", "regex", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days", "dev_f32", "dev_f64", "dev_i32", "dev_u32", "dev_int",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

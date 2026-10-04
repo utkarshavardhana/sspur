@@ -406,6 +406,9 @@ impl Cx<'_> {
         if let Some(x) = self.cx_global(n, &vals, t)? {
             return Ok(Some(x));
         }
+        if let Some(x) = self.flat_global(n, &vals, t)? {
+            return Ok(Some(x));
+        }
         let v = |i: usize| vals[i].clone();
         let c = self.cty(t)?;
         let res = |ok: &str, err: &str| format!("{c} r_; memset(&r_, 0, sizeof r_); if ({ok}) r_.ok = 1; else r_.e = {err}; r_; ");
@@ -998,6 +1001,7 @@ impl Cx<'_> {
                 let fill = if name == "to_hash_set" { format!("e_.k = {l}.data[{i}];") } else { format!("e_.k = {l}.data[{i}].f0; e_.v = {l}.data[{i}].f1;") };
                 wrap(format!("{hc} o_ = {{0, 0}}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ {he} e_; {fill} e_.h = {kh}(e_.k); int ad_ = 0; o_.root = hm_put(o_.root, (const char*)&e_, 0, sizeof({he}), heq_{m}, &ad_); o_.len += ad_; }} o_;"))
             }
+            "to_flat_map" => wrap(format!("{};", self.flat_from_pairs(&l, t)?)),
             "to_bits" => {
                 self.std("bits");
                 let n = self.expr(&args[0])?;

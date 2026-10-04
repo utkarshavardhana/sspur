@@ -18,6 +18,7 @@ mod prove;
 mod simd;
 mod stdlib;
 mod stdcx;
+mod stdflat;
 mod stdrng;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
@@ -3300,6 +3301,12 @@ impl<'a> Cx<'a> {
         }
         if matches!(&rt, Type::Con(n, _) if n == "#Complex") {
             return self.cx_method(&r, name, args);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "#FlatMap") {
+            return self.flat_method(&r, &rt, name, args, t);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "#MdSpan") {
+            return self.md_method(&r, &rt, name, args);
         }
         if matches!(&rt, Type::Con(n, _) if n == "Atomic" || n == "Chan") {
             return self.conc_method(&r, &rt, name, args, t);

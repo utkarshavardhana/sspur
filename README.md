@@ -1,5 +1,7 @@
 # SSPUR
 
+[![CI](https://github.com/utkarshavardhana/sspur/actions/workflows/ci.yml/badge.svg)](https://github.com/utkarshavardhana/sspur/actions/workflows/ci.yml)
+
 **A programming language for AI agents to write, read, and maintain.**
 
 SSPUR is a statically typed, effect-tracked language whose primary users are AI coding agents rather than people. Programs are stored as a typed, content-addressed graph of definitions. Agents change code through atomic, typechecked operations instead of text diffs, and the compiler treats contracts, effects, and tests as first-class data. The surface syntax is designed to spend as few tokens as possible while still compiling to native code that outperforms idiomatic C++.
@@ -81,20 +83,43 @@ Compiling C++ with `-O3` instead of `-O2` doesn't change these results.
 
 ## Installation
 
-SSPUR is built from source. You need:
+SSPUR runs on macOS (arm64, x86_64) and Linux (x86_64, aarch64). Native compilation needs `clang` at run time. On macOS it comes with the Xcode Command Line Tools (`xcode-select --install`); on Debian or Ubuntu, `sudo apt install clang`.
 
-- Rust (edition 2024) with `cargo`
-- `clang`, used by the native compiler
+### Homebrew
 
-Optional tools unlock specific features:
+```
+brew install utkarshavardhana/sspur/sspur
+```
 
-| Tool | Used for |
-|---|---|
-| `z3` | `sspur verify` and SMT-based check elimination |
-| `qemu`, `lld` | building and booting `profile bare` kernels |
-| Homebrew `llvm` | `sspur gpu --emit spirv` and `--emit ptx` (Apple's clang has neither backend) |
+### Install script
 
-On macOS: `brew install z3 qemu llvm lld`.
+Downloads the release tarball for your platform, verifies its SHA-256 checksum and installs `sspur` into `~/.local/bin`:
+
+```
+curl -fsSL https://raw.githubusercontent.com/utkarshavardhana/sspur/main/install.sh | sh
+```
+
+Set `SSPUR_VERSION=0.2.0` to pin a version, or `SSPUR_INSTALL_DIR` to install somewhere else.
+
+### Prebuilt binaries
+
+Each [release](https://github.com/utkarshavardhana/sspur/releases) has tarballs for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`, plus a `SHA256SUMS` file:
+
+```
+shasum -a 256 -c SHA256SUMS --ignore-missing
+tar -xzf sspur-v0.2.0-aarch64-apple-darwin.tar.gz
+sudo install sspur-v0.2.0-aarch64-apple-darwin/sspur /usr/local/bin/
+```
+
+### From source
+
+You need Rust 1.88 or newer and `clang`. From a clone of the repository:
+
+```
+cargo install --path crates/sspur-cli
+```
+
+or build in place:
 
 ```
 git clone https://github.com/utkarshavardhana/sspur.git
@@ -102,6 +127,16 @@ cd sspur
 cargo build --release
 export PATH="$PWD/target/release:$PATH"
 ```
+
+### Optional tools
+
+| Tool | Used for |
+|---|---|
+| `z3` | `sspur verify` and SMT-based check elimination |
+| `qemu`, `lld` | building and booting `profile bare` kernels; `lld` also for `--lto` on Linux |
+| Homebrew `llvm` | `sspur gpu --emit spirv` and `--emit ptx` (Apple's clang has neither backend) |
+
+On macOS: `brew install z3 qemu llvm lld`. On Ubuntu: `sudo apt install z3 qemu-system-misc qemu-system-arm lld llvm`. GPU kernels run on Metal on macOS and on the C fallback elsewhere.
 
 ## Getting started
 
@@ -170,7 +205,7 @@ The recommended loop is one call per change: read what you need with `sspur q`, 
 
 ## Project status
 
-SSPUR is at version 0.1 and under active development. The language and tools are usable, but the syntax and standard library may still change between releases.
+SSPUR is at version 0.2 and under active development. The language and tools are usable, but the syntax and standard library may still change between releases.
 
 | Phase | Status |
 |---|---|
@@ -198,15 +233,12 @@ See the [roadmap](docs/roadmap.md) for details and exit criteria.
 | `bench/` | Token, agent, evaluation, and native performance benchmarks |
 | `tests/` | Suite programs, the ownership soundness suite, bare-metal tests |
 | `schema/` | JSON schemas for definitions, operations, and diagnostics |
+| `tools/` | The corpus differential check run by CI |
+| `packaging/` | Homebrew formula template |
 
 ## Contributing
 
-Bug reports and design discussion are welcome as GitHub issues. Every change has to keep the full test suite passing and leave native output identical to the interpreter:
-
-```
-cargo test --release
-cargo clippy --release --all-targets
-```
+Bug reports and design discussion are welcome as GitHub issues. Every change has to keep the full test suite passing and leave native output identical to the interpreter. [CONTRIBUTING.md](CONTRIBUTING.md) lists the build, test and corpus checks, [SECURITY.md](SECURITY.md) explains how to report a vulnerability, and [CHANGELOG.md](CHANGELOG.md) has the release notes.
 
 ## Author
 

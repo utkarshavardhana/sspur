@@ -1057,7 +1057,7 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
                 writeln!(src, "void sspur_on_trap(int64_t c) {{ (void)c; }}").unwrap();
             }
             let plan = Plan { fns: BTreeMap::new(), skipped, refines: vec![], err_types: vec![], links: vec![], export: None, owned: vec![], fids: index.clone() };
-            return Ok((src, plan));
+            return Ok((fix_members(&src), plan));
         }
         if failed.is_empty() {
             let mut entries = String::new();
@@ -1121,7 +1121,7 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
             let refines = cx.refine_ids.iter().copied().zip(cx.refines.iter().cloned()).collect();
             let err_types = cx.err_ids.iter().copied().zip(cx.err_types.iter().cloned()).collect();
             let plan = Plan { fns: plan_fns, skipped, refines, err_types, links: links.unwrap_or_default(), export: exported, owned, fids: index.clone() };
-            return Ok((src, plan));
+            return Ok((fix_members(&src), plan));
         }
         for (n, e) in failed {
             ok.remove(&n);
@@ -1739,7 +1739,7 @@ impl<'a> Cx<'a> {
                 let mut body = String::new();
                 for (f, ft) in &fs {
                     let c = self.cty(ft)?;
-                    write!(body, "{c} {f}; ").unwrap();
+                    write!(body, "{c} {}; ", cfield(f)).unwrap();
                 }
                 self.in_progress.remove(&m);
                 if self.complete.insert(m.clone()) {
@@ -1757,7 +1757,7 @@ impl<'a> Cx<'a> {
                             let mut body = String::new();
                             for (f, ft) in fs {
                                 let c = self.cty(ft)?;
-                                write!(body, "{c} {f}; ").unwrap();
+                                write!(body, "{c} {}; ", cfield(f)).unwrap();
                             }
                             write!(union, "struct {{ {body}}} v{k}; ").unwrap();
                         }
@@ -4497,4 +4497,46 @@ fn kind_name(k: &ExprKind) -> &'static str {
         ExprKind::Table(_) => "rule table",
         _ => "unsupported",
     }
+}
+
+const C_KEYWORDS: &[&str] = &[
+    "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if",
+    "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+    "unsigned", "void", "volatile", "while", "bool", "true", "false", "asm", "typeof",
+];
+
+fn cfield(f: &str) -> String {
+    if C_KEYWORDS.contains(&f) { format!("{f}_k") } else { f.to_string() }
+}
+
+fn fix_members(src: &str) -> String {
+    let b = src.as_bytes();
+    let mut out = String::with_capacity(src.len() + 64);
+    let mut i = 0;
+    let mut last = 0;
+    while i < b.len() {
+        let after = if b[i] == b'.' && i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_' || b[i - 1] == b')' || b[i - 1] == b']' || b[i - 1] == b' ' || b[i - 1] == b'{' || b[i - 1] == b',') {
+            Some(i + 1)
+        } else if b[i] == b'-' && i + 1 < b.len() && b[i + 1] == b'>' {
+            Some(i + 2)
+        } else {
+            None
+        };
+        if let Some(j) = after {
+            let mut k = j;
+            while k < b.len() && (b[k].is_ascii_alphanumeric() || b[k] == b'_') {
+                k += 1;
+            }
+            if k > j && !b[j].is_ascii_digit() && C_KEYWORDS.contains(&&src[j..k]) {
+                out.push_str(&src[last..k]);
+                out.push_str("_k");
+                last = k;
+            }
+            i = k.max(i + 1);
+            continue;
+        }
+        i += 1;
+    }
+    out.push_str(&src[last..]);
+    out
 }

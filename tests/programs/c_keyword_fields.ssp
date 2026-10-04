@@ -1,0 +1,5 @@
+type R = {short: Int, int: Int, default: Int}
+
+fn f(r: R) -> Int = r.short + r.int + r.default
+
+test t = f(R{short: 1, int: 2, default: 3}) == 6

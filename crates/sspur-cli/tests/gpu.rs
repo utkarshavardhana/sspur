@@ -68,6 +68,45 @@ fn interpreter_runs_kernels_sequentially_with_f32_rounding() {
     assert!(out.contains("rows [36, 33, 30"), "{out}");
 }
 
+#[test]
+fn portable_backends_compile_every_kernel() {
+    let dir = std::env::temp_dir().join(format!("sspur-gpu-emit-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp"] {
+        let path = suite().join(name);
+        let module = parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let kernels: Vec<String> = check(&module).kernels.keys().cloned().collect();
+        let (ok, cl, err) = run(&["gpu", "--emit", "opencl"], &path, &[]);
+        assert!(ok, "{name}: {err}");
+        let (ok, msl, err) = run(&["gpu", "--emit", "metal"], &path, &[]);
+        assert!(ok, "{name}: {err}");
+        assert!(msl.contains("#pragma METAL fp contract(off)"));
+        for k in &kernels {
+            assert!(cl.contains(&format!("__kernel void k_{k}(")), "{name}: {k} missing from OpenCL");
+        }
+        for (target, ext) in [("spirv", "spv"), ("ptx", "ptx")] {
+            let out = dir.join(format!("{name}.{ext}"));
+            let (ok, _, err) = run(&["gpu", "--emit", target, "-o", out.to_str().unwrap()], &path, &[]);
+            if !ok && err.contains("no clang with") {
+                eprintln!("skipping {target}: {err}");
+                continue;
+            }
+            assert!(ok, "{name} {target}: {err}");
+            let bytes = std::fs::read(&out).unwrap();
+            if target == "spirv" {
+                assert_eq!(&bytes[..4], &[0x03, 0x02, 0x23, 0x07], "{name}: not a SPIR-V module");
+            } else {
+                let ptx = String::from_utf8_lossy(&bytes);
+                assert!(!ptx.contains(".extern"), "{name}: PTX has unresolved calls");
+                for k in &kernels {
+                    assert!(ptx.contains(&format!(".entry k_{k}(")), "{name}: {k} missing from PTX");
+                }
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn metal_available() -> bool {
     let (_, _, err) = run(&["run"], &suite().join("basic.ssp"), &[("SSPUR_GPU_TRACE", "1")]);
     err.lines().any(|l| l.starts_with("gpu: "))

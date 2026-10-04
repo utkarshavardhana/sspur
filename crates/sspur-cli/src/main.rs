@@ -31,6 +31,7 @@ const USAGE: &str = "usage:
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
   --O3 raises the optimization level; fuzz --differential compares native against the interpreter
   sspur build --target riscv64-qemu|aarch64-qemu file.ssp [-o kernel.elf]  build a 'profile bare' kernel (freestanding C, clang, ld.lld)
+  sspur gpu file.ssp [--emit metal|opencl|spirv|ptx] [-o out]  emit the kernel fns as Metal, OpenCL C, SPIR-V or PTX (ADR 0020)
   sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status   (sspur deploy for details; ADR 0016, 0019; never calls AWS)";
 
 fn main() -> ExitCode {
@@ -62,7 +63,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -151,7 +152,7 @@ fn real_main() -> ExitCode {
             }
         }
         "deploy" => deploy::run(&args.pos[1..], &args.flags),
-        "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" | "build" => program_cmd(&cmd, &args),
+        "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" | "build" | "gpu" => program_cmd(&cmd, &args),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -304,6 +305,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         "verify" => verify::verify(&loaded, &label, json),
         "export-c" => export_c(&loaded, &label, args),
         "build" => build_bare(&loaded, &label, args),
+        "gpu" => emit_gpu(&loaded, &label, args),
         "hash" => {
             let res = Resolution { user_methods: Some(&loaded.check.user_methods), record_types: Some(&loaded.check.record_types) };
             for (name, h) in hash_module_with(&loaded.module, &res) {
@@ -389,6 +391,52 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
         }
         _ => unreachable!(),
+    }
+}
+
+fn emit_gpu(l: &Loaded, label: &str, args: &Args) -> ExitCode {
+    let target = args.val("--emit").map_or("metal", |s| s.as_str());
+    let ext = match target {
+        "metal" => "metal",
+        "opencl" => "cl",
+        "spirv" => "spv",
+        _ => "ptx",
+    };
+    match sspur_native::cgen::gpu::emit(&l.check, target) {
+        Ok(bytes) => match args.val("-o") {
+            Some(out) => match std::fs::write(out, &bytes) {
+                Ok(()) => {
+                    println!("wrote {out} ({target}, {} kernels, {} bytes)", l.check.kernels.len(), bytes.len());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("cannot write {out}: {e}");
+                    ExitCode::FAILURE
+                }
+            },
+            None if matches!(target, "metal" | "opencl" | "ptx") => {
+                print!("{}", String::from_utf8_lossy(&bytes));
+                ExitCode::SUCCESS
+            }
+            None => {
+                let stem = std::path::Path::new(label).file_stem().map_or("kernels".into(), |s| s.to_string_lossy().into_owned());
+                let out = format!("{stem}.{ext}");
+                match std::fs::write(&out, &bytes) {
+                    Ok(()) => {
+                        println!("wrote {out} ({target}, {} kernels, {} bytes)", l.check.kernels.len(), bytes.len());
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("cannot write {out}: {e}");
+                        ExitCode::FAILURE
+                    }
+                }
+            }
+        },
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

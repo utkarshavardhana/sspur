@@ -478,6 +478,58 @@ pub fn opencl_source(ks: &[&Kernel]) -> String {
     s
 }
 
+pub const EMIT_TARGETS: &[&str] = &["metal", "opencl", "spirv", "ptx"];
+
+fn device_cc(backend: &str) -> Result<String, String> {
+    let mut cands: Vec<String> = std::env::var("SSPUR_GPU_CC").into_iter().collect();
+    cands.extend(["clang", "/opt/homebrew/opt/llvm/bin/clang", "/usr/local/opt/llvm/bin/clang"].map(String::from));
+    cands
+        .into_iter()
+        .find(|c| Command::new(c).arg("-print-targets").output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim_start().starts_with(backend))))
+        .ok_or_else(|| format!("no clang with the {backend} backend (install LLVM, e.g. 'brew install llvm', or set SSPUR_GPU_CC)"))
+}
+
+pub fn emit(check: &CheckOutput, target: &str) -> Result<Vec<u8>, String> {
+    let ks: Vec<&Kernel> = check.kernels.values().collect();
+    if ks.is_empty() {
+        return Err("the program has no kernel fns".into());
+    }
+    let (backend, args): (&str, &[&str]) = match target {
+        "metal" => {
+            let metal: Vec<&Kernel> = ks.iter().copied().filter(|k| !k.uses_f64()).collect();
+            return Ok(msl_source(&metal).into_bytes());
+        }
+        "opencl" => return Ok(opencl_source(&ks).into_bytes()),
+        "spirv" => ("spirv64", &["-target", "spirv64", "-cl-std=CL2.0", "-c"]),
+        "ptx" => ("nvptx64", &["--target=nvptx64-nvidia-cuda", "-march=sm_70", "-nogpulib", "-cl-std=CL2.0", "-S"]),
+        _ => return Err(format!("unknown GPU target '{target}' (use {})", EMIT_TARGETS.join(", "))),
+    };
+    let cc = device_cc(backend)?;
+    let src = opencl_source(&ks);
+    let key = blake3::hash(format!("{target}\n{src}").as_bytes()).to_hex().to_string();
+    let dir = cache_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let cl = dir.join(format!("{}.cl", &key[..24]));
+    let out = dir.join(format!("{}.{target}", &key[..24]));
+    std::fs::write(&cl, &src).map_err(|e| e.to_string())?;
+    let mut failure = String::new();
+    for opt in if target == "ptx" { ["-O3", "-O1"] } else { ["-O2", "-O1"] } {
+        let o = Command::new(&cc).args(["-x", "cl", opt]).args(args).arg(&cl).arg("-o").arg(&out).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+        if o.status.success() {
+            failure.clear();
+            break;
+        }
+        failure = format!("{cc} failed for {target}: {}", String::from_utf8_lossy(&o.stderr).lines().take(8).collect::<Vec<_>>().join(" | "));
+    }
+    if !failure.is_empty() {
+        return Err(failure);
+    }
+    let bytes = std::fs::read(&out).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_file(&cl);
+    Ok(bytes)
+}
+
 pub(super) const SHIM_LINK: &str = "@sspur-gpu";
 const SHIM_SRC: &str = include_str!("gpu_rt.m");
 

@@ -29,7 +29,7 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 ## Expressions
 - `if c then a else b`; `then do` / `else do` + block.
 - `match e` + arms `| Pat => e`, `| Pat if c => e`. Exhaustive patterns: `_`, name, literal, tuple, `Ctor Ctor{f, g: pat} some(p) none ok(p) err(p)`.
-- `raise Ctor{..}`; `catch e` + arms (every arm and `e` have one type); covering every variant removes `fail[E]`.
+- `raise Ctor{..}`; `catch e` + arms; arms have the type of `e`, so a test compares inside: `catch f(x) == [] | Missing{sku} => .. | _ => false`. Covering every variant removes `fail[E]`.
 - `effect ask() -> Int` (callers `! ask`); `handle e` + `| ask() => resume(21)` (once; `| return(r) =>`). `yield(x)` (`! yield[T]`) makes a generator for `for`.
 - `! conc`: `par(a, b)` gives `(a, b)`; `for i in par(xs)`; `atomic(0)`, `chan()`.
 - `Item{sku: "a", qty: 1}`, `Item{sku, qty}`; `x with qty := 2, a.b := 3, xs[0] := v`.
@@ -53,4 +53,4 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 `extern fn cbrt(x: F64) -> F64 ! ffi from "m"`; `profile sys` (`res type` moved and dropped, `&x`/`&mut x`, `! unsafe`); `profile bare` (no heap, `static`, `mmio`, `asm`); `kernel fn k(y: &mut [F32]) @grid(y.len, 64)` (`gid`, `barrier()`, callers `! dev`). Details: `./sspur spec --full`.
 
 ## CLI
-`./sspur src`, `q body|sig|callers NAME`. `./sspur edit --test -e '<defs>'` (one single-quoted multi-line argument; or a file name) adds or replaces each definition by name (`rename A B`, `remove NAME` lines first), atomically, prints errors as `def:line:col CODE msg`, then runs every test. Put all changes in one edit. If the shell refuses the command, write the defs to a file in the work dir and pass its name. On `E_CONFLICT` read theirs, merge, resend. `./sspur test|check`, `sync pull|push DIR`, `deploy plan|local`.
+`./sspur src`, `q body|sig|callers NAME`. `./sspur edit --test -e '<defs>'` (all defs in one single-quoted multi-line argument) adds or replaces each definition by name (`rename A B`, `remove NAME` lines first), atomically, prints errors as `def:line:col CODE msg`, then runs every test. Put all changes in one edit. If the shell refuses that command, save the defs to a file in the work dir with your file-writing tool and run `./sspur edit --test FILE`. On `E_CONFLICT` read theirs, merge, resend. `./sspur test|check`, `sync pull|push DIR`, `deploy plan|local`.

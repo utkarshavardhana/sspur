@@ -3,7 +3,9 @@ use sspur_store::load_src;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-fn key(l: &sspur_store::Loaded) -> (Vec<(String, [u32; 2], String)>, Vec<(String, String)>) {
+type Key = (Vec<(String, [u32; 2], String)>, Vec<(String, String)>);
+
+fn key(l: &sspur_store::Loaded) -> Key {
     let mut d: Vec<_> = l.check.diags.iter().map(|d| (d.code.clone(), d.span, d.msg.clone())).collect();
     d.sort();
     (d, l.hashes.clone().into_iter().collect())

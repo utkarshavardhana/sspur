@@ -40,10 +40,10 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 ## Builtins
 - List: `len is_empty map filter flat_map fold(init, (acc, x) => e) any all find index_of contains(x) sort sort_by(key) sort_with(cmp) unique reverse sum push(x) concat(ys) take(n) drop(n) slice(a, b) zip(ys) enumerate group_by(key) counts join(sep) to_set`. `find first last get(i) min max` give Opt. Sorts are stable; `counts` is `List[(A, Int)]` in first-seen order.
 - Str: `len is_empty lower upper trim split(sep) words chars contains starts_with ends_with index_of replace(a, b) repeat(n) pad_left(n, fill) to_int to_f64` (Opt), `get(i) first last` (Opt). `words` splits on non-alphanumerics. `.format(">10,.2f")`.
-- Opt `or(d) is_some is_none map get ok_or(e)`; Res `is_ok get or map`.
+- Opt `or(d) is_some is_none map get ok_or(e)`; Res `is_ok or(d) map`, and `get` raises its error (`fail[E]`).
 - `empty_map()`/`hash_map()`: `get put(k, v) remove has keys values items`; `empty_set()`: `add has union`; `str_buf().add(s).str`.
 - Int `abs to_f64`; F64 `abs round floor sqrt pow`; any `.str`; `min(a, b) max(a, b) log(s)`.
-- `big(n)`, `decimal("1.25")` (Opt); `regex(p)` (Res) `.is_match(s) find_all replace(s, "$1")`; `date(y, m, d)` (Opt); `json.encode(v) json.decode[T](s)` (Res).
+- `big(n)`, `decimal("1.25")` (Opt); `regex(p)` (Res) `.is_match(s) captures(s)` (Opt of groups, 0 first) `find_all replace(s, "$1")`; `date(y, m, d)` (Opt); `json.encode(v) json.decode[T](s)` (Res).
 - `! fs`: `read_file(p) write_file(p, s)` (`Res[_, Str]`); `! io`: `read_line`; `! time`: `now`; `! env`: `env_var`; `! proc`: `run_cmd`.
 
 ## Services

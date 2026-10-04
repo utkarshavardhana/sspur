@@ -60,6 +60,9 @@ fn migrate_classifies_changes() {
     assert!(r.text().contains("field note: Opt[Str] added (optional)"), "{}", r.text());
     assert!(v2.backfills.is_empty(), "a compatible change needs no backfill");
     assert_eq!(compare(&v1.stores, &v1.stores).stores[0].kind, Kind::Same);
+    let sum = "type C = Red | Blue\ntype T = {id: Str, c: C}\nstore S = table[Str, T]\nfn h(id: Str) -> Opt[T] ! db.read[S]\n= db.get(S, id)\nsvc s\n  ep get \"/t/{id}\" = h\n";
+    let r = compare(&analyze(sum).unwrap().stores, &analyze(&sum.replace("Red | Blue", "Red | Blue | Green")).unwrap().stores);
+    assert!(r.ok() && !r.side_by_side() && r.text().contains("variant c.Green added"), "{}", r.text());
 
     let r = compare(&v1.stores, &v3.stores);
     let c = &r.stores[0];

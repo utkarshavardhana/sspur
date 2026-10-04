@@ -45,17 +45,17 @@ Nothing more is ever granted. Widening a permission requires changing code, whic
 
 ## 4. Typed evolution
 
-- Every `store` schema is a type hash. Changing it requires a `migrate` node: `migrate Orders from #old to #new = o => {...o, note: ""}`. The compiler checks that the migration is total.
+- Every `store` schema is a type hash. A change that old items don't decode as (anything beyond new `Opt` fields and variants) requires a pure migration function, `fn migrate_Orders(old: OrderV1) -> Order`, matched to stored items by the schema hash of `OrderV1`. An optional `unmigrate_Orders` lets old and new handlers share the table. Handlers migrate old items on read, and a generated backfill rewrites them (ADR 0019).
 - Every `ep` contract is versioned by hash. The compiler classifies each change as compatible or breaking, and breaking changes require a new path or an explicit `deprecate`.
 - During rollout, old and new handlers run side by side, each pinned to its own root hash.
 
 ## 5. Hot swap and rollout
 
-Deploying means pointing an environment at a new root. Rollout is staged by policy (canary percentage, bake time, SLO gates), and rollback means pointing back at the previous root, which is instant because the old artifacts are still cached.
+Deploying means pointing an environment at a new root. Rollout is staged by policy (canary percentage, bake time, SLO gates), and rollback means pointing back at the previous root, which is instant because the old artifacts are still cached. On AWS this is a retained Lambda version per root behind a `live` alias that CodeDeploy shifts and rolls back on alarms. `sspur deploy local` does the same in-process with `swap`, `promote` and `rollback` (ADR 0019).
 
 ## 6. Observability and replay
 
 - Every effect invocation is logged with node hash, inputs (redacted by type annotation), and timing.
 - `trace(req)` reconstructs a request as a path through nodes.
-- `replay(req)` re-runs it locally under log handlers and is bit-for-bit deterministic (pillar 18).
+- `replay(req)` re-runs it locally under log handlers and is bit-for-bit deterministic (pillar 18). `sspur deploy replay` re-runs a `deploy local --record` file against a new version and reports every behavior difference, as a gate before a swap.
 - Measured cost and latency flow back into node `meta.cost`.

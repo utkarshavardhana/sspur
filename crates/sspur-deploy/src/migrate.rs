@@ -36,6 +36,7 @@ pub struct Change {
     pub reverse: Option<String>,
     pub problems: Vec<String>,
     pub notes: Vec<String>,
+    pub side_by_side: bool,
 }
 
 pub struct Report {
@@ -45,7 +46,7 @@ pub struct Report {
 pub fn compare(old: &[Store], new: &[Store]) -> Report {
     let mut out = Vec::new();
     for s in new {
-        let mut c = Change { store: s.name.clone(), kind: Kind::Same, from: None, to: Some(s.sv.clone()), changes: vec![], fun: None, reverse: None, problems: vec![], notes: vec![] };
+        let mut c = Change { store: s.name.clone(), kind: Kind::Same, from: None, to: Some(s.sv.clone()), changes: vec![], fun: None, reverse: None, problems: vec![], notes: vec![], side_by_side: true };
         let Some(o) = old.iter().find(|o| o.name == s.name) else {
             c.kind = Kind::New;
             out.push(c);
@@ -71,6 +72,7 @@ pub fn compare(old: &[Store], new: &[Store]) -> Report {
             if g.sv != o.sv {
                 c.notes.push(format!("{} reads schema {} with the same JSON shape as the stored {}; items tagged {} use it too", g.fun, g.sv, o.sv, o.sv));
             }
+            c.side_by_side = c.reverse.is_some();
             match &c.reverse {
                 Some(r) => c.notes.push(format!("writes keep a v_{} copy made by {r}, so the old version reads new items", o.sv)),
                 None => c.notes.push(format!("the old version cannot read items the new version writes; add `fn unmigrate_{}(new: {}) -> OldT` for a side-by-side rollout", s.name, s.val)),
@@ -80,6 +82,10 @@ pub fn compare(old: &[Store], new: &[Store]) -> Report {
             if c.changes.iter().any(|x| x.1.contains("added (optional)")) {
                 c.notes.push("old items read the added optional fields as none; while both versions run, a write by the old version drops them".into());
             }
+            if c.changes.iter().any(|x| x.1.starts_with("variant") || x.1.contains(" variant ")) {
+                c.side_by_side = false;
+                c.notes.push(format!("the old version cannot read an item holding an added variant; add migrate_{0} and unmigrate_{0} to run side by side", s.name));
+            }
         } else {
             c.kind = Kind::Breaking;
             let near: Vec<String> = s.migs.iter().map(|g| format!("{} reads schema {} ({}), not {}", g.fun, g.sv, g.shape, o.sv)).collect();
@@ -88,7 +94,7 @@ pub fn compare(old: &[Store], new: &[Store]) -> Report {
         out.push(c);
     }
     for o in old.iter().filter(|o| !new.iter().any(|s| s.name == o.name)) {
-        out.push(Change { store: o.name.clone(), kind: Kind::Removed, from: Some(o.sv.clone()), to: None, changes: vec![], fun: None, reverse: None, problems: vec![], notes: vec!["the table is retained (DeletionPolicy Retain); nothing is deleted".into()] });
+        out.push(Change { store: o.name.clone(), kind: Kind::Removed, from: Some(o.sv.clone()), to: None, changes: vec![], fun: None, reverse: None, problems: vec![], notes: vec!["the table is retained (DeletionPolicy Retain); nothing is deleted".into()], side_by_side: true });
     }
     Report { stores: out }
 }
@@ -99,7 +105,7 @@ impl Report {
     }
 
     pub fn side_by_side(&self) -> bool {
-        self.stores.iter().all(|c| c.kind != Kind::Migration || c.reverse.is_some())
+        self.stores.iter().all(|c| c.side_by_side)
     }
 
     pub fn json(&self) -> Value {

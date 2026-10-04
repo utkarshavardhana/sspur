@@ -334,6 +334,40 @@ svc items
 - JSON: records are objects, lists and tuples are arrays, `Opt` is the value or `null`, newtypes are their inner value, and a variant is `"Name"` or `{"tag": "Name", ...fields}`.
 - `sspur deploy plan file [--out DIR]` writes a CloudFormation template, per-handler IAM policies derived from the effects (only the DynamoDB actions the handler can reach, on its table), and the native Lambda `bootstrap.c`. `sspur deploy local file [--port N]` serves the service on 127.0.0.1 with emulated Lambda and DynamoDB that enforce those policies. Neither command calls AWS. See ADR 0016.
 
+### Schema changes, hot swap and replay
+
+Each store has a schema version: a hash of its value type's definition hash and JSON shape. Type names don't count, so `type ItemV1 = {...}` copied from the old file has the old version's schema.
+
+```
+type ItemV1 = {id: ItemId, name: Str where _.len > 0, qty: Int where _ >= 0, tags: List[Str]}
+
+fn migrate_Items(old: ItemV1) -> Item
+= Item{id: old.id, name: old.name, stock: Stock{on_hand: old.qty, unit: "each"}, tags: old.tags}
+
+fn unmigrate_Items(it: Item) -> ItemV1
+= ItemV1{id: it.id, name: it.name, qty: it.stock.on_hand, tags: it.tags}
+```
+
+| Change to a store's value type | Class | Needs |
+|---|---|---|
+| Add an `Opt` field, add a variant, drop a refinement | compatible | nothing: old items read the new field as `none`. An added variant isn't readable by the old version, so the swap is all at once |
+| Remove or retype a field, add a required field, remove a variant, add or change a refinement | migration | `fn migrate_S(old: OldT) -> V`, pure, with OldT's schema equal to the stored one (`E_MIGRATE_SIG`, else `E_MIGRATE_MISSING`) |
+| Change the key type | breaking | a new store (`E_MIGRATE_KEY`) |
+
+`migrate_S_suffix` adds more source schemas. `unmigrate_S(v: V) -> OldT` is optional: with it, every write also stores the old-schema copy, so the old version keeps reading items the new one wrote, and a canary or rollback is safe. Without it the swap is all at once.
+
+Items are stored as `{pk, sv, v}` plus `v_<schema>` copies. A read prefers its own schema's copy, then `v` when `sv` matches, then the `migrate_` function for `sv`, all in memory. A backfill rewrites old items, each write conditional on the item being unchanged since the scan.
+
+| Command | Does |
+|---|---|
+| `sspur deploy migrate old.ssp new.ssp [--out DIR] [--json]` | Classifies every store, lists the field changes, checks the functions. Writes `migrate.json`, `backfill.sh`, `rollback.sh`. Exit 1 if breaking |
+| `sspur deploy local f.ssp --record FILE` | Appends one JSON line per request: method, path, body, status, response, and every DynamoDB call with its result |
+| `sspur deploy swap new.ssp [--weight P] --port N` | Builds and starts new.ssp beside the running version. P% of new requests (default 100) go to it; in-flight requests finish where they started. Refused if a store change is breaking, or for P < 100 without `unmigrate_` |
+| `sspur deploy promote`, `rollback`, `status`, `backfill [--store S]` (`--port N`) | Make the canary live; drop the canary or return to the previous version (kept running); show versions and in-flight counts; migrate stored items in the emulated table |
+| `sspur deploy replay rec new.ssp [--strict] [--json]` | Re-runs each recorded request alone against new.ssp, with the store seeded from the recorded reads. Reports status, response and write differences and reads the recording can't answer. Responses that only gain `null` fields count as extended, which fails only with `--strict`. Exit 1 on a difference |
+
+Responses from `deploy local` carry `x-sspur-version`. `/_sspur/` paths are reserved for these controls. `deploy plan` adds, per handler, a retained `AWS::Lambda::Version`, a `live` alias that the API calls, two alarms (Lambda errors, 5xx answers) and a CodeDeploy deployment group, so `deploy.sh` shifts traffic by the `TrafficShift` parameter (default canary 10% for 5 minutes) and rolls back on an alarm. A store with a migration gets a `BackfillS` function (Scan and PutItem on that table only) driven by `backfill.sh`. See ADR 0019.
+
 ## Accepted input forms
 
 The parser accepts these common spellings and stores the canonical form:
@@ -439,7 +473,7 @@ Errors are `"{path}: not found"`, `permission denied`, `is a directory`, `not a 
 
 ## CLI and agent tools
 
-`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local file`, `sspur build --target riscv64-qemu|aarch64-qemu file -o kernel.elf`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. `sspur bind header.h` generates extern declarations.
+`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status`, `sspur build --target riscv64-qemu|aarch64-qemu file -o kernel.elf`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. `sspur bind header.h` generates extern declarations.
 
 `sspur fuzz` turns contracts into property tests. It generates inputs that satisfy `pre` and `where`, then reports shrunk counterexamples for any `post` violation or trap.
 

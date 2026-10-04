@@ -1823,3 +1823,5 @@ static int ss_f_write_bytes(SsF f, const int64_t* d, int64_t n, Str* err) {
 }
 static int ss_f_seek(SsF f, int64_t pos, int64_t* out, int whence, Str* err) { off_t r = lseek((int)f.fd, (off_t)pos, whence); if (r < 0) { *err = ss_f_why(f.path, errno); return 0; } *out = (int64_t)r; return 1; }
 static int ss_f_size(SsF f, int64_t* out, Str* err) { struct stat sb; if (fstat((int)f.fd, &sb) != 0) { *err = ss_f_why(f.path, errno); return 0; } *out = (int64_t)sb.st_size; return 1; }
+//@ fold
+static Str str_fold(Str s) { if (str_ascii(s)) return str_case(s, 1); int64_t cap = s.len * 12 + 16; char* o = (char*)sspur_alloc_atomic((size_t)cap); int64_t n = host_.str_op(4, s.p, s.len, o, cap); return (Str){n, o}; }

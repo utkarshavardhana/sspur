@@ -98,6 +98,7 @@ extern "C" fn host_str_op(op: i64, p: *const u8, len: i64, out: *mut u8, cap: i6
     let r = match op {
         1 => s.to_lowercase(),
         2 => s.to_uppercase(),
+        4 => s.to_uppercase().to_lowercase(),
         _ => format!("{s:?}"),
     };
     unsafe { host_write(&r, out, cap) }

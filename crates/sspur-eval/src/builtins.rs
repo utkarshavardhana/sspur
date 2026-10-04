@@ -345,6 +345,15 @@ fn str_method(name: &str, x: &str, a: Vec<Value>) -> R {
         "last" => x.chars().last().map_or(Value::Opt(None), |c| Value::some(Value::str(&c.to_string()))),
         "lower" => Value::str(&x.to_lowercase()),
         "upper" => Value::str(&x.to_uppercase()),
+        "fold_case" => Value::str(&x.to_uppercase().to_lowercase()),
+        "compare_ci" => match &a[0] {
+            Value::Str(y) => Value::Int(match x.to_uppercase().to_lowercase().cmp(&y.to_uppercase().to_lowercase()) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            }),
+            v => return trap(format!("expected Str, got {v}")),
+        },
         "trim" => Value::str(x.trim()),
         "split" => strs(x.split(s(&a[0])?).collect()),
         "words" => strs(x.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect()),

@@ -2951,6 +2951,15 @@ impl<'a> Cx<'a> {
             "byte" => format!("({{ Str s_ = {r}; int64_t i_ = {}; if (UNLIKELY(i_ < 0 || i_ >= s_.len)) TRAPV({T_BYTE}, s_.len, i_); (int64_t)(unsigned char)s_.p[i_]; }})", arg(self, 0)?),
             "lower" => format!("str_case({r}, 1)"),
             "upper" => format!("str_case({r}, 2)"),
+            "fold_case" => {
+                self.std("fold");
+                format!("str_fold({r})")
+            }
+            "compare_ci" => {
+                let o = arg(self, 0)?;
+                self.std("fold");
+                format!("({{ Str a_ = str_fold({r}); Str b_ = str_fold({o}); int c_ = cmp_S(a_, b_); (int64_t)((c_ > 0) - (c_ < 0)); }})")
+            }
             "trim" => format!("str_trim({r})"),
             "reverse" => format!("str_rev({r})"),
             "take" => format!("str_take({r}, {})", arg(self, 0)?),

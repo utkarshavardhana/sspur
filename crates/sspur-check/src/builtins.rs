@@ -295,6 +295,8 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("Int", "format(n: Int, spec: Str) -> Str"),
     ("F64", "format(x: F64, spec: Str) -> Str"),
     ("Str", "format(s: Str, spec: Str) -> Str"),
+    ("Str", "fold_case(s: Str) -> Str"),
+    ("Str", "compare_ci(s: Str, t: Str) -> Int"),
     ("#HashMap", "get[K, V](m: HashMap[K, V], k: K) -> Opt[V]"),
     ("#HashMap", "put[K, V](m: HashMap[K, V], k: K, v: V) -> HashMap[K, V]"),
     ("#HashMap", "remove[K, V](m: HashMap[K, V], k: K) -> HashMap[K, V]"),

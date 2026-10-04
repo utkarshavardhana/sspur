@@ -51,7 +51,7 @@ static int64_t xh_fmt_f64_display(double x, char* out) { return xh_float(x, out,
 static int64_t xh_str_op(int64_t op, const char* p, int64_t len, char* out, int64_t cap) {
     int64_t n = 0;
     if (op != 3) {
-        for (int64_t i = 0; i < len && n < cap; i++) { char c = p[i]; out[n++] = op == 1 ? (c >= 'A' && c <= 'Z' ? c + 32 : c) : (c >= 'a' && c <= 'z' ? c - 32 : c); }
+        for (int64_t i = 0; i < len && n < cap; i++) { char c = p[i]; out[n++] = op == 1 || op == 4 ? (c >= 'A' && c <= 'Z' ? c + 32 : c) : (c >= 'a' && c <= 'z' ? c - 32 : c); }
         return n;
     }
     out[n++] = '"';

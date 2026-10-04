@@ -27,6 +27,14 @@ impl Lto {
             Lto::Full => Some("-flto=full"),
         }
     }
+
+    pub fn linker(self) -> Option<&'static str> {
+        (cfg!(not(target_os = "macos")) && self != Lto::Off && on_path("ld.lld").is_some()).then_some("-fuse-ld=lld")
+    }
+}
+
+pub fn sys_libs() -> &'static [&'static str] {
+    if cfg!(target_os = "macos") { &[] } else { &["-lm", "-lpthread"] }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -135,7 +143,8 @@ pub(super) fn build_pgo(src: &str, opt: &str, links: &[String], o: &BuildOpts) -
     if let Some(l) = lto {
         cmd.arg(l);
     }
-    let out = cmd.arg("-o").arg(&tmp).arg("prog.c").args(&links).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    cmd.args(o.lto.linker());
+    let out = cmd.arg("-o").arg(&tmp).arg("prog.c").args(&links).args(sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
         return Err(format!("{cc} failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
     }

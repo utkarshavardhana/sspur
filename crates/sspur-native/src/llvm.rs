@@ -666,7 +666,7 @@ pub fn build(ir: &Ir, out: &Path, opt: &str) -> R<PathBuf> {
     std::fs::write(&ll, &ir.text).map_err(|e| e.to_string())?;
     std::fs::write(&rt, RT).map_err(|e| e.to_string())?;
     let cc = llvm_cc();
-    let o = Command::new(&cc).args([opt, "-w", "-o"]).arg(out).arg(&ll).arg(&rt).output().map_err(|e| format!("cannot run {}: {e}", cc.display()))?;
+    let o = Command::new(&cc).args([opt, "-w", "-o"]).arg(out).arg(&ll).arg(&rt).args(crate::cgen::flags::sys_libs()).output().map_err(|e| format!("cannot run {}: {e}", cc.display()))?;
     if !o.status.success() {
         return Err(format!("{} failed: {}", cc.display(), String::from_utf8_lossy(&o.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
     }

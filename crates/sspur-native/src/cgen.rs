@@ -1192,7 +1192,7 @@ fn build(src: &str, opt: &str, links: &[String], lto: flags::Lto) -> Result<Path
     std::fs::write(&c, src).map_err(|e| e.to_string())?;
     let tmp = lib.with_extension("tmp");
     let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
-    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w"]).args(lto.flag()).arg("-o").arg(&tmp).arg(&c).args(links).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w"]).args(lto.flag()).args(lto.linker()).arg("-o").arg(&tmp).arg(&c).args(links).args(flags::sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
         return Err(format!("{cc} failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
     }
@@ -1314,9 +1314,14 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto) -> Result<Pat
     let mut link = Command::new(&cc);
     if let Some(l) = lto.flag() {
         let cache = dir.join("lto");
-        link.arg(l).arg(if cfg!(target_os = "macos") { format!("-Wl,-cache_path_lto,{}", cache.display()) } else { format!("-Wl,--thinlto-cache-dir={}", cache.display()) });
+        link.arg(l);
+        if cfg!(target_os = "macos") {
+            link.arg(format!("-Wl,-cache_path_lto,{}", cache.display()));
+        } else if let Some(ld) = lto.linker() {
+            link.arg(ld).arg(format!("-Wl,--thinlto-cache-dir={}", cache.display()));
+        }
     }
-    let out = link.args(["-shared", "-o"]).arg(&tmp).args(&objs).args(&links).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    let out = link.args(["-shared", "-o"]).arg(&tmp).args(&objs).args(&links).args(flags::sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
         return Err(format!("link failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
     }

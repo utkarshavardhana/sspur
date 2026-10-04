@@ -142,6 +142,8 @@ type Frame = BTreeMap<String, (Span, Option<Type>)>;
 type Hole = (Span, Option<String>, Type, Vec<(String, Type)>);
 
 struct Checker {
+    fn_defs: HashMap<String, FnDef>,
+    device_fns: HashSet<String>,
     types: HashMap<String, TypeInfo>,
     ctors: HashMap<String, CtorInfo>,
     fns: HashMap<String, Scheme>,
@@ -238,6 +240,8 @@ pub fn check(m: &Module) -> CheckOutput {
 /// Skips the bodies of the fns and tests in `skip`: the output only serves validation.
 pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
     let mut c = Checker {
+        fn_defs: HashMap::new(),
+        device_fns: m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { kernel::is_device_fn(f).then(|| f.name.clone()) } else { None }).collect(),
         types: HashMap::new(),
         ctors: HashMap::new(),
         fns: HashMap::new(),
@@ -301,6 +305,9 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
         }
     }
     c.collect(m);
+    if !c.device_fns.is_empty() || m.defs.iter().any(|d| matches!(d, Def::Fn(f) if f.kernel.is_some())) {
+        c.fn_defs = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some((f.name.clone(), f.clone())) } else { None }).collect();
+    }
     c.collect_refined(m);
     let mut sigs = BTreeMap::new();
     let mut body_diags = BTreeMap::new();
@@ -800,6 +807,18 @@ impl Checker {
             self.check_kernel(f);
             return;
         }
+        if self.device_fns.contains(&f.name) {
+            if self.bare {
+                self.push_diag("E_PROFILE_BARE", "error", f.sig_span, "fns over F32, I32 or U32 are device fns for kernels, which bare code doesn't have".into(), None, vec![]);
+            }
+            let defs = &self.fn_defs;
+            if let Err(es) = kernel::check_device_fn(f, &|n| defs.get(n).cloned()) {
+                for e in es {
+                    self.push_diag(e.code, "error", e.span, e.msg, e.hint, vec![]);
+                }
+            }
+            return;
+        }
         self.cur_def = Some(f.name.clone());
         if f.interrupt.is_some() && !self.bare {
             self.push_diag("E_PROFILE", "error", f.sig_span, "interrupt handlers need 'profile bare'".into(), Some("add 'profile bare' as the first line".into()), vec![]);
@@ -819,7 +838,8 @@ impl Checker {
         if self.bare {
             self.push_diag("E_PROFILE_BARE", "error", f.sig_span, "kernel fns need a GPU host runtime, which bare code doesn't have".into(), None, vec![]);
         }
-        match kernel::lower(f) {
+        let defs = &self.fn_defs;
+        match kernel::lower_with(f, &|n| defs.get(n).cloned()) {
             Ok(k) => {
                 for (p, w) in k.params.iter().zip(&k.writes) {
                     if p.slice == Some(true) && !w {
@@ -1508,6 +1528,9 @@ impl Checker {
                         && let Some(ps) = self.kernel_sigs.get(n).cloned() {
                             return self.infer_launch(n, &ps, args, e.span);
                         }
+                    if self.lookup(n).is_none() && self.device_fns.contains(n) {
+                        self.push_diag("E_KERNEL_DEVICE", "error", e.span, format!("'{n}' takes or returns F32, I32 or U32, so it is a device fn that only kernels can call"), Some("give host code its own fn over Int and F64".into()), vec![]);
+                    }
                     if self.lookup(n).is_none()
                         && let Some(s) = self.fns.get(n).or_else(|| self.globals.get(n)).cloned() {
                             return self.call_scheme(&s, n, None, args, e.span);

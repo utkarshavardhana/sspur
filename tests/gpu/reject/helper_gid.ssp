@@ -1,0 +1,5 @@
+fn f(x: F32) -> F32
+= x + gid.to_f32
+
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := f(y[gid])

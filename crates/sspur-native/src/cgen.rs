@@ -916,7 +916,7 @@ pub fn bare_c(m: &Module, check: &CheckOutput, arch: &str) -> Result<String, Str
 }
 
 fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Option<&str>, stable: bool) -> Result<(String, Plan), String> {
-    let defs: Vec<&FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f) } else { None }).collect();
+    let defs: Vec<&FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f) } else { None }).filter(|f| !sspur_check::kernel::is_device_fn(f)).collect();
     let index: HashMap<String, usize> = if stable {
         let mut used = HashMap::new();
         defs.iter().map(|f| (f.name.clone(), stable_slot(&mut used, f.name.clone()) as usize)).collect()

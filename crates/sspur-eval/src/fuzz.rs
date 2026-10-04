@@ -102,6 +102,9 @@ impl Interp {
         if f.params.is_empty() {
             return Some("no parameters".into());
         }
+        if sspur_check::kernel::is_device_fn(f) {
+            return Some("device fn, inlined into kernels".into());
+        }
         if let Some(e) = f.effects.iter().find(|e| !ALLOWED_EFFECTS.contains(&e.name.as_str()) && !f.tparams.iter().any(|p| p.name == e.name)) {
             return Some(format!("performs '{}'", printer::effect(e)));
         }

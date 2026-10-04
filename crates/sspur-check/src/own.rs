@@ -144,7 +144,7 @@ pub fn analyze(m: &Module, record_types: &HashMap<(u32, u32), String>, user_meth
     for d in &m.defs {
         match d {
             Def::Type(t) => a.type_def(t),
-            Def::Fn(f) if f.kernel.is_some() => {}
+            Def::Fn(f) if f.kernel.is_some() || crate::kernel::is_device_fn(f) => {}
             Def::Fn(f) => {
                 a.cur = Some(f.name.clone());
                 a.sig(f);

@@ -262,6 +262,10 @@ type Lin = (std::collections::BTreeMap<String, i128>, i128);
 
 struct Lower<'a> {
     f: &'a FnDef,
+    fns: &'a dyn Fn(&str) -> Option<FnDef>,
+    pre: Vec<KStmt>,
+    inl: Vec<String>,
+    floor: usize,
     params: Vec<KParam>,
     scopes: Vec<HashMap<String, Local>>,
     locals: Vec<KTy>,
@@ -340,6 +344,10 @@ fn subnormal32(x: f32) -> bool {
 }
 
 pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
+    lower_with(f, &|_| None)
+}
+
+pub fn lower_with(f: &FnDef, fns: &dyn Fn(&str) -> Option<FnDef>) -> Result<Kernel, Vec<KErr>> {
     let spec = f.kernel.as_ref().expect("kernel spec");
     let mut errs = Vec::new();
     let mut params = Vec::new();
@@ -389,37 +397,12 @@ pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
         },
     };
     let float = if params.iter().any(|p| p.ty == KTy::F64) && !params.iter().any(|p| p.ty == KTy::F32) { KTy::F64 } else { KTy::F32 };
-    let mut lw = Lower {
-        f,
-        params,
-        scopes: vec![HashMap::new()],
-        locals: vec![],
-        defs: vec![],
-        body: false,
-        accesses: vec![],
-        errs: vec![],
-        float,
-        group,
-        group_y,
-        two: spec.y.is_some(),
-        grid_key: None,
-        shared: vec![],
-        cf: vec![],
-        guards: vec![],
-        loops: vec![],
-        cur: vec![0],
-        nseg: 1,
-        sacc: vec![],
-        free_loops: HashSet::new(),
-        barriers: 0,
-        nest: 0,
-    };
+    let mut lw = Lower::new(f, fns, params, float, (group, group_y), spec.y.is_some());
     let grid = match lw.expr(&spec.grid, Some(KTy::Int)) {
         Ok((g, KTy::Int)) => {
             lw.grid_key = lw.uniform(&g);
             Some(g)
         }
-
         Ok((_, t)) => {
             lw.errs.push(KErr { code: "E_KERNEL_TYPE", span: spec.grid.span, msg: format!("the thread count of {} must be Int, got {}", f.name, t.name()), hint: None });
             None
@@ -520,17 +503,176 @@ fn is_lit(e: &Expr) -> bool {
     }
 }
 
+fn is_device_ty(t: &Ty) -> bool {
+    matches!(t, Ty::Named { name, args, .. } if args.is_empty() && matches!(name.as_str(), "F32" | "I32" | "U32"))
+}
+
+pub fn is_device_fn(f: &FnDef) -> bool {
+    f.kernel.is_none() && f.ext.is_none() && (f.params.iter().any(|p| is_device_ty(&p.ty)) || f.ret.as_ref().is_some_and(is_device_ty))
+}
+
+pub fn check_device_fn(f: &FnDef, fns: &dyn Fn(&str) -> Option<FnDef>) -> Result<(), Vec<KErr>> {
+    let mut lw = Lower::new(f, fns, vec![], KTy::F32, (1, 1), false);
+    lw.body = true;
+    lw.inl.push(f.name.clone());
+    let r = lw.helper_sig(f, f.sig_span).and_then(|(ps, rt)| {
+        let vals = f.params.iter().zip(ps).map(|(p, t)| (p.name.clone(), None, t)).collect();
+        lw.helper_body(f, vals, rt)
+    });
+    if let Err(e) = r {
+        lw.errs.push(e);
+    }
+    if lw.errs.is_empty() { Ok(()) } else { Err(lw.errs) }
+}
+
+impl<'a> Lower<'a> {
+    fn new(f: &'a FnDef, fns: &'a dyn Fn(&str) -> Option<FnDef>, params: Vec<KParam>, float: KTy, (group, group_y): (u32, u32), two: bool) -> Self {
+        Lower {
+            f,
+            fns,
+            pre: vec![],
+            inl: vec![],
+            floor: 0,
+            params,
+            scopes: vec![HashMap::new()],
+            locals: vec![],
+            defs: vec![],
+            body: false,
+            accesses: vec![],
+            errs: vec![],
+            float,
+            group,
+            group_y,
+            two,
+            grid_key: None,
+            shared: vec![],
+            cf: vec![],
+            guards: vec![],
+            loops: vec![],
+            cur: vec![0],
+            nseg: 1,
+            sacc: vec![],
+            free_loops: HashSet::new(),
+            barriers: 0,
+            nest: 0,
+        }
+    }
+}
+
 impl Lower<'_> {
     fn lookup(&self, n: &str) -> Option<&Local> {
-        self.scopes.iter().rev().find_map(|s| s.get(n))
+        self.scopes[self.floor..].iter().rev().find_map(|s| s.get(n))
     }
 
     fn param(&self, n: &str) -> Option<usize> {
+        if !self.inl.is_empty() {
+            return None;
+        }
         self.params.iter().position(|p| p.name == n)
     }
 
     fn shared_of(&self, n: &str) -> Option<usize> {
+        if !self.inl.is_empty() {
+            return None;
+        }
         self.shared.iter().position(|s| s.0 == n)
+    }
+
+    fn temp(&mut self, ty: KTy) -> usize {
+        self.locals.push(ty);
+        self.defs.push(Def::Var);
+        self.locals.len() - 1
+    }
+
+    fn helper(&mut self, e: &Expr, n: &str, args: &[Expr]) -> KR<(KExpr, KTy)> {
+        let def = (self.fns)(n).unwrap();
+        let bad = |m: String| err("E_KERNEL", e.span, m);
+        if !self.body {
+            return bad(format!("'{n}' can only be called in the kernel body"));
+        }
+        if self.inl.iter().any(|h| h == n) || n == self.f.name {
+            return bad(format!("'{n}' is recursive; kernels inline the fns they call, so recursion is not available on the device"));
+        }
+        if self.inl.len() >= 8 {
+            return bad(format!("calls nest too deeply at '{n}'; kernels inline at most 8 levels"));
+        }
+        let (ps, rt) = self.helper_sig(&def, e.span)?;
+        if args.len() != def.params.len() {
+            return err("E_ARITY", e.span, format!("'{n}' takes {} argument(s), got {}", def.params.len(), args.len()));
+        }
+        let mut vals = Vec::new();
+        for ((a, p), pt) in args.iter().zip(&def.params).zip(ps) {
+            let (v, t) = self.expr(a, Some(pt))?;
+            if t != pt {
+                return err("E_KERNEL_TYPE", a.span, format!("'{}' of '{n}' is {}, got {}", p.name, pt.name(), t.name()));
+            }
+            vals.push((p.name.clone(), Some(v), pt));
+        }
+        let floor = std::mem::replace(&mut self.floor, self.scopes.len());
+        self.scopes.push(HashMap::new());
+        self.inl.push(n.to_string());
+        let r = self.helper_body(&def, vals, rt);
+        self.inl.pop();
+        self.scopes.pop();
+        self.floor = floor;
+        r
+    }
+
+    fn helper_sig(&self, def: &FnDef, span: Span) -> KR<(Vec<KTy>, KTy)> {
+        let n = &def.name;
+        let bad = |m: String| err("E_KERNEL", span, m);
+        if def.kernel.is_some() || def.ext.is_some() || !def.tparams.is_empty() {
+            return bad(format!("kernels can only call plain fns, and '{n}' is {}", if def.kernel.is_some() { "a kernel" } else if def.ext.is_some() { "an extern fn" } else { "generic" }));
+        }
+        if let Some(fx) = def.effects.first() {
+            return err("E_KERNEL_EFFECT", span, format!("'{n}' performs '{}', and fns called from kernels must be pure", printer::effect(fx)));
+        }
+        if !def.pres.is_empty() || !def.posts.is_empty() || def.params.iter().any(|p| p.refine.is_some()) {
+            return bad(format!("'{n}' has contracts, which kernels can't check on the device; check them before the launch"));
+        }
+        let scalar = |t: &Ty| match param_type(t) {
+            Ok((k, None)) => Some(k),
+            _ => None,
+        };
+        let Some(rt) = def.ret.as_ref().and_then(scalar) else { return err("E_KERNEL_SIG", span, format!("fns called from kernels return a scalar (Int I32 U32 F32 F64 Bool), and '{n}' doesn't")) };
+        let mut ps = Vec::new();
+        for p in &def.params {
+            let Some(pt) = scalar(&p.ty) else { return err("E_KERNEL_SIG", span, format!("parameter '{}' of '{n}' must be a scalar (Int I32 U32 F32 F64 Bool) to be called from a kernel", p.name)) };
+            ps.push(pt);
+        }
+        Ok((ps, rt))
+    }
+
+    fn helper_body(&mut self, def: &FnDef, vals: Vec<(String, Option<KExpr>, KTy)>, rt: KTy) -> KR<(KExpr, KTy)> {
+        for (name, v, t) in vals {
+            match v {
+                Some(v) => {
+                    let slot = self.bind(&name, t, false, Def::Value(v.clone()), def.sig_span)?;
+                    self.pre.push(KStmt::Let(slot, v));
+                }
+                None => {
+                    self.bind(&name, t, false, Def::Var, def.sig_span)?;
+                }
+            }
+        }
+
+        let (init, last): (&[Stmt], &Expr) = match &def.body.kind {
+            ExprKind::Block(stmts) if !stmts.is_empty() => match stmts.split_last() {
+                Some((Stmt::Expr(x), init)) => (init, x),
+                _ => return err("E_KERNEL", def.body.span, format!("'{}' must end with its result expression", def.name)),
+            },
+            _ => (&[], &def.body),
+        };
+        for s in init {
+            if let Some(k) = self.stmt(s)? {
+                self.pre.push(k);
+            }
+        }
+        let (v, t) = self.expr(last, Some(rt))?;
+        if t != rt {
+            return err("E_KERNEL_TYPE", last.span, format!("'{}' returns {}, got {}", def.name, rt.name(), t.name()));
+        }
+        Ok((v, t))
     }
 
     fn fresh_seg(&mut self) -> usize {
@@ -561,21 +703,29 @@ impl Lower<'_> {
     }
 
     fn block_inner(&mut self, e: &Expr) -> KR<Vec<KStmt>> {
-        match &e.kind {
-            ExprKind::Block(stmts) => {
-                let mut out = Vec::new();
-                for s in stmts {
-                    match self.stmt(s) {
-                        Ok(Some(k)) => out.push(k),
-                        Ok(None) => {}
-                        Err(e) => self.errs.push(e),
-                    }
-                }
-                Ok(out)
+        let one;
+        let stmts: &[Stmt] = match &e.kind {
+            ExprKind::Block(stmts) => stmts,
+            ExprKind::Unit => &[],
+            _ => {
+                one = [Stmt::Expr(e.clone())];
+                &one
             }
-            ExprKind::Unit => Ok(vec![]),
-            _ => Ok(self.stmt(&Stmt::Expr(e.clone()))?.into_iter().collect()),
+        };
+        let mut out = Vec::new();
+        for s in stmts {
+            let outer = std::mem::take(&mut self.pre);
+            let r = self.stmt(s);
+            let mine = std::mem::replace(&mut self.pre, outer);
+            match r {
+                Ok(k) => {
+                    out.extend(mine);
+                    out.extend(k);
+                }
+                Err(e) => self.errs.push(e),
+            }
         }
+        Ok(out)
     }
 
     fn stmt(&mut self, s: &Stmt) -> KR<Option<KStmt>> {
@@ -583,7 +733,7 @@ impl Lower<'_> {
             Stmt::Let(Pat::Bind(n), e) if shared_decl(e).is_some() => {
                 let (tn, len) = shared_decl(e).unwrap();
                 let Some(t) = KTy::from_name(tn).filter(|t| *t != KTy::Bool) else { return err("E_KERNEL_SHARED", e.span, format!("shared arrays hold Int, I32, U32, F32 or F64, not {tn}")) };
-                if self.nest > 0 {
+                if self.nest > 0 || !self.inl.is_empty() {
                     return err("E_KERNEL_SHARED", e.span, "declare shared arrays at the top of the kernel body, not inside 'if' or 'for'");
                 }
                 let (lx, _) = self.expr(len, Some(KTy::Int))?;
@@ -740,6 +890,9 @@ impl Lower<'_> {
                     if !args.is_empty() {
                         return err("E_KERNEL", e.span, "barrier() takes no arguments");
                     }
+                    if !self.inl.is_empty() {
+                        return err("E_KERNEL", e.span, "barrier() can only be used in the kernel body, not in the fns it calls");
+                    }
                     if self.cf.iter().any(|u| !u) {
                         return Err(KErr {
                             code: "E_KERNEL_BARRIER",
@@ -831,6 +984,9 @@ impl Lower<'_> {
                     }
                     return Ok((KExpr::Param(p), self.params[p].ty));
                 }
+                if !self.inl.is_empty() {
+                    return err("E_KERNEL", e.span, format!("unknown name '{n}' in '{}'; fns called from kernels see only their parameters and locals", self.inl.last().unwrap()));
+                }
                 if let Some((_, k)) = INTRINSICS.iter().find(|(i, _)| i == n) {
                     if self.two {
                         return err("E_KERNEL", e.span, format!("{} has a 2D grid; use {n}.x and {n}.y", self.f.name));
@@ -855,7 +1011,7 @@ impl Lower<'_> {
                 }
                 Ok((KExpr::Len(self.param(n).unwrap()), KTy::Int))
             }
-            ExprKind::Field(r, m) if (m == "x" || m == "y") && matches!(&r.kind, ExprKind::Name(n) if INTRINSICS.iter().any(|(i, _)| i == n) && self.lookup(n).is_none()) => {
+            ExprKind::Field(r, m) if (m == "x" || m == "y") && self.inl.is_empty() && matches!(&r.kind, ExprKind::Name(n) if INTRINSICS.iter().any(|(i, _)| i == n) && self.lookup(n).is_none()) => {
                 let ExprKind::Name(n) = &r.kind else { unreachable!() };
                 let k = INTRINSICS.iter().find(|(i, _)| i == n).unwrap().1;
                 if !self.two {
@@ -920,23 +1076,40 @@ impl Lower<'_> {
                 if ct != KTy::Bool {
                     return err("E_KERNEL_TYPE", c.span, format!("if conditions are Bool, got {}", ct.name()));
                 }
-                let (tx, tt, fx, ft) = if is_lit(t) && !is_lit(f) {
-                    let (fx, ft) = self.expr(f, hint)?;
-                    let (tx, tt) = self.expr(t, Some(ft))?;
-                    (tx, tt, fx, ft)
+                let outer = std::mem::take(&mut self.pre);
+                let r = if is_lit(t) && !is_lit(f) {
+                    self.expr(f, hint).and_then(|(fx, ft)| {
+                        let fp = std::mem::take(&mut self.pre);
+                        self.expr(t, Some(ft)).map(|(tx, tt)| (tx, tt, std::mem::take(&mut self.pre), fx, ft, fp))
+                    })
                 } else {
-                    let (tx, tt) = self.expr(t, hint)?;
-                    let (fx, ft) = self.expr(f, Some(tt))?;
-                    (tx, tt, fx, ft)
+                    self.expr(t, hint).and_then(|(tx, tt)| {
+                        let tp = std::mem::take(&mut self.pre);
+                        self.expr(f, Some(tt)).map(|(fx, ft)| (tx, tt, tp, fx, ft, std::mem::take(&mut self.pre)))
+                    })
                 };
+                self.pre = outer;
+                let (tx, tt, mut tp, fx, ft, mut fp) = r?;
                 if tt != ft {
                     return err("E_KERNEL_TYPE", e.span, format!("if branches have different types: {} and {}", tt.name(), ft.name()));
                 }
-                Ok((KExpr::If(Box::new(cx), Box::new(tx), Box::new(fx)), tt))
+                if tp.is_empty() && fp.is_empty() {
+                    return Ok((KExpr::If(Box::new(cx), Box::new(tx), Box::new(fx)), tt));
+                }
+                let r = self.temp(tt);
+                tp.push(KStmt::Set(r, tx));
+                fp.push(KStmt::Set(r, fx));
+                self.pre.push(KStmt::Let(r, KExpr::Lit(tt, 0)));
+                self.pre.push(KStmt::If(cx, tp, fp));
+                Ok((KExpr::Local(r), tt))
             }
             ExprKind::Block(stmts) if stmts.len() == 1 && matches!(&stmts[0], Stmt::Expr(_)) => {
                 let Stmt::Expr(x) = &stmts[0] else { unreachable!() };
                 self.expr(x, hint)
+            }
+            ExprKind::Call(f, args) if matches!(&f.kind, ExprKind::Name(n) if n != "barrier" && self.lookup(n).is_none() && (self.fns)(n).is_some()) => {
+                let ExprKind::Name(n) = &f.kind else { unreachable!() };
+                self.helper(e, n, args)
             }
             ExprKind::Call(f, _) => match &f.kind {
                 ExprKind::Name(n) if n == "barrier" => err("E_KERNEL", e.span, "barrier() is a statement"),
@@ -1091,12 +1264,24 @@ impl Lower<'_> {
         match op {
             And | Or => {
                 let (a, at) = self.expr(l, Some(KTy::Bool))?;
-                let (b, bt) = self.expr(r, Some(KTy::Bool))?;
+                let outer = std::mem::take(&mut self.pre);
+                let rb = self.expr(r, Some(KTy::Bool));
+                let mut bp = std::mem::replace(&mut self.pre, outer);
+                let (b, bt) = rb?;
                 if at != KTy::Bool || bt != KTy::Bool {
                     return err("E_KERNEL_TYPE", span, format!("'{}' needs Bool operands", op.symbol()));
                 }
-                Ok((KExpr::Bin(op, KTy::Bool, Box::new(a), Box::new(b)), KTy::Bool))
+                if bp.is_empty() {
+                    return Ok((KExpr::Bin(op, KTy::Bool, Box::new(a), Box::new(b)), KTy::Bool));
+                }
+                let t = self.temp(KTy::Bool);
+                bp.push(KStmt::Set(t, b));
+                self.pre.push(KStmt::Let(t, a));
+                let c = if op == And { KExpr::Local(t) } else { KExpr::Not(Box::new(KExpr::Local(t))) };
+                self.pre.push(KStmt::If(c, bp, vec![]));
+                Ok((KExpr::Local(t), KTy::Bool))
             }
+
             Eq | Ne | Lt | Le | Gt | Ge => {
                 let (a, t, b, _) = self.pair(l, r, None, span)?;
                 if t == KTy::Bool && !matches!(op, Eq | Ne) {

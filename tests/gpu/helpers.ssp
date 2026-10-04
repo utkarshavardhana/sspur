@@ -1,0 +1,96 @@
+fn sq(x: F32) -> F32
+= x * x
+
+fn clamp01(x: F32) -> F32
+= if x < 0.0 then 0.0 else if x > 1.0 then 1.0 else x
+
+fn poly(x: F32, n: Int) -> F32
+= do
+  var acc = 0.0
+  var p = 1.0
+  for i in 0..n
+    acc := acc + p
+    p := p * x
+  acc
+
+fn idiv(a: I32, b: I32) -> I32
+= a / b
+
+fn hyp(a: F32, b: F32) -> F32
+= (sq(a) + sq(b)).sqrt
+
+fn tri(n: Int) -> Int
+= n * (n + 1) / 2
+
+kernel fn apply(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := clamp01(hyp(x[gid], 0.5)) + poly(x[gid], 4)
+
+kernel fn guarded(x: &[I32], d: &[I32], y: &mut [I32]) @grid(y.len, 64)
+= y[gid] := if d[gid] == 0 then 0 else idiv(x[gid], d[gid])
+
+kernel fn short(x: &[I32], y: &mut [I32]) @grid(y.len, 64)
+= y[gid] := if x[gid] != 0 and idiv(100, x[gid]) > 10 then 1 else 0
+
+kernel fn blocks(y: &mut [Int]) @grid(y.len, 32)
+= do
+  t = tri(gid)
+  y[gid] := t + tri(t % 7)
+
+kernel fn reduce_sq(x: &[F32], out: &mut [F32]) @grid(x.len, 64)
+= do
+  sh = shared[F32](64)
+  sh[lid] := sq(x[gid])
+  barrier()
+  for k in 0..6
+    s = 32.shr(k)
+    if lid < s then sh[lid] := sh[lid] + sh[lid + s]
+    barrier()
+  if lid == 0 then out[group_id] := sh[0]
+
+fn run_apply(n: Int) -> List[F64] ! dev
+= do
+  y = dev_f32((0..n).map(i => 0.0))
+  apply(&dev_f32((0..n).map(i => (i % 23).to_f64 * 0.1 - 1.0)), &mut y)
+  y.to_list
+
+fn run_guarded(zero: Bool) -> List[Int] ! dev
+= do
+  x = dev_i32((0..100).map(i => i * 7 - 300))
+  d = dev_i32((0..100).map(i => if zero then i % 5 else i % 5 + 1))
+  y = dev_i32((0..100).map(i => 0))
+  z = dev_i32((0..100).map(i => 0))
+  guarded(&x, &d, &mut y)
+  short(&d, &mut z)
+  y.to_list + z.to_list
+
+fn run_div() -> List[Int] ! dev
+= do
+  var y = [0, 0, 0]
+  guarded(&[1, 2, 3], &[1, 1, 1], &mut y)
+  y
+
+fn run_blocks() -> List[Int] ! dev
+= do
+  y = dev_int((0..100).map(i => 0))
+  blocks(&mut y)
+  y.to_list
+
+fn run_reduce() -> List[F64] ! dev
+= do
+  out = dev_f32((0..4).map(i => 0.0))
+  reduce_sq(&dev_f32((0..256).map(i => (i % 9).to_f64)), &mut out)
+  out.to_list
+
+test apply_ok = run_apply(256).len == 256
+test guarded_ok = run_guarded(true)[1] == -293
+test blocks_ok = run_blocks()[10] == 55 + 21
+test host_call = tri(4) == 10
+
+fn main() ! dev, log
+= do
+  log("{run_apply(512).sum} {run_apply(512)[3]}")
+  log("{run_guarded(false)}")
+  log("{run_guarded(true)}")
+  log("{run_div()}")
+  log("{run_blocks().sum}")
+  log("{run_reduce()}")

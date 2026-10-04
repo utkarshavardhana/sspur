@@ -448,7 +448,7 @@ impl Interp {
     fn launch(&self, f: &FnDef, args: &[Expr], env: &Rc<Env>) -> R {
         let k = match self.kernels.borrow().get(&f.name).cloned() {
             Some(k) => k,
-            None => match sspur_check::kernel::lower(f) {
+            None => match sspur_check::kernel::lower_with(f, &|n| self.fns.get(n).map(|d| (**d).clone())) {
                 Ok(k) => Rc::new(k),
                 Err(_) => return trap(format!("kernel {} did not check", f.name)),
             },

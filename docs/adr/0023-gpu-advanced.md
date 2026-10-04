@@ -80,3 +80,22 @@ kernel fn tiled(a: &[F32], b: &[F32], c: &mut [F32], n: Int) @grid2(n, n, 16, 16
 | 19 | Sequential order is row-major: `gid.y` outer, `gid.x` inner. Grouped 2D kernels run group rows then group columns, with lanes in row-major `lid` order; both extents must be multiples of the group's (host checks naming the width or height) | One fixed order for every tier's first trap |
 | 20 | Per-thread shapes accept `gid.y * W + gid.x` when `W` is the grid width expression, and shared shapes `lid.y * gw + lid.x`; masks and flags use that linear index | They are bijections onto the grid and the group, so the 1D race rules carry over unchanged |
 | 21 | Metal dispatches a 2D grid with `uint2` positions and the declared group (shrunk to the pipeline limit unless the kernel has barriers); OpenCL uses `get_global_id(1)`, PTX the `y` special registers | The device code is the 1D code with a second coordinate |
+
+## Helper functions
+
+```
+fn sq(x: F32) -> F32
+= x * x
+
+fn tri(n: Int) -> Int
+= n * (n + 1) / 2
+
+kernel fn hyp(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := (sq(x[gid]) + sq(0.5)).sqrt + tri(gid).to_f32
+```
+
+| # | Decision | Reason |
+|---|---|---|
+| 22 | Kernels call top-level `fn`s whose parameters and result are scalars (`Int I32 U32 F32 F64 Bool`), with no effects, generics or contracts. The lowering inlines them into the kernel IR: arguments become immutable locals, the body's statements are hoisted before the calling statement and its last expression is the value. Recursion (`E_KERNEL`) and more than 8 nested levels are rejected. A call inside an `if` branch or the right side of `and`/`or` becomes a guarded statement, so a helper only runs (and traps) when the source says it does | Inlining needs no device call ABI in Metal, OpenCL, SPIR-V, PTX, the C fallback or the interpreter, and every backend keeps consuming the one IR |
+| 23 | A helper sees only its parameters and locals: no slices, shared arrays, intrinsics, `barrier()` or atomics. Its body follows the kernel subset and typing (widths kept, literals take the other operand's type) | Purity makes inlining order-independent and keeps race analysis on the kernel itself; immutable helper locals stay transparent to it |
+| 24 | A `fn` that takes or returns `F32`, `I32` or `U32` is a device fn: its body is checked by the kernel rules even when unused, only kernels may call it (`E_KERNEL_DEVICE` from host code), and it is not compiled for the host, fuzzed or ownership-checked. A helper over `Int`, `F64` and `Bool` is an ordinary fn that host code can call too | The host has no `F32` literals or methods, so such bodies can't be host code; ordinary helpers are shared between host and device |

@@ -37,7 +37,7 @@ fn kernel_violations_are_rejected_with_their_codes() {
 
 #[test]
 fn accepted_kernels_check_cleanly_and_round_trip() {
-    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp", "sys.ssp", "async.ssp", "shared.ssp", "atomics.ssp", "grid2.ssp"] {
+    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp", "sys.ssp", "async.ssp", "shared.ssp", "atomics.ssp", "grid2.ssp", "helpers.ssp"] {
         let src = std::fs::read_to_string(suite().join(name)).unwrap();
         let module = parse(&src).unwrap();
         let out = check(&module);
@@ -72,7 +72,7 @@ fn interpreter_runs_kernels_sequentially_with_f32_rounding() {
 fn portable_backends_compile_every_kernel() {
     let dir = std::env::temp_dir().join(format!("sspur-gpu-emit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp", "sys.ssp", "async.ssp", "shared.ssp", "atomics.ssp", "grid2.ssp"] {
+    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp", "sys.ssp", "async.ssp", "shared.ssp", "atomics.ssp", "grid2.ssp", "helpers.ssp"] {
         let path = suite().join(name);
         let module = parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let kernels: Vec<String> = check(&module).kernels.keys().cloned().collect();
@@ -122,7 +122,7 @@ fn native_kernels_match_the_interpreter_on_gpu_and_cpu() {
         return;
     }
     let metal = metal_available();
-    for name in ["basic.ssp", "exact.ssp", "devbuf.ssp", "async.ssp", "shared.ssp", "atomics.ssp", "grid2.ssp"] {
+    for name in ["basic.ssp", "exact.ssp", "devbuf.ssp", "async.ssp", "shared.ssp", "atomics.ssp", "grid2.ssp", "helpers.ssp"] {
         let path = suite().join(name);
         let interp = run(&["run", "--interp"], &path, &[]);
         assert!(interp.0, "{name}: {}", interp.2);
@@ -202,6 +202,12 @@ fn kernel_traps_are_identical_in_every_tier() {
     let interp = run(&["test", "--interp"], &path, &[]);
     assert!(interp.1.contains("FAIL  bad_tile_trap: dev: the grid width of tiled is not a multiple of its group width 16 (width = 24)"), "{}", interp.1);
     assert!(interp.1.contains("3 passed, 1 failed"), "{}", interp.1);
+    for env in [vec![], vec![("SSPUR_GPU", "0")]] {
+        assert_eq!(interp.1, run(&["test"], &path, &env).1, "{env:?}");
+    }
+    let path = suite().join("helpers.ssp");
+    let interp = run(&["test", "--interp"], &path, &[]);
+    assert!(interp.1.contains("4 passed, 0 failed"), "{}", interp.1);
     for env in [vec![], vec![("SSPUR_GPU", "0")]] {
         assert_eq!(interp.1, run(&["test"], &path, &env).1, "{env:?}");
     }

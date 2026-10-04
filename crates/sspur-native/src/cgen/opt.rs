@@ -1769,7 +1769,7 @@ impl Opt<'_> {
 }
 
 fn eligible_fn(f: &FnDef) -> bool {
-    f.ext.is_none() && f.kernel.is_none() && f.interrupt.is_none() && f.trusted.is_none() && !any_node(&f.body, &mut |x| matches!(x.kind, ExprKind::Hole(_) | ExprKind::Handle(..)))
+    f.ext.is_none() && f.kernel.is_none() && !sspur_check::kernel::is_device_fn(f) && f.interrupt.is_none() && f.trusted.is_none() && !any_node(&f.body, &mut |x| matches!(x.kind, ExprKind::Hole(_) | ExprKind::Handle(..)))
 }
 
 impl Opt<'_> {

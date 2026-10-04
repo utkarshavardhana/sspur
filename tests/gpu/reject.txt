@@ -37,3 +37,8 @@ grid2_plain E_KERNEL
 grid1_axis E_KERNEL
 grid2_group E_KERNEL_GRID
 grid2_race E_KERNEL_RACE
+helper_effect E_KERNEL_EFFECT
+helper_slice E_KERNEL_SIG
+helper_host E_KERNEL_DEVICE
+helper_body E_KERNEL
+helper_gid E_KERNEL

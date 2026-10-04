@@ -1,0 +1,5 @@
+fn half(x: I32) -> I32
+= x / 2
+
+fn main() ! log
+= log("{half(4)}")

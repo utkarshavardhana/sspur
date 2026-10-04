@@ -16,7 +16,7 @@ test t = take([Item{sku: "a", qty: 3}], "a", 1)[0].qty == 2
 ```
 
 ## Types
-`Int` (i64) `F64 Bool Str Unit List[T] Opt[T] Res[T, E] Map[K, V] Set Heap HashMap HashSet StrBuf Bits Time Duration BigInt Dec Regex (A, B)` (`t.0`) `(A, B) -> C ! e`. Records `{f: T}`; sums `A | B{f: T}`; `where` refinements (`_` = value, checked at run time); newtype `new Str` (`Id("a")`, `.raw`). No implicit conversions (`n.to_f64`). `==` is structural; `<` orders numbers, Str, Time, BigInt, Dec.
+`Int` (i64) `F64 Bool Str Unit List[T] Opt[T] Res[T, E] Map[K, V] Set Heap HashMap HashSet StrBuf Bits Time Duration BigInt Dec Regex (A, B)` (`t.0`) `(A, B) -> C ! e`. Records `{f: T}`; sums `A | B{f: T}`; `where` refinements (`_` = value); newtype `new Str` (`Id("a")`, `.raw`). No implicit conversions (`n.to_f64`). `==` is structural; `<` orders numbers, Str, Time.
 
 ## Functions
 Return type required unless Unit. Effects after `!` must be declared: `fail[E]` (raise), `log`, `div` (while), `conc fs io time env proc`. Optional `pre`, `post` (`r` = result). Body: expression or `do` + block (last line is the result). `x.f(a)` is `f(x, a)`; `x.f` is a field or a zero-arg call. Fn names are values.
@@ -35,21 +35,21 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 - Low to high: `or, and, not, == != < <= > >=, .., + -, * / %, **`, unary `-`. Int `/` truncates; overflow, `/ 0` and bad `xs[i]` trap.
 
 ## Builtins
-- List: `map filter flat_map fold(init, (acc, x) => e) scan find find_index index_of sort sort_by(key) sort_with(cmp) binary_search lower_bound upper_bound unique rotate merge next_perm sum push_front pop_front pop_back take_while drop_while slice(a, b) chunks windows group_by(key) partition flatten counts join(sep) shuffle(seed) choice(seed) to_set to_heap to_hash_set to_hash_map to_bits(n)`; Opt from `find* first last get(i) min max pop_*` (`(x, rest)`).
+- List: `map filter flat_map fold(init, (acc, x) => e) scan find find_index index_of sort sort_by(key) sort_with(cmp) binary_search lower_bound upper_bound unique sum push_front pop_front pop_back take_while drop_while slice(a, b) chunks windows group_by(key) partition flatten counts join(sep) shuffle(seed) to_set to_hash_map`; Opt from `find* first last get(i) min max pop_*` (`(x, rest)`).
 - Str: `trim split(sep) split_once words chars starts_with index_of replace(a, b) repeat(n) pad_left(n, fill) bytes codes to_int to_f64`; `.format(">10,.2f")` (Python specs).
 - Opt `or(d) is_some map get ok_or(e)` (get traps, ok_or raises); Res `is_ok get or map`.
-- `empty_map()` or `hash_map()` (faster): `get put(k, v) remove has keys values items`. `empty_set()`, `hash_set()`: `add remove has items union inter diff`. `empty_heap().push pop peek`. `str_buf().add(s).str`.
-- Int `band bor bxor shl shr rotl popcount gcd`, `wrapping_ checked_ saturating_` + `add sub mul`; F64 `round floor sqrt pow exp ln sin atan2 cbrt erf gamma fmod fmt(digits)`; `pi() clamp range(a, b, step) log(s)`; `rand(seed) rand_int(seed, lo, hi) rand_f64 rand_normal(seed, mean, sd)` give `(value, next_seed)`.
-- `big(n)`, `decimal("1.25")` (Opt): `.add sub mul div rem pow`, `div(d, scale) round(scale)`. `regex(p)` (Res): `.is_match(s) find find_all captures replace(s, "$1") split`.
-- `date(y, m, d)` (Opt) `parse_time(iso) time_ms(ms)`: `.year month day weekday format("%F %T") add(days(1)) since(t) add_months(n)`.
+- `empty_map()` or `hash_map()`: `get put(k, v) remove has keys values items`. `empty_set()`, `hash_set()`: `add remove has items union inter diff`. `empty_heap().push pop peek`. `str_buf().add(s).str`.
+- Int `band bor bxor shl shr popcount gcd`, `wrapping_ checked_ saturating_` + `add sub mul`; F64 `round floor sqrt pow exp ln sin atan2 fmt(digits)`; `pi() clamp range(a, b, step) log(s)`; `rand(seed) rand_int(seed, lo, hi) rand_f64 rand_normal` give `(value, next_seed)`.
+- `big(n)`, `decimal("1.25")` (Opt): `.add sub mul div rem pow round(scale)`. `regex(p)` (Res): `.is_match(s) find find_all captures replace(s, "$1") split`.
+- `date(y, m, d)` (Opt) `parse_time(iso)`: `.year month day format("%F %T") add(days(1)) since(t)`.
 - `json.encode(v) json.decode[T](s)` (`Res[T, Str]`).
-- `! fs`: `read_file(p) write_file(p, s) append_file list_dir read_bytes write_bytes mkdir_all rename` (`Res[_, Str]`) `exists`; `! io`: `read_line read_lines eprint`; `! time`: `now now_ms sleep_ms`; `! env`: `env_var args`; `! proc`: `run_cmd(prog, args, stdin)` gives `Res[(status, out, err), Str]`, `exit`.
+- `! fs`: `read_file(p) write_file(p, s) append_file list_dir read_bytes write_bytes mkdir_all rename` (`Res[_, Str]`) `exists`; `! io`: `read_line read_lines eprint`; `! time`: `now now_ms sleep_ms`; `! env`: `env_var args`; `! proc`: `run_cmd(prog, args, stdin)` (`Res[(status, out, err), Str]`) `exit`.
 
-## C, sys, bare
-`extern fn cbrt(x: F64) -> F64 ! ffi from "m"`. `profile sys`: `res type F = {fd: Int} drop close` (moved, dropped at scope end), `&x`/`&mut x` borrows, `! unsafe` pointers. `profile bare`: no heap, `mmio`, `interrupt`. Details: `./sspur spec --full`.
+## C, sys, bare, GPU
+`extern fn cbrt(x: F64) -> F64 ! ffi from "m"`. `profile sys`: `res type F = {fd: Int} drop close` (moved, dropped at scope end), `&x`/`&mut x` borrows, `! unsafe` pointers. `profile bare`: no heap, `mmio`, `interrupt`. `kernel fn k(y: &mut [F32]) @grid(y.len, 64)` + `= y[gid] := 2.0 * y[gid]` runs per thread; `k(&mut ys)` needs `! dev`; `dev_f32(xs)` stays on the GPU. Details: `./sspur spec --full`.
 
 ## Services
 `store S = table[K, V]`; `db.get(S, k)` (Opt) `db.scan(S)` need `! db.read[S]`, `db.put(S, k, v) db.del` need `! db.write[S]`. `svc name` + `ep get "/items/{id}" = fname` (`{id}` binds `id`, another param is the JSON body, `none` or `NotFound` is 404). Changing V beyond new `Opt` fields or variants needs `fn migrate_S(old: OldV) -> V` (and `unmigrate_S` back, to run side by side).
 
 ## CLI
-`./sspur src`, `./sspur q body|sig|callers NAME`. `./sspur edit --test -e '<definitions>'`: each definition replaces its namesake or is added (`rename OLD NEW`, `remove NAME` lines first); atomic; `--test` runs all tests. `./sspur test|check`, `./sspur deploy plan|local file`, `deploy migrate|replay old new`.
+`./sspur src`, `./sspur q body|sig|callers NAME`. `./sspur edit --test -e '<definitions>'`: replaces or adds definitions by name (`rename OLD NEW`, `remove NAME` lines first); atomic; `--test` runs all tests. `./sspur test|check`, `./sspur deploy plan|local file`, `deploy migrate|replay old new`.

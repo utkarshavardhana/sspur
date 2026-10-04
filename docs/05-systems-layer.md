@@ -149,11 +149,11 @@ Operators are trait methods: `Add`, `Mul`, `Index`, `Deref`, `Call`, `Cmp`, and 
 ## 13. GPU and accelerators
 
 ```
-kernel fn saxpy(a: F32, x: &[F32], y: &mut [F32]) @grid(x.len / 256, 256)
-= y[gid] = a * x[gid] + y[gid]
+kernel fn saxpy(a: F32, x: &[F32], y: &mut [F32]) @grid(y.len, 256)
+= y[gid] := a * x[gid] + y[gid]
 ```
 
-`kernel fn` lowers through MLIR to PTX and SPIR-V. Host-device transfers are an effect (`dev`). Kernel contracts (bounds, races) are verified like any other code.
+`kernel fn` lowers to Metal, OpenCL C, SPIR-V and PTX. Launches and host-device transfers are an effect (`dev`). Bounds are checked and races rejected statically (ADR 0020: `@grid` takes the total thread count).
 
 ## 14. Standard library scope
 

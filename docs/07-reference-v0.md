@@ -103,6 +103,7 @@ Every function declares what it does after `!`. Undeclared effects are compile e
 | A declared effect, e.g. `ask` | Calling one of its operations, e.g. `ask()` |
 | `yield[T]` | `yield(x)` where `x: T` (built in, for generators) |
 | `ffi` | Calling an `extern fn` |
+| `dev` | Calling a `kernel fn`, `dev_f32 dev_f64 dev_i32 dev_u32 dev_int`, `DevBuf.to_list` |
 | `fs` | `read_file write_file append_file remove_file list_dir read_bytes write_bytes mkdir mkdir_all remove_dir rename exists is_dir file_size modified_ms` |
 | `io` | `read_line read_lines` (stdin), `eprint` (stderr) |
 | `proc` | `run_cmd exit` |
@@ -316,6 +317,46 @@ fn main() ! mmio, div
 
 `sspur fmt` prints integer literals in decimal, so `0x10000000` becomes `268435456`.
 
+## GPU kernels
+
+A `kernel fn` runs once per thread on the GPU (ADR 0020). Any profile except `bare` can define one.
+
+```
+kernel fn saxpy(a: F32, x: &[F32], y: &mut [F32]) @grid(y.len, 256)
+  pre x.len == y.len
+= y[gid] := a * x[gid] + y[gid]
+
+kernel fn partial(x: &[F32], out: &mut [F32]) @grid(out.len, 256)
+= do
+  var acc = 0.0
+  for k in 0..x.len / out.len
+    acc := acc + x[gid + k * out.len]
+  out[gid] := acc
+
+fn demo() -> F64 ! dev
+= do
+  var ys = [1.0, 2.0]
+  saxpy(2.0, &[0.5, 0.25], &mut ys)
+  x = dev_f32((0..4096).map(i => i.to_f64))
+  parts = dev_f32((0..64).map(i => 0.0))
+  partial(&x, &mut parts)
+  ys.sum + parts.to_list.sum
+```
+
+| Feature | Rules |
+|---|---|
+| `@grid(n, g)` | `n` threads (an `Int` over parameters and `.len`; 0 or less launches nothing) in groups of `g`, an `Int` literal from 1 to 1024 (`E_KERNEL_GRID`) |
+| Parameters | Scalars `Int I32 U32 F32 F64 Bool`, or slices `&[T]` / `&mut [T]` of `Int I32 U32 F32 F64` (`E_KERNEL_SIG`). No result, generics or `post`; `pre` is checked before launch. Kernels may declare only `dev` (`E_KERNEL_EFFECT`) |
+| Body | `x = e`, `var x = e`, `x := e`, `y[i] := v` (`&mut` only, `E_KERNEL_WRITE`), `for i in a..b`, `if`, arithmetic, comparisons, `and or not`, `xs[i]`, `xs.len`, `.to_int .to_i32 .to_u32 .to_f32 .to_f64` (not float to int), `.sqrt .abs .floor .ceil .round .min(b) .max(b)`. No calls, `while`, lambdas, lists, records, tuples or strings (`E_KERNEL`) |
+| Intrinsics | `gid` (0 to n-1), `lid` (`gid % g`), `group_id` (`gid / g`), `group_size`, `grid_size` (all `Int`) |
+| Types | Numbers keep their width: `I32`/`U32` arithmetic traps outside the type, `F32` rounds like IEEE single precision. Float literals are `F32` unless the kernel's floats are all `F64`; integer literals take the other operand's type; mixing types needs a conversion (`E_KERNEL_TYPE`) |
+| Races | Every access to a written `&mut` slice uses one per-thread index: `gid` plus a uniform offset, or `gid * s + j` with `for j in 0..s`. Otherwise `E_KERNEL_RACE` |
+| Launch | `k(args)` performs `dev`. Scalars convert (`F64` rounds to `F32`; out-of-range `Int` traps with `dev: argument ...`). A slice takes `&xs` (a `List[F64]` or `List[Int]`, copied in) or `&mut ys` (`ys` a `var`, replaced by the result), or a `DevBuf` |
+| `DevBuf[T]` | `dev_f32(xs)` (also `dev_f64 dev_i32 dev_u32 dev_int`) copies a list to device memory; kernels update it in place; `b.to_list` copies back, `b.len` is its length. It is a handle (copies alias); passing one buffer twice to a kernel that writes it traps. Buffers are freed when native code returns to the interpreter |
+| Semantics | The interpreter runs threads 0 to n-1 in order. Native code runs on Metal and gives the same results and traps, rerunning on the CPU when a thread could trap or meet a subnormal `F32`; `F64` kernels run on the CPU. `SSPUR_GPU=0` forces the CPU, `SSPUR_GPU_TRACE=1` reports each launch |
+
+`sspur gpu file.ssp --emit metal|opencl|spirv|ptx [-o out]` prints Metal or OpenCL C, or compiles SPIR-V and PTX with a clang that has those backends (`SSPUR_GPU_CC`, `clang`, or Homebrew LLVM).
+
 ## Services
 
 ```
@@ -473,7 +514,7 @@ Errors are `"{path}: not found"`, `permission denied`, `is a directory`, `not a 
 
 ## CLI and agent tools
 
-`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status`, `sspur build --target riscv64-qemu|aarch64-qemu file -o kernel.elf`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. `sspur bind header.h` generates extern declarations.
+`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status`, `sspur build --target riscv64-qemu|aarch64-qemu file -o kernel.elf`, `sspur gpu file --emit metal|opencl|spirv|ptx [-o out]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. `sspur bind header.h` generates extern declarations.
 
 `sspur fuzz` turns contracts into property tests. It generates inputs that satisfy `pre` and `where`, then reports shrunk counterexamples for any `post` violation or trap.
 

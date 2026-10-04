@@ -58,6 +58,7 @@ Most languages are designed around a human at a keyboard. SSPUR starts from a di
 - `sspur verify` for SMT-checked contracts
 - An MCP server and a compact query API so agents can pull exactly the context they need
 - C interop in both directions: `extern fn`, `sspur bind` for C headers, and `sspur export-c` to ship SSPUR as a C library
+- `kernel fn` GPU kernels: Metal with exact `F32` and identical traps, plus OpenCL C, SPIR-V and PTX through `sspur gpu`
 - `sspur deploy` to generate infrastructure and least-privilege IAM policies from a service's effects, and to run the service locally
 
 ## Performance
@@ -71,6 +72,7 @@ Benchmarks run on Apple Silicon against C++ compiled with clang `-O2` with the s
 | Strings: build, split, count, sort 2M words | 0.09s | 0.06s | 0.65x |
 | App: generate and parse CSV, aggregate, report | 0.15s | 0.11s | 0.71x |
 | Data-parallel numeric kernels | 0.29s | 0.25s | 0.86x |
+| GPU kernels on Metal: saxpy, reduction, matmul (C++ single-threaded CPU) | 0.41s | 0.27s | 0.66x |
 | Recursion, loops, primes, gcd | 1.01s | 0.89s | 0.88x |
 
 Compiling C++ with `-O3` instead of `-O2` doesn't change these results.
@@ -88,6 +90,7 @@ Optional tools unlock specific features:
 |---|---|
 | `z3` | `sspur verify` and SMT-based check elimination |
 | `qemu`, `lld` | building and booting `profile bare` kernels |
+| Homebrew `llvm` | `sspur gpu --emit spirv` and `--emit ptx` (Apple's clang has neither backend) |
 
 On macOS: `brew install z3 qemu llvm lld`.
 

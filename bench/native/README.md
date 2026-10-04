@@ -13,6 +13,7 @@
 | Long-running loop: 2M iterations, about 700 MB of short-lived garbage | `churn` | | 0.06s | | 265 MB |
 | Pure pipelines: Collatz, primes, hashed table, Mandelbrot (10 cores) | `parallel` | 2.09s (single-threaded) | 0.33s (2.01s with `SSPUR_THREADS=1`) | **0.16x** | 17 MB / 21 MB |
 | Data-parallel numeric: checked Int map/filter/sum, squares, counts, mapped lists, F64 dot and saxpy over 1M-element lists | `simd` | 0.29s | 0.25s (0.31s with `SSPUR_THREADS=1`; 0.38s before ADR 0015) | **0.86x** | 40 MB / 316 MB |
+| GPU kernels (Metal): F32 saxpy over 4M elements, a 4M to 65 536 reduction, 512 x 512 matmul | `gpu` | 0.41s (single-threaded CPU) | 0.27s | **0.66x** | 38 MB / 225 MB |
 
 Against C++ -O3 (same machine, 2026-10-03): compute 0.88x, typical 0.18x (hand-tuned C++ -O3 0.20s, so 0.60x), strings 0.54x, app 0.60x, parallel 0.15x. -O3 is no faster than -O2 on these workloads.
 
@@ -23,6 +24,7 @@ SSPUR times include about 10 ms of fixed startup (parse, typecheck, load the cac
 - The output of each pair is identical (checked by `diff`).
 - `parallel` compares against single-threaded C++ on purpose: SSPUR parallelizes a pure pipeline with no code change, and its traps and results stay identical to sequential execution for any `SSPUR_THREADS` (default: online cores; `1` disables). The machine had other load during measurement; with `SSPUR_THREADS=1`, SSPUR is 0.96x C++.
 - In `simd` (single-threaded, per 40 rounds), the checked Int kernels take 18 ms (`affine`) and 21 ms (`squares`) against 35 ms each before ADR 0015 and 42 ms in C++. The F64 dot product ties C++ (sums keep sequential order). The two kernels that build new 8 MB lists lose to C++ on first-touch page faults in the GC heap, which is also why peak memory is higher.
+- `gpu` (ADR 0020, 2026-10-04, Apple M1 Pro, C++ built with `-ffp-contract=off` so both sides round every `F32` operation): saxpy 100 launches 83 ms C++ vs 72 ms (1.15x), reduction 100 launches 65 ms vs 47 ms (1.4x), matmul 20 launches 247 ms vs 56 ms (4.4x; the kernel alone takes 2.2 ms against 12.4 ms per multiply). Output is bit-identical to C++, to the interpreter and to `SSPUR_GPU=0` (the exact sequential C fallback, 5.1s). Launches are synchronous, about 0.25 ms each, and the CPU shares the unified memory bandwidth, so the memory-bound kernels gain little; SSPUR's 62 ms setup builds the inputs as host lists before upload.
 - A cold first build adds about 0.6 to 0.9s of clang time, once. After that it's cached under `~/.cache/sspur/native/`.
 
 ## Memory

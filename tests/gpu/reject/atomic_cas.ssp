@@ -1,0 +1,2 @@
+kernel fn k(h: &mut [I32]) @grid(64, 64)
+= h.atomic_cas(0, 0, gid.to_i32)

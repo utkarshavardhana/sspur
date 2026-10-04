@@ -1,0 +1,4 @@
+kernel fn k(x: &[I32], h: &mut [I32]) @grid(x.len, 64)
+= do
+  h.atomic_add(0, x[gid])
+  h.atomic_max(1, x[gid])

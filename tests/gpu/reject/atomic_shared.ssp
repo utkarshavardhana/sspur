@@ -1,0 +1,5 @@
+kernel fn k(x: &[I32], y: &mut [I32]) @grid(y.len, 64)
+= do
+  c = shared[I32](8)
+  c.atomic_add(x[gid].to_int % 8, 1)
+  y[gid] := c[lid % 8]

@@ -1,0 +1,93 @@
+kernel fn hist(x: &[I32], h: &mut [I32]) @grid(x.len, 256)
+= h.atomic_add(x[gid].to_int % h.len, 1)
+
+kernel fn hist_local(x: &[I32], h: &mut [I32]) @grid(x.len, 256)
+  pre h.len == 64
+= do
+  local = shared[I32](64)
+  local.atomic_add(x[gid].to_int % 64, 1)
+  barrier()
+  if lid < 64 then h.atomic_add(lid, local[lid])
+
+kernel fn extremes(x: &[I32], lo: &mut [I32], hi: &mut [I32]) @grid(x.len, 128)
+= do
+  lo.atomic_min(gid % 4, x[gid])
+  hi.atomic_max(gid % 4, x[gid])
+
+kernel fn umax(x: &[U32], m: &mut [U32]) @grid(x.len, 64)
+= m.atomic_max(0, x[gid])
+
+kernel fn claim(x: &[I32], flags: &mut [I32]) @grid(x.len, 64)
+= flags.atomic_cas(x[gid].to_int, 0, 7)
+
+kernel fn wsum(x: &[F32], w: &[I32], out: &mut [F32]) @grid(x.len, 64)
+= out.atomic_add(w[gid].to_int, x[gid])
+
+kernel fn bump(h: &mut [U32], by: U32) @grid(h.len * 8, 32)
+= h.atomic_add(gid % h.len, by)
+
+fn histogram(n: Int, bins: Int) -> List[Int] ! dev
+= do
+  x = dev_i32((0..n).map(i => (i * 7919 + i / 3) % 1000))
+  h = dev_i32((0..bins).map(i => 0))
+  hist(&x, &mut h)
+  h.to_list
+
+fn local_hist(n: Int) -> List[Int] ! dev
+= do
+  x = dev_i32((0..n).map(i => (i * 31 + 7) % 997))
+  h = dev_i32((0..64).map(i => 0))
+  hist_local(&x, &mut h)
+  hist_local(&x, &mut h)
+  h.to_list
+
+fn ext(n: Int) -> List[Int] ! dev
+= do
+  x = dev_i32((0..n).map(i => (i * 7919) % 20011 - 10000))
+  lo = dev_i32([2147483647, 2147483647, 2147483647, 2147483647])
+  hi = dev_i32([-2147483648, -2147483648, -2147483648, -2147483648])
+  extremes(&x, &mut lo, &mut hi)
+  lo.to_list + hi.to_list
+
+fn claims() -> List[Int] ! dev
+= do
+  f = dev_i32((0..10).map(i => if i == 4 then 3 else 0))
+  claim(&dev_i32([1, 1, 4, 9, 1, 4]), &mut f)
+  f.to_list
+
+fn weighted(frac: Bool) -> List[F64] ! dev
+= do
+  x = dev_f32((0..1000).map(i => if frac then i.to_f64 * 0.1 else (i % 10).to_f64))
+  out = dev_f32([0.0, 0.0, 0.0])
+  wsum(&x, &dev_i32((0..1000).map(i => i % 3)), &mut out)
+  out.to_list
+
+fn wrapped() -> List[Int] ! dev
+= do
+  h = dev_u32([4294967295, 0, 7])
+  bump(&mut h, 1)
+  m = dev_u32([0])
+  umax(&dev_u32([5, 4294967295, 3]), &mut m)
+  h.to_list + m.to_list
+
+fn listed() -> List[Int] ! dev
+= do
+  var h = [0, 0, 0, 0]
+  hist(&(0..100).map(i => i * i), &mut h)
+  h
+
+test hist_total = histogram(100000, 256).sum == 100000
+test local_total = local_hist(4096).sum == 8192
+test claims_ok = claims() == [0, 7, 0, 0, 3, 0, 0, 0, 0, 7]
+test wrap_ok = wrapped() == [7, 8, 15, 4294967295]
+test listed_ok = listed() == [50, 50, 0, 0]
+
+fn main() ! dev, log
+= do
+  log("{histogram(1000000, 1000).take(8)}")
+  log("{local_hist(65536)}")
+  log("{ext(100000)}")
+  log("{claims()}")
+  log("{weighted(false)} {weighted(true)}")
+  log("{wrapped()}")
+  log("{listed()}")

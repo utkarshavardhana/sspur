@@ -40,3 +40,18 @@ kernel fn tree_sum(x: &[F32], out: &mut [F32]) @grid(x.len, 256)
 | 10 | A global write at `group_id` plus a thread-uniform offset under an enclosing `if lid == c` is a third per-thread shape (one writer per group) | Reductions write one result per group |
 | 11 | The interpreter and the sequential C fallback run such "grouped" kernels group by group in lockstep: statements without a barrier run for every thread of the group in `lid` order; `for` and `if` statements that contain one are evaluated once (by `lid` 0, which is exact because they are uniform) and their bodies again in lockstep. The C fallback keeps per-thread locals in arrays. The thread count must be a multiple of the group size (`dev: the thread count of k is not a multiple of its group size g (count = n)`, a host check), and Metal dispatches exactly that group size or falls back to the CPU. Grouped kernels are never partially rerun: a flag reruns the whole launch | Lockstep execution is the sequential semantics that a barrier implies, and the race rule makes it agree with any GPU interleaving. A flagged thread's group-mates may have consumed its shared values |
 | 12 | Integer kernels gain `.shl(n) .shr(n) .band(m) .bor(m) .bxor(m)` with the host `Int` semantics (64-bit pattern, logical `shr`, shifts outside `0..63` give 0), trapping when an `I32`/`U32` result leaves its type. The launch-time interval check covers them, so they keep the 32-bit variant | Halving strides and bit tricks without `**` |
+
+## Atomics
+
+```
+kernel fn hist(x: &[I32], h: &mut [I32]) @grid(x.len, 256)
+= h.atomic_add(x[gid].to_int % h.len, 1)
+```
+
+| # | Decision | Reason |
+|---|---|---|
+| 13 | `b.atomic_add(i, v)`, `b.atomic_min(i, v)`, `b.atomic_max(i, v)` and `b.atomic_cas(i, expected, new)` on a `&mut` slice or a shared array of `I32` or `U32`; `atomic_add` also on `F32`. They are statements: no old value is returned (`E_KERNEL`), and `atomic_cas` needs thread-uniform `expected` and `new` (`E_KERNEL_RACE`). Other element types are `E_KERNEL_TYPE` | Every allowed use leaves the same final buffer under any interleaving, so the sequential tiers stay the reference. Fetch-and-add slots, CAS loops and winner selection depend on scheduling and would break tier identity |
+| 14 | Integer `atomic_add` wraps modulo 2^32 in every tier | Its partial sums depend on the order, so trapping on overflow could not be reproduced |
+| 15 | Race exemption: a buffer updated atomically may only be updated with one atomic operation kind (and one `expected`/`new` pair) per kernel, at any index, and is not read or written directly (`E_KERNEL_RACE`). For shared arrays the rule is per phase, so a local histogram is built atomically, then read after a `barrier()` | Mixing `add` with `max`, or a direct read with atomic updates, is order dependent |
+| 16 | `F32` `atomic_add` runs as a compare-and-swap loop on Metal and OpenCL and is exact only when every addend is a non-negative integer and every value seen stays an integer of magnitude at most 2^24; the device flags anything else and the launch reruns on the CPU in order. Kernels with atomics are never partially rerun | Then every order sums exactly, so the GPU result is the sequential one; otherwise rounding would depend on the order |
+| 17 | Metal uses `atomic_fetch_{add,min,max}_explicit` (relaxed) on `device` or `threadgroup` pointers and a weak-CAS loop for `atomic_cas`; OpenCL uses `atomic_add/min/max/cmpxchg`, and the PTX build maps them to `__nvvm_atom_*` | Relaxed order suffices because nothing reads the buffer during the launch |

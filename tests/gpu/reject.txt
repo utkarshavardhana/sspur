@@ -27,3 +27,9 @@ shared_nested E_KERNEL_SHARED
 shared_big E_KERNEL_SHARED
 group_write E_KERNEL_RACE
 shared_wrap E_KERNEL_RACE
+atomic_mixed E_KERNEL_RACE
+atomic_kinds E_KERNEL_RACE
+atomic_cas E_KERNEL_RACE
+atomic_value E_KERNEL
+atomic_type E_KERNEL_TYPE
+atomic_shared E_KERNEL_RACE

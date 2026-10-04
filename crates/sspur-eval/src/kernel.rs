@@ -1,7 +1,7 @@
 use crate::{trap, value::Value, R};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use sspur_check::kernel::{has_barrier, KExpr, KFn, KIntr, KStmt, KTy, Kernel};
+use sspur_check::kernel::{has_barrier, AOp, KExpr, KFn, KIntr, KStmt, KTy, Kernel};
 use sspur_syntax::{printer, BinOp, FnDef};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -232,6 +232,25 @@ impl Run<'_> {
                 xs[i as usize] = v;
             }
             KStmt::Barrier => {}
+            KStmt::Atomic(op, shared, w, i, v, v2) => {
+                let i = self.expr(i)?.i();
+                let v = self.expr(v)?;
+                let v2 = match v2 {
+                    Some(x) => Some(self.expr(x)?),
+                    None => None,
+                };
+                let (xs, t) = if *shared {
+                    (&mut self.shared[*w], self.k.shared[*w].1)
+                } else {
+                    let Arg::Slice(xs) = &mut self.args[*w] else { unreachable!() };
+                    (xs, self.k.params[*w].ty)
+                };
+                if i < 0 || i as usize >= xs.len() {
+                    return trap(format!("index {i} out of bounds for list of length {}", xs.len()));
+                }
+                let old = xs[i as usize];
+                xs[i as usize] = atomic(*op, t, old, v, v2);
+            }
         }
         Ok(())
     }
@@ -356,7 +375,20 @@ pub fn bin(op: BinOp, t: KTy, x: KV, y: KV) -> R<KV> {
     })
 }
 
+pub fn atomic(op: AOp, t: KTy, old: KV, v: KV, v2: Option<KV>) -> KV {
+    match (op, old, v) {
+        (AOp::Add, KV::F(a), KV::F(b)) => KV::F(a + b),
+        (AOp::Add, KV::I(a), KV::I(b)) if t == KTy::U32 => KV::I((a as u32).wrapping_add(b as u32) as i64),
+        (AOp::Add, KV::I(a), KV::I(b)) => KV::I((a as i32).wrapping_add(b as i32) as i64),
+        (AOp::Min, KV::I(a), KV::I(b)) => KV::I(a.min(b)),
+        (AOp::Max, KV::I(a), KV::I(b)) => KV::I(a.max(b)),
+        (AOp::Cas, a, e) if a == e => v2.unwrap_or(a),
+        _ => old,
+    }
+}
+
 pub fn cast(to: KTy, v: KV) -> R<KV> {
+
     Ok(match (to, v) {
         (KTy::F32, KV::I(n)) => KV::F(n as f32),
         (KTy::F32, KV::D(x)) => KV::F(x as f32),

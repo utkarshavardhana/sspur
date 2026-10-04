@@ -1,5 +1,5 @@
 use super::*;
-use sspur_check::kernel::{has_barrier, KExpr, KFn, KIntr, KStmt, KTy, Kernel};
+use sspur_check::kernel::{has_barrier, AOp, KExpr, KFn, KIntr, KStmt, KTy, Kernel};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tgt {
@@ -524,6 +524,86 @@ impl<'a> Em<'a> {
                 let guard = if self.t == Tgt::C { "" } else { "if (!bad) " };
                 self.line(&format!("{guard}s{a}[{i}] = ({et}){v};"));
             }
+            KStmt::Atomic(op, shared, w, i, v, v2) => {
+                let i = self.expr(i);
+                let v = self.expr(v);
+                let v2 = v2.as_ref().map(|x| self.expr(x));
+                let (et, base, len) = if *shared { (self.k.shared[*w].1, format!("s{w}"), self.k.shared[*w].2.to_string()) } else { (self.k.params[*w].ty, format!("p{w}"), format!("l{w}")) };
+                let cast = self.ucast();
+                let clause = if *shared { len.clone() } else { format!("l{w}") };
+                self.fail(&format!("{cast}{i} >= {cast}{len}"), T_INDEX, &clause, &i);
+                let e = elem_c(et, self.t);
+                let p = format!("{base}[{i}]");
+                if self.t == Tgt::C {
+                    let d = v2.clone().unwrap_or_default();
+                    self.line(&match (op, et) {
+                        (AOp::Add, KTy::F32) => format!("{p} = {p} + {v};"),
+                        (AOp::Add, KTy::I32) => format!("{p} = (int32_t)((uint32_t){p} + (uint32_t){v});"),
+                        (AOp::Add, _) => format!("{p} = (uint32_t)((uint32_t){p} + (uint32_t){v});"),
+                        (AOp::Min, _) => format!("if ({v} < {p}) {p} = ({e}){v};"),
+                        (AOp::Max, _) => format!("if ({v} > {p}) {p} = ({e}){v};"),
+                        (AOp::Cas, _) => format!("if ({p} == {v}) {p} = ({e}){d};"),
+                    });
+                    return;
+                }
+                self.line("if (!bad) {");
+                self.ind += 1;
+                let msl = self.t == Tgt::Msl;
+                let space = match (msl, *shared) {
+                    (true, true) => "threadgroup ",
+                    (true, false) => "device ",
+                    (false, true) => "volatile __local ",
+                    (false, false) => "volatile __global ",
+                };
+                let ut = "uint";
+                let at = |t: &str| if msl { format!("atomic_{t}") } else { t.to_string() };
+                let ptr = |t: &str| format!("({space}{}*)&{p}", at(t));
+                let rel = "memory_order_relaxed";
+                match (*op, et) {
+                    (AOp::Add, KTy::F32) => {
+                        let a = self.fresh();
+                        let o = self.fresh();
+                        let of = self.fresh();
+                        self.line(&format!("{space}{}* {a} = {};", at(ut), ptr(ut)));
+                        if msl {
+                            self.line(&format!("uint {o} = atomic_load_explicit({a}, {rel}); float {of};"));
+                            self.line(&format!("while (true) {{ {of} = as_type<float>({o}); if (atomic_compare_exchange_weak_explicit({a}, &{o}, as_type<uint>({of} + {v}), {rel}, {rel})) break; }}"));
+                        } else {
+                            self.line(&format!("uint {o} = *{a}; float {of};"));
+                            self.line(&format!("while (1) {{ {of} = as_float({o}); uint n_ = SS_ACAS({a}, {o}, as_uint({of} + {v})); if (n_ == {o}) break; {o} = n_; }}"));
+                        }
+                        self.line(&format!("bad |= !({v} >= 0.0f && {v} <= 16777216.0f && floor({v}) == {v} && floor({of}) == {of} && fabs({of}) <= 16777216.0f && fabs({of} + {v}) <= 16777216.0f);"));
+                    }
+                    (op, t) => {
+                        let it = if t == KTy::I32 { "int" } else { "uint" };
+                        let u = if t == KTy::U32 { "U" } else { "" };
+                        if msl {
+                            let f = match op {
+                                AOp::Add => "add",
+                                AOp::Min => "min",
+                                AOp::Max => "max",
+                                AOp::Cas => "",
+                            };
+                            if op == AOp::Cas {
+                                let x = self.fresh();
+                                let d = v2.clone().unwrap_or_default();
+                                self.line(&format!("while (true) {{ {it} {x} = ({it}){v}; if (atomic_compare_exchange_weak_explicit({}, &{x}, ({it}){d}, {rel}, {rel}) || {x} != ({it}){v}) break; }}", ptr(it)));
+                            } else {
+                                self.line(&format!("atomic_fetch_{f}_explicit({}, ({it}){v}, {rel});", ptr(it)));
+                            }
+                        } else {
+                            match op {
+                                AOp::Add => self.line(&format!("SS_AADD(&{p}, ({it}){v});")),
+                                AOp::Min => self.line(&format!("SS_AMIN{u}(&{p}, ({it}){v});")),
+                                AOp::Max => self.line(&format!("SS_AMAX{u}(&{p}, ({it}){v});")),
+                                AOp::Cas => self.line(&format!("SS_ACAS(&{p}, ({it}){v}, ({it}){});", v2.clone().unwrap_or_default())),
+                            }
+                        }
+                    }
+                }
+                self.ind -= 1;
+                self.line("}");
+            }
             KStmt::Barrier => match self.t {
                 Tgt::Msl => self.line("threadgroup_barrier(mem_flags::mem_threadgroup);"),
                 Tgt::Ocl => self.line("barrier(CLK_LOCAL_MEM_FENCE);"),
@@ -588,7 +668,7 @@ pub fn scalar_c(t: KTy) -> &'static str {
 
 fn has_store(s: &KStmt) -> bool {
     match s {
-        KStmt::Store(..) => true,
+        KStmt::Store(..) | KStmt::Atomic(..) => true,
         KStmt::For(_, _, _, b) => b.iter().any(has_store),
         KStmt::If(_, t, f) => t.iter().chain(f).any(has_store),
         _ => false,
@@ -759,6 +839,13 @@ impl Iv<'_> {
                     self.expr(v)?;
                 }
                 KStmt::Barrier => {}
+                KStmt::Atomic(_, _, _, i, v, w) => {
+                    self.expr(i)?;
+                    self.expr(v)?;
+                    if let Some(w) = w {
+                        self.expr(w)?;
+                    }
+                }
                 KStmt::For(slot, a, b, body) => {
                     let (lo, _) = self.expr(a)?.ok_or(())?;
                     let (_, hi) = self.expr(b)?.ok_or(())?;
@@ -864,7 +951,8 @@ pub fn cpu_kernel(k: &Kernel, fidx: usize) -> String {
 
 pub const MSL_PRELUDE: &str = "#include <metal_stdlib>\nusing namespace metal;\n#pragma METAL fp math_mode(safe)\n#pragma METAL fp contract(off)\n#define SS_MULHI(a, b) mulhi((long)(a), (long)(b))\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
 
-pub const OCL_PRELUDE: &str = "#ifdef __NVPTX__\n#define get_global_id(d) ((size_t)__nvvm_read_ptx_sreg_ctaid_x() * __nvvm_read_ptx_sreg_ntid_x() + __nvvm_read_ptx_sreg_tid_x())\n#define SS_MULHI(a, b) __nvvm_mulhi_ll((a), (b))\n#define fabs(x) __builtin_fabs(x)\n#define sqrt(x) __builtin_sqrt(x)\n#define floor(x) __builtin_floor(x)\n#define ceil(x) __builtin_ceil(x)\n#define round(x) __builtin_round(x)\n#define isinf(x) __builtin_isinf(x)\n#define SS_OR(p, v) __nvvm_atom_or_gen_i((volatile int*)(p), (int)(v))\n#define barrier(f) __nvvm_bar_sync(0)\n#else\n#define SS_MULHI(a, b) mul_hi((long)(a), (long)(b))\n#define SS_OR(p, v) atomic_or((p), (v))\n#endif\n#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n#pragma OPENCL FP_CONTRACT OFF\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
+pub const OCL_PRELUDE: &str = "#ifdef __NVPTX__\n#define get_global_id(d) ((size_t)__nvvm_read_ptx_sreg_ctaid_x() * __nvvm_read_ptx_sreg_ntid_x() + __nvvm_read_ptx_sreg_tid_x())\n#define SS_MULHI(a, b) __nvvm_mulhi_ll((a), (b))\n#define fabs(x) __builtin_fabs(x)\n#define sqrt(x) __builtin_sqrt(x)\n#define floor(x) __builtin_floor(x)\n#define ceil(x) __builtin_ceil(x)\n#define round(x) __builtin_round(x)\n#define isinf(x) __builtin_isinf(x)\n#define SS_OR(p, v) __nvvm_atom_or_gen_i((volatile int*)(p), (int)(v))\n#define barrier(f) __nvvm_bar_sync(0)\n#define SS_AADD(p, v) __nvvm_atom_add_gen_i((volatile int*)(p), (int)(v))\n#define SS_AMIN(p, v) __nvvm_atom_min_gen_i((volatile int*)(p), (int)(v))\n#define SS_AMAX(p, v) __nvvm_atom_max_gen_i((volatile int*)(p), (int)(v))\n#define SS_AMINU(p, v) __nvvm_atom_min_gen_ui((volatile unsigned int*)(p), (unsigned int)(v))\n#define SS_AMAXU(p, v) __nvvm_atom_max_gen_ui((volatile unsigned int*)(p), (unsigned int)(v))\n#define SS_ACAS(p, e, d) (uint)__nvvm_atom_cas_gen_i((volatile int*)(p), (int)(e), (int)(d))\n#else\n#define SS_MULHI(a, b) mul_hi((long)(a), (long)(b))\n#define SS_OR(p, v) atomic_or((p), (v))\n#define SS_AADD(p, v) atomic_add((p), (v))\n#define SS_AMIN(p, v) atomic_min((p), (v))\n#define SS_AMAX(p, v) atomic_max((p), (v))\n#define SS_AMINU(p, v) atomic_min((p), (v))\n#define SS_AMAXU(p, v) atomic_max((p), (v))\n#define SS_ACAS(p, e, d) atomic_cmpxchg((p), (e), (d))\n#endif
+\n#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n#pragma OPENCL FP_CONTRACT OFF\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
 
 pub fn device_kernel(k: &Kernel, tgt: Tgt, narrow: bool) -> String {
     let mut sig = Vec::new();

@@ -37,7 +37,7 @@ fn kernel_violations_are_rejected_with_their_codes() {
 
 #[test]
 fn accepted_kernels_check_cleanly_and_round_trip() {
-    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp", "sys.ssp", "async.ssp", "shared.ssp"] {
+    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp", "sys.ssp", "async.ssp", "shared.ssp", "atomics.ssp"] {
         let src = std::fs::read_to_string(suite().join(name)).unwrap();
         let module = parse(&src).unwrap();
         let out = check(&module);
@@ -72,7 +72,7 @@ fn interpreter_runs_kernels_sequentially_with_f32_rounding() {
 fn portable_backends_compile_every_kernel() {
     let dir = std::env::temp_dir().join(format!("sspur-gpu-emit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp", "sys.ssp", "async.ssp", "shared.ssp"] {
+    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp", "sys.ssp", "async.ssp", "shared.ssp", "atomics.ssp"] {
         let path = suite().join(name);
         let module = parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let kernels: Vec<String> = check(&module).kernels.keys().cloned().collect();
@@ -122,7 +122,7 @@ fn native_kernels_match_the_interpreter_on_gpu_and_cpu() {
         return;
     }
     let metal = metal_available();
-    for name in ["basic.ssp", "exact.ssp", "devbuf.ssp", "async.ssp", "shared.ssp"] {
+    for name in ["basic.ssp", "exact.ssp", "devbuf.ssp", "async.ssp", "shared.ssp", "atomics.ssp"] {
         let path = suite().join(name);
         let interp = run(&["run", "--interp"], &path, &[]);
         assert!(interp.0, "{name}: {}", interp.2);
@@ -146,6 +146,9 @@ fn native_kernels_match_the_interpreter_on_gpu_and_cpu() {
         let (_, _, err) = run(&["run"], &suite().join("async.ssp"), &[("SSPUR_GPU_TRACE", "1")]);
         assert!(err.contains("gpu addto: cpu rerun (after a flagged launch)"), "a flag reruns the later queued launches: {err}");
         assert!(err.contains("gpu inc: metal"), "{err}");
+        let (_, _, err) = run(&["run"], &suite().join("atomics.ssp"), &[("SSPUR_GPU_TRACE", "1")]);
+        assert!(err.contains("gpu hist_local: metal"), "shared atomics run on the GPU: {err}");
+        assert!(err.contains("gpu wsum: cpu rerun"), "inexact F32 atomic adds rerun on the CPU: {err}");
     }
 }
 
@@ -188,6 +191,12 @@ fn kernel_traps_are_identical_in_every_tier() {
     for env in [vec![], vec![("SSPUR_GPU", "0")]] {
         let native = run(&["test"], &path, &env);
         assert_eq!(interp.1, native.1, "{env:?}");
+    }
+    let path = suite().join("atomics.ssp");
+    let interp = run(&["test", "--interp"], &path, &[]);
+    assert!(interp.1.contains("5 passed, 0 failed"), "{}", interp.1);
+    for env in [vec![], vec![("SSPUR_GPU", "0")]] {
+        assert_eq!(interp.1, run(&["test"], &path, &env).1, "{env:?}");
     }
     let path = suite().join("sys.ssp");
     let interp = run(&["test", "--interp"], &path, &[]);

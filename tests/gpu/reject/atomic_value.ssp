@@ -1,0 +1,2 @@
+kernel fn k(h: &mut [I32], y: &mut [I32]) @grid(y.len, 64)
+= y[gid] := h.atomic_add(0, 1)

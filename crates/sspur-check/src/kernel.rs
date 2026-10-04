@@ -121,6 +121,15 @@ pub enum KStmt {
     Eval(KExpr),
     SStore(usize, KExpr, KExpr),
     Barrier,
+    Atomic(AOp, bool, usize, KExpr, KExpr, Option<KExpr>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AOp {
+    Add,
+    Min,
+    Max,
+    Cas,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -164,6 +173,7 @@ pub fn stmt_has(s: &KStmt, p: &dyn Fn(&KExpr) -> bool) -> bool {
     match s {
         KStmt::Let(_, e) | KStmt::Set(_, e) | KStmt::Eval(e) => expr_has(e, p),
         KStmt::Store(_, i, v) | KStmt::SStore(_, i, v) => expr_has(i, p) || expr_has(v, p),
+        KStmt::Atomic(_, _, _, i, v, w) => expr_has(i, p) || expr_has(v, p) || w.as_ref().is_some_and(|w| expr_has(w, p)),
         KStmt::For(_, a, b, body) => expr_has(a, p) || expr_has(b, p) || body.iter().any(|s| stmt_has(s, p)),
         KStmt::If(c, t, f) => expr_has(c, p) || t.iter().chain(f).any(|s| stmt_has(s, p)),
         KStmt::Barrier => false,
@@ -212,6 +222,7 @@ struct SAcc {
     arr: usize,
     segs: Vec<usize>,
     write: bool,
+    atomic: Option<String>,
     idx: KExpr,
     guards: Vec<KExpr>,
     ver: HashMap<usize, u32>,
@@ -228,7 +239,7 @@ struct Lower<'a> {
     locals: Vec<KTy>,
     defs: Vec<Def>,
     body: bool,
-    accesses: Vec<(usize, KExpr, Span, bool, Vec<KExpr>)>,
+    accesses: Vec<(usize, KExpr, Span, bool, Vec<KExpr>, Option<String>)>,
     errs: Vec<KErr>,
     float: KTy,
     group: u32,
@@ -395,7 +406,7 @@ pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
         return Err(lw.errs);
     }
     let mut writes = vec![false; lw.params.len()];
-    for (p, _, _, w, _) in &lw.accesses {
+    for (p, _, _, w, _, _) in &lw.accesses {
         if *w {
             writes[*p] = true;
         }
@@ -404,7 +415,18 @@ pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
     Ok(Kernel { name: f.name.clone(), params: lw.params, grid: grid.unwrap(), group, pres, body, locals: lw.locals, writes, shared: lw.shared, grouped })
 }
 
+fn atomic_op(n: &str) -> Option<AOp> {
+    Some(match n {
+        "atomic_add" => AOp::Add,
+        "atomic_min" => AOp::Min,
+        "atomic_max" => AOp::Max,
+        "atomic_cas" => AOp::Cas,
+        _ => return None,
+    })
+}
+
 fn shared_decl(e: &Expr) -> Option<(&str, &Expr)> {
+
     let ExprKind::Call(f, args) = &e.kind else { return None };
     let ExprKind::Index(s, t) = &f.kind else { return None };
     match (&s.kind, &t.kind, args.as_slice()) {
@@ -458,7 +480,7 @@ impl Lower<'_> {
     }
 
     fn record(&mut self, arr: usize, write: bool, idx: &KExpr, span: Span) {
-        self.sacc.push(SAcc { arr, segs: self.cur.clone(), write, idx: idx.clone(), guards: self.guards.clone(), ver: HashMap::new(), loops: self.loops.clone(), span });
+        self.sacc.push(SAcc { arr, segs: self.cur.clone(), write, atomic: None, idx: idx.clone(), guards: self.guards.clone(), ver: HashMap::new(), loops: self.loops.clone(), span });
     }
 
     fn bind(&mut self, n: &str, ty: KTy, mutable: bool, def: Def, span: Span) -> KR<usize> {
@@ -569,7 +591,7 @@ impl Lower<'_> {
                     if vt != et {
                         return err("E_KERNEL_TYPE", value.span, format!("'{n}' holds {}, got {}", et.name(), vt.name()));
                     }
-                    self.accesses.push((p, ix.clone(), i.span, true, self.guards.clone()));
+                    self.accesses.push((p, ix.clone(), i.span, true, self.guards.clone(), None));
                     return Ok(Some(KStmt::Store(p, ix, v)));
                 }
                 if self.param(n).is_some() {
@@ -654,6 +676,7 @@ impl Lower<'_> {
                     self.nest -= 1;
                     Ok(Some(KStmt::If(KExpr::Lit(KTy::Bool, 1), b?, vec![])))
                 }
+                ExprKind::Method { recv, name, args, targs } if targs.is_empty() && atomic_op(name).is_some() && matches!(&recv.kind, ExprKind::Name(_)) => self.atomic(e, recv, name, args),
                 ExprKind::Call(c, args) if matches!(&c.kind, ExprKind::Name(n) if n == "barrier") && self.lookup("barrier").is_none() => {
                     if !args.is_empty() {
                         return err("E_KERNEL", e.span, "barrier() takes no arguments");
@@ -796,7 +819,7 @@ impl Lower<'_> {
                 if it != KTy::Int {
                     return err("E_KERNEL_TYPE", i.span, format!("slice indices are Int, got {}", it.name()));
                 }
-                self.accesses.push((p, ix.clone(), i.span, false, self.guards.clone()));
+                self.accesses.push((p, ix.clone(), i.span, false, self.guards.clone(), None));
                 Ok((KExpr::Load(p, Box::new(ix)), self.params[p].ty))
             }
             ExprKind::Binary(op, l, r) => self.binary(*op, l, r, hint, e.span),
@@ -851,7 +874,61 @@ impl Lower<'_> {
         }
     }
 
+    fn atomic(&mut self, e: &Expr, recv: &Expr, name: &str, args: &[Expr]) -> KR<Option<KStmt>> {
+        let op = atomic_op(name).unwrap();
+        let ExprKind::Name(n) = &recv.kind else { unreachable!() };
+        let (shared, which, et) = if let Some(a) = self.shared_of(n) {
+            (true, a, self.shared[a].1)
+        } else if let Some(p) = self.param(n).filter(|p| self.params[*p].slice.is_some()) {
+            if self.params[p].slice != Some(true) {
+                return err("E_KERNEL_WRITE", e.span, format!("'{n}' is a read-only slice; declare it '&mut [{}]' to update it atomically", self.params[p].ty.name()));
+            }
+            (false, p, self.params[p].ty)
+        } else {
+            return err("E_KERNEL", recv.span, format!("'{n}' is not a slice parameter or shared array"));
+        };
+        let ok = matches!(et, KTy::I32 | KTy::U32) || (et == KTy::F32 && op == AOp::Add);
+        if !ok {
+            return err("E_KERNEL_TYPE", e.span, format!("{name} needs I32 or U32 elements{}, not {}", if op == AOp::Add { " (or F32)" } else { "" }, et.name()));
+        }
+        let want = if op == AOp::Cas { 3 } else { 2 };
+        if args.len() != want {
+            return err("E_KERNEL", e.span, format!("{name} takes {want} arguments"));
+        }
+        let (ix, it) = self.expr(&args[0], Some(KTy::Int))?;
+        if it != KTy::Int {
+            return err("E_KERNEL_TYPE", args[0].span, format!("indices are Int, got {}", it.name()));
+        }
+        let mut vals = Vec::new();
+        for a in &args[1..] {
+            let (v, vt) = self.expr(a, Some(et))?;
+            if vt != et {
+                return err("E_KERNEL_TYPE", a.span, format!("'{n}' holds {}, got {}", et.name(), vt.name()));
+            }
+            vals.push(v);
+        }
+        let key = if op == AOp::Cas {
+            let (Some(x), Some(y)) = (self.uniform(&vals[0]), self.uniform(&vals[1])) else {
+                return err("E_KERNEL_RACE", e.span, format!("the expected and new values of {name} must be the same in every thread, or which thread wins would decide the result"));
+            };
+            format!("cas {x} {y}")
+        } else {
+            format!("{op:?}")
+        };
+        if shared {
+            self.record(which, true, &ix, args[0].span);
+            self.sacc.last_mut().unwrap().atomic = Some(key);
+        } else {
+            self.accesses.push((which, ix.clone(), args[0].span, true, self.guards.clone(), Some(key)));
+        }
+        let v2 = vals.get(1).cloned();
+        Ok(Some(KStmt::Atomic(op, shared, which, ix, vals.remove(0), v2)))
+    }
+
     fn method(&mut self, e: &Expr, recv: &Expr, name: &str, args: &[Expr], hint: Option<KTy>) -> KR<(KExpr, KTy)> {
+        if atomic_op(name).is_some() {
+            return err("E_KERNEL", e.span, format!("{name} is a statement: the old value it would return depends on the order threads run"));
+        }
         let conv = match name {
             "to_int" => Some(KTy::Int),
             "to_i32" => Some(KTy::I32),
@@ -1214,6 +1291,18 @@ impl Lower<'_> {
             segs.sort();
             for sg in segs {
                 let group: Vec<&SAcc> = self.sacc.iter().filter(|a| a.arr == arr && a.segs.contains(&sg)).collect();
+                if let Some(k0) = group.iter().find_map(|a| a.atomic.clone()) {
+                    if let Some(a) = group.iter().find(|a| a.atomic.as_ref() != Some(&k0)) {
+                        self.errs.push(KErr {
+                            code: "E_KERNEL_RACE",
+                            span: a.span,
+                            msg: format!("{} {} shared {name} in a phase that updates it atomically{}", self.f.name, if a.atomic.is_some() { "uses another atomic operation on" } else if a.write { "writes" } else { "reads" }, if a.atomic.is_some() { "" } else { "; separate them with barrier()" }),
+                            hint: Some("between two barriers, a shared array is either updated with one kind of atomic operation or accessed directly".into()),
+                        });
+                        return;
+                    }
+                    continue;
+                }
                 for w in group.iter().filter(|a| a.write) {
                     let Some(ow) = self.stid(&w.idx, 'a', &w.ver) else {
                         self.errs.push(KErr {
@@ -1254,6 +1343,22 @@ impl Lower<'_> {
                 continue;
             }
             let name = self.params[p].name.clone();
+            let keys: Vec<(Option<String>, Span)> = self.accesses.iter().filter(|a| a.0 == p).map(|a| (a.5.clone(), a.2)).collect();
+            if let Some((Some(k0), _)) = keys.iter().find(|k| k.0.is_some()) {
+                if let Some((k, span)) = keys.iter().find(|k| k.0.as_ref() != Some(k0)) {
+                    self.errs.push(KErr {
+                        code: "E_KERNEL_RACE",
+                        span: *span,
+                        msg: match k {
+                            None => format!("{} updates {name} atomically, so it can't also read or write it directly", self.f.name),
+                            Some(_) => format!("{} mixes different atomic operations on {name}; their results depend on the order threads run", self.f.name),
+                        },
+                        hint: Some(format!("use one kind of atomic update on {name} per kernel and read the result after the launch")),
+                    });
+                    return;
+                }
+                continue;
+            }
             let mut first: Option<(bool, String)> = None;
             for (ix, span, write, guards) in &acc {
                 let what = if *write { "writes" } else { "reads" };

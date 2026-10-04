@@ -9,6 +9,7 @@ use std::process::Command;
 
 mod conc;
 pub mod export;
+pub mod flags;
 mod ffi;
 mod fuse;
 pub mod gpu;
@@ -812,18 +813,21 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
             }
         }
     }
-    let lib = if split_mode(opt) {
-        match build_split(&src, opt, &plan) {
+    let bo = flags::current();
+    let lib = if bo.pgo != flags::Pgo::Off {
+        flags::build_pgo(&src, opt, &plan.links, &bo)?
+    } else if split_mode(opt) {
+        match build_split(&src, opt, &plan, bo.lto) {
             Ok(l) => l,
             Err(e) => {
                 if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
                     eprintln!("per-definition build failed, building the whole program: {e}");
                 }
-                build(&src, opt, &plan.links)?
+                build(&src, opt, &plan.links, bo.lto)?
             }
         }
     } else {
-        build(&src, opt, &plan.links)?
+        build(&src, opt, &plan.links, bo.lto)?
     };
     let library = unsafe { libloading::Library::new(&lib) }.map_err(|e| format!("cannot load {}: {e}", lib.display()))?;
     let mut scalar = HashMap::new();
@@ -1155,9 +1159,13 @@ fn cache_dir() -> PathBuf {
     base.join("native")
 }
 
-fn build(src: &str, opt: &str, links: &[String]) -> Result<PathBuf, String> {
-    let links: Vec<String> = links.iter().map(|l| if l == gpu::SHIM_LINK { gpu::shim().map(|p| p.display().to_string()) } else { Ok(l.clone()) }).collect::<Result<_, _>>()?;
-    let key = blake3::hash(format!("{opt}{}\n{src}", links.iter().map(|l| format!(" {l}")).collect::<String>()).as_bytes()).to_hex().to_string();
+fn resolve_links(links: &[String]) -> Result<Vec<String>, String> {
+    links.iter().map(|l| if l == gpu::SHIM_LINK { gpu::shim().map(|p| p.display().to_string()) } else { Ok(l.clone()) }).collect()
+}
+
+fn build(src: &str, opt: &str, links: &[String], lto: flags::Lto) -> Result<PathBuf, String> {
+    let links = resolve_links(links)?;
+    let key = blake3::hash(format!("{opt}{}{}\n{src}", lto.flag().unwrap_or(""), links.iter().map(|l| format!(" {l}")).collect::<String>()).as_bytes()).to_hex().to_string();
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let lib = dir.join(format!("{}.{}", &key[..32], std::env::consts::DLL_EXTENSION));
@@ -1168,7 +1176,7 @@ fn build(src: &str, opt: &str, links: &[String]) -> Result<PathBuf, String> {
     std::fs::write(&c, src).map_err(|e| e.to_string())?;
     let tmp = lib.with_extension("tmp");
     let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
-    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w", "-o"]).arg(&tmp).arg(&c).args(links).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w"]).args(lto.flag()).arg("-o").arg(&tmp).arg(&c).args(links).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
         return Err(format!("{cc} failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
     }
@@ -1205,12 +1213,17 @@ fn split_units(src: &str, plan: &Plan) -> Vec<split::Tu> {
     split::units(src, &split::Opts { owners: &plan.owned, shared: &["enc_err"], inline_bytes: 1200, inline_max: 24, runtime, share_bytes: 400 })
 }
 
-fn build_split(src: &str, opt: &str, plan: &Plan) -> Result<PathBuf, String> {
+fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto) -> Result<PathBuf, String> {
     let t0 = std::time::Instant::now();
-    let links: Vec<String> = plan.links.iter().map(|l| if l == gpu::SHIM_LINK { gpu::shim().map(|p| p.display().to_string()) } else { Ok(l.clone()) }).collect::<Result<_, _>>()?;
+    let links = resolve_links(&plan.links)?;
     let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
     let dir = cache_dir();
-    let memo = dir.join(format!("{}.split", &blake3::hash(format!("{cc} {opt} {}{}\n{src}", std::env::var_os("SSPUR_LTO").is_some(), links.iter().map(|l| format!(" {l}")).collect::<String>()).as_bytes()).to_hex()[..32]));
+    let lto_tag = match lto {
+        flags::Lto::Off => "false",
+        flags::Lto::Thin => "true",
+        flags::Lto::Full => "full",
+    };
+    let memo = dir.join(format!("{}.split", &blake3::hash(format!("{cc} {opt} {}{}\n{src}", lto_tag, links.iter().map(|l| format!(" {l}")).collect::<String>()).as_bytes()).to_hex()[..32]));
     if let Ok(name) = std::fs::read_to_string(&memo) {
         let lib = dir.join(name.trim());
         if lib.exists() {
@@ -1220,8 +1233,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan) -> Result<PathBuf, String> {
     let tus = split_units(src, plan);
     let objdir = dir.join("obj");
     std::fs::create_dir_all(&objdir).map_err(|e| e.to_string())?;
-    let lto = std::env::var_os("SSPUR_LTO").is_some();
-    let flags: Vec<&str> = if lto { vec![opt, "-c", "-fPIC", "-w", "-flto=thin"] } else { vec![opt, "-c", "-fPIC", "-w"] };
+    let flags: Vec<&str> = [opt, "-c", "-fPIC", "-w"].into_iter().chain(lto.flag()).collect();
     let stamp = format!("{cc} {}\n", flags.join(" "));
     let keys: Vec<String> = tus.iter().map(|t| blake3::hash(format!("{stamp}{}", t.text).as_bytes()).to_hex()[..32].to_string()).collect();
     let lkey = blake3::hash(format!("{opt}{}\n{}", links.iter().map(|l| format!(" {l}")).collect::<String>(), keys.join("\n")).as_bytes()).to_hex()[..32].to_string();
@@ -1284,9 +1296,9 @@ fn build_split(src: &str, opt: &str, plan: &Plan) -> Result<PathBuf, String> {
     }
     let tmp = lib.with_extension(format!("{}.tmp", std::process::id()));
     let mut link = Command::new(&cc);
-    if lto {
+    if let Some(l) = lto.flag() {
         let cache = dir.join("lto");
-        link.arg("-flto=thin").arg(if cfg!(target_os = "macos") { format!("-Wl,-cache_path_lto,{}", cache.display()) } else { format!("-Wl,--thinlto-cache-dir={}", cache.display()) });
+        link.arg(l).arg(if cfg!(target_os = "macos") { format!("-Wl,-cache_path_lto,{}", cache.display()) } else { format!("-Wl,--thinlto-cache-dir={}", cache.display()) });
     }
     let out = link.args(["-shared", "-o"]).arg(&tmp).args(&objs).args(&links).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {

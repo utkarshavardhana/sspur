@@ -527,11 +527,11 @@ pub fn emit(m: &Module, check: &CheckOutput) -> R<Ir> {
     let mut p = Prog { recs: HashMap::new(), fns: HashMap::new(), rec_at: &check.record_types, strs: vec![] };
     let mut order = vec![];
     for d in &m.defs {
-        if let Def::Type(td) = d {
-            if let (TypeBody::Record(fs), true) = (&td.body, td.params.is_empty()) {
-                p.recs.insert(td.name.clone(), vec![]);
-                order.push((td.name.clone(), fs.clone()));
-            }
+        if let Def::Type(td) = d
+            && let (TypeBody::Record(fs), true) = (&td.body, td.params.is_empty())
+        {
+            p.recs.insert(td.name.clone(), vec![]);
+            order.push((td.name.clone(), fs.clone()));
         }
     }
     for (n, fs) in &order {

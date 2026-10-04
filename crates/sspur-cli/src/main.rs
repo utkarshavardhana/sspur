@@ -31,6 +31,8 @@ const USAGE: &str = "usage:
   verify proves pre/post/where clauses with z3 and reports proved, counterexample, or unknown per clause
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
   --O3 raises the optimization level; fuzz --differential compares native against the interpreter
+  run/test/build --pgo [--retrain] train once, then build with clang profile data; --lto off|thin|full (ADR 0024)
+  sspur build --backend llvm file.ssp [-o prog]  direct LLVM IR prototype for the scalar and record subset (ADR 0024)
   sspur explain-opt file.ssp [--all]    show the proven rewrites applied before native codegen (--all adds rejected candidates)
   sspur run --profile file.ssp          run in the interpreter and record call counts that guide inlining (ADR 0022)
   sspur build --target riscv64-qemu|aarch64-qemu file.ssp [-o kernel.elf]  build a 'profile bare' kernel (freestanding C, clang, ld.lld)
@@ -299,6 +301,27 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
     report(&loaded.src, &label, &loaded.check.diags, json);
     if loaded.check.has_errors() {
         return ExitCode::FAILURE;
+    }
+    if matches!(cmd, "run" | "test" | "build" | "native") && (args.has("--pgo") || args.val("--lto").is_some()) && !args.has("--target") {
+        match host_build_opts(cmd, &label, &text, args) {
+            Ok(o) => sspur_native::cgen::flags::set(o),
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        if cmd == "build" {
+            return match sspur_native::cgen::compile_release(&loaded.module, &loaded.check, if args.has("--O3") { "-O3" } else { "-O2" }) {
+                Ok(c) => {
+                    println!("built {} native functions ({}; cached under ~/.cache/sspur/native)", c.functions.len(), describe_opts(&sspur_native::cgen::flags::current()));
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("release compilation failed: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
     }
     match cmd {
         "check" => {
@@ -654,6 +677,62 @@ fn report(src: &str, path: &str, diags: &[Diag], json: bool) {
             eprintln!("  hint: {h}");
         }
     }
+}
+
+fn describe_opts(o: &sspur_native::cgen::flags::BuildOpts) -> String {
+    use sspur_native::cgen::flags::Pgo;
+    let pgo = match &o.pgo {
+        Pgo::Off => "no PGO".to_string(),
+        Pgo::Generate(d) => format!("PGO instrumented into {}", d.display()),
+        Pgo::Use(p) => format!("PGO from {}", p.display()),
+    };
+    let lto = match o.lto {
+        sspur_native::cgen::flags::Lto::Off => "off",
+        sspur_native::cgen::flags::Lto::Thin => "thin",
+        sspur_native::cgen::flags::Lto::Full => "full",
+    };
+    format!("LTO {lto}, {pgo}")
+}
+
+fn host_build_opts(cmd_name: &str, label: &str, text: &str, args: &Args) -> Result<sspur_native::cgen::flags::BuildOpts, String> {
+    use sspur_native::cgen::flags;
+    let mut o = flags::current();
+    if let Some(l) = args.val("--lto") {
+        o.lto = flags::Lto::parse(l).ok_or_else(|| format!("unknown --lto '{l}' (use off, thin or full)"))?;
+    }
+    if !args.has("--pgo") {
+        return Ok(o);
+    }
+    if label == "HEAD" {
+        return Err("--pgo needs a source file".into());
+    }
+    let opt = if args.has("--O3") { "-O3" } else { "-O2" };
+    let (raw, prof) = flags::pgo_paths(&format!("{:?}{text}", o.lto), opt);
+    if prof.exists() && !args.has("--retrain") {
+        o.pgo = flags::Pgo::Use(prof);
+        return Ok(o);
+    }
+    let _ = std::fs::remove_dir_all(&raw);
+    std::fs::create_dir_all(&raw).map_err(|e| format!("cannot create {}: {e}", raw.display()))?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg(if cmd_name == "test" { "test" } else { "run" }).arg(label).args(args.pos.iter().skip(2));
+    if args.has("--O3") {
+        cmd.arg("--O3");
+    }
+    if let Some(l) = args.val("--lto") {
+        cmd.args(["--lto", l]);
+    }
+    let t0 = std::time::Instant::now();
+    let st = cmd.env("SSPUR_PGO_GEN", &raw).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status().map_err(|e| format!("cannot start the training run: {e}"))?;
+    if !st.success() {
+        return Err(format!("pgo: the training run of {label} failed ({st}); run it without --pgo to see why"));
+    }
+    let n = flags::merge(&raw, &prof)?;
+    let _ = std::fs::remove_dir_all(&raw);
+    eprintln!("pgo: training run of {label} took {:.2}s, {n} profile file(s) merged into {}", t0.elapsed().as_secs_f64(), prof.display());
+    o.pgo = flags::Pgo::Use(prof);
+    Ok(o)
 }
 
 fn build_llvm(l: &Loaded, label: &str, args: &Args) -> ExitCode {

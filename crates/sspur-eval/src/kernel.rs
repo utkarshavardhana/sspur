@@ -1,7 +1,7 @@
 use crate::{trap, value::Value, R};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use sspur_check::kernel::{KExpr, KFn, KIntr, KStmt, KTy, Kernel};
+use sspur_check::kernel::{has_barrier, KExpr, KFn, KIntr, KStmt, KTy, Kernel};
 use sspur_syntax::{printer, BinOp, FnDef};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,20 +85,44 @@ struct Run<'a> {
     locals: Vec<KV>,
     gid: i64,
     n: i64,
+    shared: Vec<Vec<KV>>,
+}
+
+fn zero(t: KTy) -> KV {
+    match t {
+        KTy::F32 => KV::F(0.0),
+        KTy::F64 => KV::D(0.0),
+        KTy::Bool => KV::B(false),
+        _ => KV::I(0),
+    }
 }
 
 pub fn prepare(f: &FnDef, k: &Kernel, args: &mut [Arg]) -> R<i64> {
-    let mut r = Run { k, args, locals: vec![KV::I(0); k.locals.len()], gid: 0, n: 0 };
+    let mut r = Run { k, args, locals: vec![KV::I(0); k.locals.len()], gid: 0, n: 0, shared: vec![] };
     for (i, p) in k.pres.iter().enumerate() {
         if !r.expr(p)?.b() {
             return trap(format!("contract violated: pre {} in {}", printer::expr(&f.pres[i], 0), f.name));
         }
     }
-    Ok(r.expr(&k.grid)?.i())
+    let n = r.expr(&k.grid)?.i();
+    let g = k.group as i64;
+    if k.grouped && n > 0 && n % g != 0 {
+        return trap(format!("dev: the thread count of {} is not a multiple of its group size {g} (count = {n})", k.name));
+    }
+    Ok(n)
 }
 
 pub fn run(k: &Kernel, args: &mut [Arg], n: i64) -> R<()> {
-    let mut r = Run { k, args, locals: vec![KV::I(0); k.locals.len()], gid: 0, n: n.max(0) };
+    let mut r = Run { k, args, locals: vec![KV::I(0); k.locals.len()], gid: 0, n: n.max(0), shared: vec![] };
+    if k.grouped {
+        let g = k.group as i64;
+        let mut lanes = vec![vec![KV::I(0); k.locals.len()]; g as usize];
+        for grp in 0..n.max(0) / g {
+            r.shared = k.shared.iter().map(|(_, t, len)| vec![zero(*t); *len as usize]).collect();
+            r.gblock(&k.body, &mut lanes, grp * g)?;
+        }
+        return Ok(());
+    }
     for gid in 0..n {
         r.gid = gid;
         r.block(&k.body)?;
@@ -107,6 +131,48 @@ pub fn run(k: &Kernel, args: &mut [Arg], n: i64) -> R<()> {
 }
 
 impl Run<'_> {
+    fn lane0<T>(&mut self, lanes: &mut [Vec<KV>], base: i64, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        std::mem::swap(&mut self.locals, &mut lanes[0]);
+        self.gid = base;
+        let r = f(self);
+        std::mem::swap(&mut self.locals, &mut lanes[0]);
+        r
+    }
+
+    fn gblock(&mut self, b: &[KStmt], lanes: &mut [Vec<KV>], base: i64) -> R<()> {
+        for s in b {
+            if !has_barrier(s) {
+                for (t, lane) in lanes.iter_mut().enumerate() {
+                    std::mem::swap(&mut self.locals, lane);
+                    self.gid = base + t as i64;
+                    let r = self.stmt(s);
+                    std::mem::swap(&mut self.locals, lane);
+                    r?;
+                }
+                continue;
+            }
+            match s {
+                KStmt::For(slot, a, b, body) => {
+                    let (lo, hi) = self.lane0(lanes, base, |r| Ok((r.expr(a)?.i(), r.expr(b)?.i())))?;
+                    let mut i = lo;
+                    while i < hi {
+                        for lane in lanes.iter_mut() {
+                            lane[*slot] = KV::I(i);
+                        }
+                        self.gblock(body, lanes, base)?;
+                        i += 1;
+                    }
+                }
+                KStmt::If(c, t, f) => {
+                    let c = self.lane0(lanes, base, |r| Ok(r.expr(c)?.b()))?;
+                    self.gblock(if c { t } else { f }, lanes, base)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn block(&mut self, b: &[KStmt]) -> R<()> {
         for s in b {
             self.stmt(s)?;
@@ -156,6 +222,16 @@ impl Run<'_> {
             KStmt::Eval(e) => {
                 self.expr(e)?;
             }
+            KStmt::SStore(a, i, v) => {
+                let i = self.expr(i)?.i();
+                let v = self.expr(v)?;
+                let xs = &mut self.shared[*a];
+                if i < 0 || i as usize >= xs.len() {
+                    return trap(format!("index {i} out of bounds for list of length {}", xs.len()));
+                }
+                xs[i as usize] = v;
+            }
+            KStmt::Barrier => {}
         }
         Ok(())
     }
@@ -216,6 +292,14 @@ impl Run<'_> {
                 } else {
                     self.expr(b)?
                 }
+            }
+            KExpr::SLoad(a, i) => {
+                let i = self.expr(i)?.i();
+                let xs = &self.shared[*a];
+                if i < 0 || i as usize >= xs.len() {
+                    return trap(format!("index {i} out of bounds for list of length {}", xs.len()));
+                }
+                xs[i as usize]
             }
         })
     }
@@ -304,6 +388,22 @@ pub fn call(f: KFn, t: KTy, a: KV, b: Option<KV>) -> R<KV> {
         (KFn::Ceil, KV::D(x)) => KV::D(x.ceil()),
         (KFn::Round, KV::F(x)) => KV::F(x.round()),
         (KFn::Round, KV::D(x)) => KV::D(x.round()),
+        (KFn::Shl | KFn::Shr | KFn::Band | KFn::Bor | KFn::Bxor, KV::I(a)) => {
+            let b = b.unwrap().i();
+            let sh = (0..64).contains(&b);
+            fit(
+                t,
+                Some(match f {
+                    KFn::Shl if sh => ((a as u64) << b) as i64,
+                    KFn::Shr if sh => ((a as u64) >> b) as i64,
+                    KFn::Shl | KFn::Shr => 0,
+                    KFn::Band => a & b,
+                    KFn::Bor => a | b,
+                    _ => a ^ b,
+                }),
+            )?
+        }
+
         (_, v) => v,
     })
 }

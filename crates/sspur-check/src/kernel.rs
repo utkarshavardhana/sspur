@@ -1,5 +1,5 @@
 use sspur_syntax::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum KTy {
@@ -87,6 +87,11 @@ pub enum KFn {
     Round,
     Min,
     Max,
+    Shl,
+    Shr,
+    Band,
+    Bor,
+    Bxor,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,6 +108,7 @@ pub enum KExpr {
     Cast(KTy, KTy, Box<KExpr>),
     Call(KFn, KTy, Vec<KExpr>),
     If(Box<KExpr>, Box<KExpr>, Box<KExpr>),
+    SLoad(usize, Box<KExpr>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,6 +119,8 @@ pub enum KStmt {
     For(usize, KExpr, KExpr, Vec<KStmt>),
     If(KExpr, Vec<KStmt>, Vec<KStmt>),
     Eval(KExpr),
+    SStore(usize, KExpr, KExpr),
+    Barrier,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -125,6 +133,8 @@ pub struct Kernel {
     pub body: Vec<KStmt>,
     pub locals: Vec<KTy>,
     pub writes: Vec<bool>,
+    pub shared: Vec<(String, KTy, u32)>,
+    pub grouped: bool,
 }
 
 impl Kernel {
@@ -142,7 +152,7 @@ pub fn expr_has(e: &KExpr, p: &dyn Fn(&KExpr) -> bool) -> bool {
         return true;
     }
     match e {
-        KExpr::Load(_, i) | KExpr::Neg(_, i) | KExpr::Not(i) | KExpr::Cast(_, _, i) => expr_has(i, p),
+        KExpr::Load(_, i) | KExpr::SLoad(_, i) | KExpr::Neg(_, i) | KExpr::Not(i) | KExpr::Cast(_, _, i) => expr_has(i, p),
         KExpr::Bin(_, _, a, b) => expr_has(a, p) || expr_has(b, p),
         KExpr::Call(_, _, xs) => xs.iter().any(|x| expr_has(x, p)),
         KExpr::If(c, a, b) => expr_has(c, p) || expr_has(a, p) || expr_has(b, p),
@@ -153,9 +163,19 @@ pub fn expr_has(e: &KExpr, p: &dyn Fn(&KExpr) -> bool) -> bool {
 pub fn stmt_has(s: &KStmt, p: &dyn Fn(&KExpr) -> bool) -> bool {
     match s {
         KStmt::Let(_, e) | KStmt::Set(_, e) | KStmt::Eval(e) => expr_has(e, p),
-        KStmt::Store(_, i, v) => expr_has(i, p) || expr_has(v, p),
+        KStmt::Store(_, i, v) | KStmt::SStore(_, i, v) => expr_has(i, p) || expr_has(v, p),
         KStmt::For(_, a, b, body) => expr_has(a, p) || expr_has(b, p) || body.iter().any(|s| stmt_has(s, p)),
         KStmt::If(c, t, f) => expr_has(c, p) || t.iter().chain(f).any(|s| stmt_has(s, p)),
+        KStmt::Barrier => false,
+    }
+}
+
+pub fn has_barrier(s: &KStmt) -> bool {
+    match s {
+        KStmt::Barrier => true,
+        KStmt::For(_, _, _, b) => b.iter().any(has_barrier),
+        KStmt::If(_, t, f) => t.iter().chain(f).any(has_barrier),
+        _ => false,
     }
 }
 
@@ -187,6 +207,20 @@ enum Def {
     Var,
 }
 
+#[derive(Clone)]
+struct SAcc {
+    arr: usize,
+    segs: Vec<usize>,
+    write: bool,
+    idx: KExpr,
+    guards: Vec<KExpr>,
+    ver: HashMap<usize, u32>,
+    loops: Vec<usize>,
+    span: Span,
+}
+
+type Lin = (std::collections::BTreeMap<String, i128>, i128);
+
 struct Lower<'a> {
     f: &'a FnDef,
     params: Vec<KParam>,
@@ -194,9 +228,20 @@ struct Lower<'a> {
     locals: Vec<KTy>,
     defs: Vec<Def>,
     body: bool,
-    accesses: Vec<(usize, KExpr, Span, bool)>,
+    accesses: Vec<(usize, KExpr, Span, bool, Vec<KExpr>)>,
     errs: Vec<KErr>,
     float: KTy,
+    group: u32,
+    shared: Vec<(String, KTy, u32)>,
+    cf: Vec<bool>,
+    guards: Vec<KExpr>,
+    loops: Vec<usize>,
+    cur: Vec<usize>,
+    nseg: usize,
+    sacc: Vec<SAcc>,
+    free_loops: HashSet<usize>,
+    barriers: usize,
+    nest: usize,
 }
 
 pub fn param_type(t: &Ty) -> Result<(KTy, Option<bool>), String> {
@@ -295,7 +340,28 @@ pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
         _ => return Err(vec![KErr { code: "E_KERNEL_GRID", span: spec.group.span, msg: format!("the group size of {} must be an Int literal from 1 to 1024", f.name), hint: None }]),
     };
     let float = if params.iter().any(|p| p.ty == KTy::F64) && !params.iter().any(|p| p.ty == KTy::F32) { KTy::F64 } else { KTy::F32 };
-    let mut lw = Lower { f, params, scopes: vec![HashMap::new()], locals: vec![], defs: vec![], body: false, accesses: vec![], errs: vec![], float };
+    let mut lw = Lower {
+        f,
+        params,
+        scopes: vec![HashMap::new()],
+        locals: vec![],
+        defs: vec![],
+        body: false,
+        accesses: vec![],
+        errs: vec![],
+        float,
+        group,
+        shared: vec![],
+        cf: vec![],
+        guards: vec![],
+        loops: vec![],
+        cur: vec![0],
+        nseg: 1,
+        sacc: vec![],
+        free_loops: HashSet::new(),
+        barriers: 0,
+        nest: 0,
+    };
     let grid = match lw.expr(&spec.grid, Some(KTy::Int)) {
         Ok((g, KTy::Int)) => Some(g),
         Ok((_, t)) => {
@@ -324,16 +390,45 @@ pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
         }
     };
     lw.race_check();
+    lw.shared_check();
     if !lw.errs.is_empty() {
         return Err(lw.errs);
     }
     let mut writes = vec![false; lw.params.len()];
-    for (p, _, _, w) in &lw.accesses {
+    for (p, _, _, w, _) in &lw.accesses {
         if *w {
             writes[*p] = true;
         }
     }
-    Ok(Kernel { name: f.name.clone(), params: lw.params, grid: grid.unwrap(), group, pres, body, locals: lw.locals, writes })
+    let grouped = lw.barriers > 0 || !lw.shared.is_empty();
+    Ok(Kernel { name: f.name.clone(), params: lw.params, grid: grid.unwrap(), group, pres, body, locals: lw.locals, writes, shared: lw.shared, grouped })
+}
+
+fn shared_decl(e: &Expr) -> Option<(&str, &Expr)> {
+    let ExprKind::Call(f, args) = &e.kind else { return None };
+    let ExprKind::Index(s, t) = &f.kind else { return None };
+    match (&s.kind, &t.kind, args.as_slice()) {
+        (ExprKind::Name(s), ExprKind::Name(t), [n]) if s == "shared" => Some((t.as_str(), n)),
+        _ => None,
+    }
+}
+
+fn es_bytes(t: KTy) -> i64 {
+    if matches!(t, KTy::F32 | KTy::I32 | KTy::U32) { 4 } else { 8 }
+}
+
+fn lin_add(a: &Lin, b: &Lin, k: i128) -> Lin {
+    let mut m = a.0.clone();
+    for (x, c) in &b.0 {
+        *m.entry(x.clone()).or_insert(0) += k * c;
+    }
+    m.retain(|_, c| *c != 0);
+    (m, a.1 + k * b.1)
+}
+
+fn lin_le(a: &Lin, b: &Lin) -> bool {
+    let d = lin_add(b, a, -1);
+    d.0.is_empty() && d.1 >= 0
 }
 
 fn is_lit(e: &Expr) -> bool {
@@ -353,8 +448,21 @@ impl Lower<'_> {
         self.params.iter().position(|p| p.name == n)
     }
 
+    fn shared_of(&self, n: &str) -> Option<usize> {
+        self.shared.iter().position(|s| s.0 == n)
+    }
+
+    fn fresh_seg(&mut self) -> usize {
+        self.nseg += 1;
+        self.nseg - 1
+    }
+
+    fn record(&mut self, arr: usize, write: bool, idx: &KExpr, span: Span) {
+        self.sacc.push(SAcc { arr, segs: self.cur.clone(), write, idx: idx.clone(), guards: self.guards.clone(), ver: HashMap::new(), loops: self.loops.clone(), span });
+    }
+
     fn bind(&mut self, n: &str, ty: KTy, mutable: bool, def: Def, span: Span) -> KR<usize> {
-        if self.param(n).is_some() || INTRINSICS.iter().any(|(i, _)| *i == n) || self.lookup(n).is_some() {
+        if self.param(n).is_some() || INTRINSICS.iter().any(|(i, _)| *i == n) || self.lookup(n).is_some() || self.shared_of(n).is_some() {
             return err("E_KERNEL", span, format!("'{n}' is already defined; kernel locals can't shadow parameters, intrinsics or other locals"));
         }
         let slot = self.locals.len();
@@ -391,6 +499,24 @@ impl Lower<'_> {
 
     fn stmt(&mut self, s: &Stmt) -> KR<Option<KStmt>> {
         match s {
+            Stmt::Let(Pat::Bind(n), e) if shared_decl(e).is_some() => {
+                let (tn, len) = shared_decl(e).unwrap();
+                let Some(t) = KTy::from_name(tn).filter(|t| *t != KTy::Bool) else { return err("E_KERNEL_SHARED", e.span, format!("shared arrays hold Int, I32, U32, F32 or F64, not {tn}")) };
+                if self.nest > 0 {
+                    return err("E_KERNEL_SHARED", e.span, "declare shared arrays at the top of the kernel body, not inside 'if' or 'for'");
+                }
+                let (lx, _) = self.expr(len, Some(KTy::Int))?;
+                let Some(n_) = self.konst(&lx).filter(|v| (1..=1 << 20).contains(v)) else { return err("E_KERNEL_SHARED", len.span, "the length of a shared array must be a positive constant (literals and group_size)") };
+                if self.param(n).is_some() || INTRINSICS.iter().any(|(i, _)| *i == n) || self.lookup(n).is_some() || self.shared_of(n).is_some() {
+                    return err("E_KERNEL", e.span, format!("'{n}' is already defined; kernel locals can't shadow parameters, intrinsics or other locals"));
+                }
+                let bytes: i64 = self.shared.iter().map(|s| s.2 as i64 * es_bytes(s.1)).sum::<i64>() + n_ * es_bytes(t);
+                if bytes > 32768 {
+                    return err("E_KERNEL_SHARED", e.span, format!("{} needs {bytes} bytes of shared memory; the limit is 32768", self.f.name));
+                }
+                self.shared.push((n.clone(), t, n_ as u32));
+                Ok(None)
+            }
             Stmt::Let(Pat::Bind(n), e) => {
                 let (x, t) = self.expr(e, None)?;
                 let slot = self.bind(n, t, false, Def::Value(x.clone()), e.span)?;
@@ -409,6 +535,24 @@ impl Lower<'_> {
             Stmt::Assign(n, e, span) => {
                 if let ExprKind::With(base, ups) = &e.kind
                     && matches!(&base.kind, ExprKind::Name(b) if b == n)
+                    && let Some(a) = self.shared_of(n)
+                {
+                    let [(path, value)] = ups.as_slice() else { return err("E_KERNEL", e.span, "assign one element at a time") };
+                    let [PathSeg::Index(i)] = path.as_slice() else { return err("E_KERNEL", e.span, format!("'{n}' is a shared array; assign elements with {n}[i] := v")) };
+                    let (ix, it) = self.expr(i, Some(KTy::Int))?;
+                    if it != KTy::Int {
+                        return err("E_KERNEL_TYPE", i.span, format!("shared array indices are Int, got {}", it.name()));
+                    }
+                    let et = self.shared[a].1;
+                    let (v, vt) = self.expr(value, Some(et))?;
+                    if vt != et {
+                        return err("E_KERNEL_TYPE", value.span, format!("'{n}' holds {}, got {}", et.name(), vt.name()));
+                    }
+                    self.record(a, true, &ix, i.span);
+                    return Ok(Some(KStmt::SStore(a, ix, v)));
+                }
+                if let ExprKind::With(base, ups) = &e.kind
+                    && matches!(&base.kind, ExprKind::Name(b) if b == n)
                     && let Some(p) = self.param(n)
                 {
                     let [(path, value)] = ups.as_slice() else { return err("E_KERNEL", e.span, "assign one element at a time") };
@@ -425,7 +569,7 @@ impl Lower<'_> {
                     if vt != et {
                         return err("E_KERNEL_TYPE", value.span, format!("'{n}' holds {}, got {}", et.name(), vt.name()));
                     }
-                    self.accesses.push((p, ix.clone(), i.span, true));
+                    self.accesses.push((p, ix.clone(), i.span, true, self.guards.clone()));
                     return Ok(Some(KStmt::Store(p, ix, v)));
                 }
                 if self.param(n).is_some() {
@@ -449,10 +593,29 @@ impl Lower<'_> {
                     return err("E_KERNEL_TYPE", it.span, "range bounds must be Int");
                 }
                 self.scopes.push(HashMap::new());
+                let uni = self.guniform(&lo) && self.guniform(&hi);
                 let slot = self.bind(i, KTy::Int, false, Def::Loop(lo.clone(), hi.clone()), it.span);
+                let (c0, nb, na) = (self.cur.clone(), self.barriers, self.sacc.len());
+                self.cf.push(uni);
+                self.nest += 1;
+                let pushed = slot.is_ok();
+                if let Ok(s) = &slot {
+                    self.loops.push(*s);
+                }
                 let r = slot.and_then(|slot| self.block_inner(body).map(|b| (slot, b)));
+                if pushed {
+                    self.loops.pop();
+                }
+                self.nest -= 1;
+                self.cf.pop();
                 self.scopes.pop();
                 let (slot, b) = r?;
+                if self.barriers == nb {
+                    self.free_loops.insert(slot);
+                } else {
+                    let once = matches!((self.deref(&lo), self.deref(&hi)), (KExpr::Lit(KTy::Int, a), KExpr::Lit(KTy::Int, b)) if (*b as i64) > (*a as i64));
+                    self.back_edge(slot, &c0, na, !once);
+                }
                 Ok(Some(KStmt::For(slot, lo, hi, b)))
             }
             Stmt::For(_, it, _) => err("E_KERNEL", it.span, "kernel loops bind one Int name"),
@@ -464,16 +627,48 @@ impl Lower<'_> {
                     if ct != KTy::Bool {
                         return err("E_KERNEL_TYPE", c.span, format!("if conditions are Bool, got {}", ct.name()));
                     }
-                    let tb = self.block(t)?;
+                    let uni = self.guniform(&cx);
+                    let c0 = self.cur.clone();
+                    self.cf.push(uni);
+                    self.nest += 1;
+                    self.guards.push(cx.clone());
+                    let tb = self.block(t);
+                    self.guards.pop();
+                    let c1 = std::mem::replace(&mut self.cur, c0);
                     let fb = match f {
-                        Some(f) => self.block(f)?,
-                        None => vec![],
+                        Some(f) => self.block(f),
+                        None => Ok(vec![]),
                     };
-                    Ok(Some(KStmt::If(cx, tb, fb)))
+                    self.nest -= 1;
+                    self.cf.pop();
+                    for x in c1 {
+                        if !self.cur.contains(&x) {
+                            self.cur.push(x);
+                        }
+                    }
+                    Ok(Some(KStmt::If(cx, tb?, fb?)))
                 }
                 ExprKind::Block(_) => {
-                    let b = self.block(e)?;
-                    Ok(Some(KStmt::If(KExpr::Lit(KTy::Bool, 1), b, vec![])))
+                    self.nest += 1;
+                    let b = self.block(e);
+                    self.nest -= 1;
+                    Ok(Some(KStmt::If(KExpr::Lit(KTy::Bool, 1), b?, vec![])))
+                }
+                ExprKind::Call(c, args) if matches!(&c.kind, ExprKind::Name(n) if n == "barrier") && self.lookup("barrier").is_none() => {
+                    if !args.is_empty() {
+                        return err("E_KERNEL", e.span, "barrier() takes no arguments");
+                    }
+                    if self.cf.iter().any(|u| !u) {
+                        return Err(KErr {
+                            code: "E_KERNEL_BARRIER",
+                            span: e.span,
+                            msg: format!("barrier() in {} must be reached by every thread of the group, but it sits under an 'if' or 'for' that depends on the thread", self.f.name),
+                            hint: Some("move the barrier out of thread-dependent control flow; conditions and loop bounds around it may use parameters, lengths, literals, group_id and group_size".into()),
+                        });
+                    }
+                    self.barriers += 1;
+                    self.cur = vec![self.fresh_seg()];
+                    Ok(Some(KStmt::Barrier))
                 }
                 ExprKind::Unit => Ok(None),
                 _ => {
@@ -545,6 +740,9 @@ impl Lower<'_> {
                 if let Some(l) = self.lookup(n) {
                     return Ok((KExpr::Local(l.slot), l.ty));
                 }
+                if self.shared_of(n).is_some() {
+                    return err("E_KERNEL", e.span, format!("shared array '{n}' can only be indexed ({n}[i]) or measured ({n}.len)"));
+                }
                 if let Some(p) = self.param(n) {
                     if self.params[p].slice.is_some() {
                         return err("E_KERNEL", e.span, format!("slice '{n}' can only be indexed ({n}[i]) or measured ({n}.len)"));
@@ -572,8 +770,22 @@ impl Lower<'_> {
                 }
                 Ok((KExpr::Len(self.param(n).unwrap()), KTy::Int))
             }
+            ExprKind::Field(r, m) | ExprKind::Method { recv: r, name: m, .. } if m == "len" && matches!(&r.kind, ExprKind::Name(n) if self.shared_of(n).is_some()) => {
+                let ExprKind::Name(n) = &r.kind else { unreachable!() };
+                Ok((KExpr::Lit(KTy::Int, self.shared[self.shared_of(n).unwrap()].2 as u64), KTy::Int))
+            }
             ExprKind::Field(r, m) => self.method(e, r, m, &[], hint),
             ExprKind::Method { recv, name, args, targs } if targs.is_empty() => self.method(e, recv, name, args, hint),
+            ExprKind::Index(a, i) if matches!(&a.kind, ExprKind::Name(n) if self.shared_of(n).is_some()) => {
+                let ExprKind::Name(n) = &a.kind else { unreachable!() };
+                let arr = self.shared_of(n).unwrap();
+                let (ix, it) = self.expr(i, Some(KTy::Int))?;
+                if it != KTy::Int {
+                    return err("E_KERNEL_TYPE", i.span, format!("shared array indices are Int, got {}", it.name()));
+                }
+                self.record(arr, false, &ix, i.span);
+                Ok((KExpr::SLoad(arr, Box::new(ix)), self.shared[arr].1))
+            }
             ExprKind::Index(a, i) => {
                 let ExprKind::Name(n) = &a.kind else { return err("E_KERNEL", a.span, "only slice parameters can be indexed") };
                 let Some(p) = self.param(n).filter(|p| self.params[*p].slice.is_some()) else { return err("E_KERNEL", a.span, format!("'{n}' is not a slice parameter")) };
@@ -584,7 +796,7 @@ impl Lower<'_> {
                 if it != KTy::Int {
                     return err("E_KERNEL_TYPE", i.span, format!("slice indices are Int, got {}", it.name()));
                 }
-                self.accesses.push((p, ix.clone(), i.span, false));
+                self.accesses.push((p, ix.clone(), i.span, false, self.guards.clone()));
                 Ok((KExpr::Load(p, Box::new(ix)), self.params[p].ty))
             }
             ExprKind::Binary(op, l, r) => self.binary(*op, l, r, hint, e.span),
@@ -626,6 +838,8 @@ impl Lower<'_> {
                 self.expr(x, hint)
             }
             ExprKind::Call(f, _) => match &f.kind {
+                ExprKind::Name(n) if n == "barrier" => err("E_KERNEL", e.span, "barrier() is a statement"),
+                ExprKind::Index(..) if shared_decl(e).is_some() => err("E_KERNEL_SHARED", e.span, "shared arrays are declared with 'name = shared[T](n)' at the top of the kernel body"),
                 ExprKind::Name(n) => err("E_KERNEL", e.span, format!("kernels can't call '{n}': device code has no calls, so no recursion or allocation; inline the computation")),
                 _ => err("E_KERNEL", e.span, "kernels can't call function values"),
             },
@@ -667,12 +881,17 @@ impl Lower<'_> {
             "round" => KFn::Round,
             "min" => KFn::Min,
             "max" => KFn::Max,
+            "shl" => KFn::Shl,
+            "shr" => KFn::Shr,
+            "band" => KFn::Band,
+            "bor" => KFn::Bor,
+            "bxor" => KFn::Bxor,
             _ => {
                 self.expr(recv, None)?;
                 return err("E_KERNEL", e.span, format!("'.{name}' is not available in kernels"));
             }
         };
-        let binary = matches!(f, KFn::Min | KFn::Max);
+        let binary = !matches!(f, KFn::Sqrt | KFn::Abs | KFn::Floor | KFn::Ceil | KFn::Round);
         if args.len() != usize::from(binary) {
             return err("E_KERNEL", e.span, format!("{name} takes {} argument(s)", usize::from(binary)));
         }
@@ -687,7 +906,9 @@ impl Lower<'_> {
             KFn::Sqrt | KFn::Floor | KFn::Ceil | KFn::Round => t.is_float(),
             KFn::Abs => t.is_float() || matches!(t, KTy::Int | KTy::I32),
             KFn::Min | KFn::Max => t != KTy::Bool,
+            KFn::Shl | KFn::Shr | KFn::Band | KFn::Bor | KFn::Bxor => t.is_int(),
         };
+
         if !ok {
             return err("E_KERNEL_TYPE", e.span, format!("{} has no .{name}", t.name()));
         }
@@ -812,7 +1033,28 @@ impl Lower<'_> {
         }
     }
 
+    fn group_shape(&self, e: &KExpr, guards: &[KExpr]) -> Option<(bool, String)> {
+        let off = match self.deref(e) {
+            KExpr::Intr(KIntr::GroupId) => "0".to_string(),
+            KExpr::Bin(BinOp::Add, KTy::Int, a, b) if matches!(self.deref(a), KExpr::Intr(KIntr::GroupId)) => self.uniform(b)?,
+            KExpr::Bin(BinOp::Add, KTy::Int, a, b) if matches!(self.deref(b), KExpr::Intr(KIntr::GroupId)) => self.uniform(a)?,
+            _ => return None,
+        };
+        let lead = guards.iter().find_map(|g| self.lead(g))?;
+        Some((false, format!("group {off} lid {lead}")))
+    }
+
+    fn lead(&self, g: &KExpr) -> Option<String> {
+        match self.deref(g) {
+            KExpr::Bin(BinOp::Eq, KTy::Int, a, b) if self.is_lid(a) => self.uniform(b),
+            KExpr::Bin(BinOp::Eq, KTy::Int, a, b) if self.is_lid(b) => self.uniform(a),
+            KExpr::Bin(BinOp::And, _, a, b) => self.lead(a).or_else(|| self.lead(b)),
+            _ => None,
+        }
+    }
+
     fn stride(&self, e: &KExpr) -> Option<String> {
+
         match self.deref(e) {
             KExpr::Bin(BinOp::Mul, KTy::Int, a, b) if self.is_gid(a) => self.uniform(b),
             KExpr::Bin(BinOp::Mul, KTy::Int, a, b) if self.is_gid(b) => self.uniform(a),
@@ -828,17 +1070,194 @@ impl Lower<'_> {
         }
     }
 
+    fn konst(&self, e: &KExpr) -> Option<i64> {
+        match self.deref(e) {
+            KExpr::Lit(KTy::Int, b) => Some(*b as i64),
+            KExpr::Intr(KIntr::GroupSize) => Some(self.group as i64),
+            KExpr::Bin(op, KTy::Int, a, b) => {
+                let (a, b) = (self.konst(a)?, self.konst(b)?);
+                match op {
+                    BinOp::Add => a.checked_add(b),
+                    BinOp::Sub => a.checked_sub(b),
+                    BinOp::Mul => a.checked_mul(b),
+                    BinOp::Div if b != 0 => a.checked_div(b),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn guniform(&self, e: &KExpr) -> bool {
+        match self.deref(e) {
+            KExpr::Lit(..) | KExpr::Param(_) | KExpr::Len(_) => true,
+            KExpr::Intr(i) => !matches!(i, KIntr::Gid | KIntr::Lid),
+            KExpr::Local(s) => match &self.defs[*s] {
+                Def::Loop(lo, hi) => self.guniform(lo) && self.guniform(hi),
+                Def::Value(x) => self.guniform(x),
+                Def::Var => false,
+            },
+            KExpr::Bin(_, _, a, b) => self.guniform(a) && self.guniform(b),
+            KExpr::Neg(_, a) | KExpr::Not(a) | KExpr::Cast(_, _, a) => self.guniform(a),
+            KExpr::Call(_, _, xs) => xs.iter().all(|x| self.guniform(x)),
+            KExpr::If(c, a, b) => self.guniform(c) && self.guniform(a) && self.guniform(b),
+            KExpr::Load(..) | KExpr::SLoad(..) => false,
+        }
+    }
+
+    fn back_edge(&mut self, slot: usize, c0: &[usize], na: usize, maybe_zero: bool) {
+        let c1 = self.cur.clone();
+        let b: Vec<usize> = c1.iter().map(|_| self.fresh_seg()).collect();
+        let n = self.sacc.len();
+        for a in &mut self.sacc[..n] {
+            if a.segs.iter().any(|s| c1.contains(s)) {
+                a.segs.extend(&b);
+            }
+        }
+        for i in na..n {
+            if self.sacc[i].segs.iter().any(|s| c0.contains(s)) {
+                let mut c = self.sacc[i].clone();
+                c.segs = b.clone();
+                let d = c.loops.iter().position(|l| *l == slot).unwrap_or(0);
+                for l in c.loops[d..].to_vec() {
+                    *c.ver.entry(l).or_insert(0) += 1;
+                }
+                self.sacc.push(c);
+            }
+        }
+        if maybe_zero {
+            for x in c0 {
+                if !self.cur.contains(x) {
+                    self.cur.push(*x);
+                }
+            }
+        }
+    }
+
+    fn ukey(&self, e: &KExpr, side: char, ver: &HashMap<usize, u32>) -> Option<String> {
+        Some(match self.deref(e) {
+            KExpr::Lit(t, b) => format!("{}:{b}", t.name()),
+            KExpr::Param(p) => format!("p{p}"),
+            KExpr::Len(p) => format!("len{p}"),
+            KExpr::Intr(i) if !matches!(i, KIntr::Gid | KIntr::Lid) => format!("{i:?}"),
+            KExpr::Local(s) => match &self.defs[*s] {
+                Def::Loop(lo, hi) if self.guniform(lo) && self.guniform(hi) => {
+                    let v = ver.get(s).copied().unwrap_or(0);
+                    if self.free_loops.contains(s) { format!("L{s}.{v}{side}") } else { format!("L{s}.{v}") }
+                }
+                _ => return None,
+            },
+            KExpr::Bin(op, _, a, b) => format!("({} {} {})", self.ukey(a, side, ver)?, op.symbol(), self.ukey(b, side, ver)?),
+            KExpr::Neg(_, a) => format!("(-{})", self.ukey(a, side, ver)?),
+            KExpr::Cast(t, _, a) => format!("{}({})", t.name(), self.ukey(a, side, ver)?),
+            KExpr::Call(f, _, xs) => format!("{f:?}({})", xs.iter().map(|x| self.ukey(x, side, ver)).collect::<Option<Vec<_>>>()?.join(", ")),
+            _ => return None,
+        })
+    }
+
+    fn lin(&self, e: &KExpr, side: char, ver: &HashMap<usize, u32>) -> Option<Lin> {
+        let e = self.deref(e);
+        match e {
+            KExpr::Lit(KTy::Int, b) => Some((Default::default(), *b as i64 as i128)),
+            KExpr::Bin(BinOp::Add, KTy::Int, a, b) => Some(lin_add(&self.lin(a, side, ver)?, &self.lin(b, side, ver)?, 1)),
+            KExpr::Bin(BinOp::Sub, KTy::Int, a, b) => Some(lin_add(&self.lin(a, side, ver)?, &self.lin(b, side, ver)?, -1)),
+            KExpr::Bin(BinOp::Mul, KTy::Int, a, b) => {
+                let (x, y) = (self.lin(a, side, ver)?, self.lin(b, side, ver)?);
+                let (k, v) = if x.0.is_empty() { (x.1, y) } else if y.0.is_empty() { (y.1, x) } else { return self.ukey(e, side, ver).map(|k| ([(k, 1)].into(), 0)) };
+                Some(lin_add(&(Default::default(), 0), &v, k))
+            }
+            KExpr::Neg(KTy::Int, a) => Some(lin_add(&(Default::default(), 0), &self.lin(a, side, ver)?, -1)),
+            _ => self.ukey(e, side, ver).map(|k| ([(k, 1)].into(), 0)),
+        }
+    }
+
+    fn is_lid(&self, e: &KExpr) -> bool {
+        matches!(self.deref(e), KExpr::Intr(KIntr::Lid))
+    }
+
+    fn stid(&self, e: &KExpr, side: char, ver: &HashMap<usize, u32>) -> Option<Lin> {
+        let e = self.deref(e);
+        if self.is_lid(e) {
+            return Some((Default::default(), 0));
+        }
+        match e {
+            KExpr::Bin(BinOp::Add, KTy::Int, a, b) if self.is_lid(a) => self.lin(b, side, ver),
+            KExpr::Bin(BinOp::Add, KTy::Int, a, b) if self.is_lid(b) => self.lin(a, side, ver),
+            KExpr::Bin(BinOp::Sub, KTy::Int, a, b) if self.is_lid(a) => self.lin(b, side, ver).map(|l| lin_add(&(Default::default(), 0), &l, -1)),
+            _ => None,
+        }
+    }
+
+    fn guard_cnt(&self, g: &KExpr, side: char, ver: &HashMap<usize, u32>) -> Option<Lin> {
+        match self.deref(g) {
+            KExpr::Bin(BinOp::Lt, KTy::Int, x, u) if self.is_lid(x) => self.lin(u, side, ver),
+            KExpr::Bin(BinOp::Gt, KTy::Int, u, x) if self.is_lid(x) => self.lin(u, side, ver),
+            KExpr::Bin(BinOp::Le, KTy::Int, x, u) if self.is_lid(x) => self.lin(u, side, ver).map(|l| lin_add(&l, &(Default::default(), 1), 1)),
+            KExpr::Bin(BinOp::And, _, a, b) => self.guard_cnt(a, side, ver).or_else(|| self.guard_cnt(b, side, ver)),
+            _ => None,
+        }
+    }
+
+    fn span_of(&self, a: &SAcc, side: char) -> Option<(Lin, Lin)> {
+        let cnt = a.guards.iter().find_map(|g| self.guard_cnt(g, side, &a.ver)).unwrap_or((Default::default(), self.group as i128));
+        if let Some(o) = self.stid(&a.idx, side, &a.ver) {
+            return Some((o, cnt));
+        }
+        self.lin(&a.idx, side, &a.ver).map(|u| (u, (Default::default(), 1)))
+    }
+
+    fn shared_check(&mut self) {
+        for arr in 0..self.shared.len() {
+            let name = self.shared[arr].0.clone();
+            let segs: HashSet<usize> = self.sacc.iter().filter(|a| a.arr == arr).flat_map(|a| a.segs.iter().copied()).collect();
+            let mut segs: Vec<usize> = segs.into_iter().collect();
+            segs.sort();
+            for sg in segs {
+                let group: Vec<&SAcc> = self.sacc.iter().filter(|a| a.arr == arr && a.segs.contains(&sg)).collect();
+                for w in group.iter().filter(|a| a.write) {
+                    let Some(ow) = self.stid(&w.idx, 'a', &w.ver) else {
+                        self.errs.push(KErr {
+                            code: "E_KERNEL_RACE",
+                            span: w.span,
+                            msg: format!("{} writes shared {name} at an index that two threads of a group may share", self.f.name),
+                            hint: Some(format!("write {name}[lid] (plus a uniform offset), so each thread owns its element until the next barrier()")),
+                        });
+                        return;
+                    };
+                    let cw = self.span_of(w, 'a').map(|s| s.1).unwrap();
+                    for a in &group {
+                        let ok = match self.span_of(a, 'b') {
+                            Some((oa, ca)) => (self.stid(&a.idx, 'b', &a.ver).is_some() && oa == ow) || lin_le(&lin_add(&ow, &cw, 1), &oa) || lin_le(&lin_add(&oa, &ca, 1), &ow),
+                            None => false,
+                        };
+                        if !ok {
+                            let what = if a.write { "writes" } else { "reads" };
+                            self.errs.push(KErr {
+                                code: "E_KERNEL_RACE",
+                                span: a.span,
+                                msg: format!("{} {what} shared {name} at an element another thread of the group may write before the next barrier()", self.f.name),
+                                hint: Some("separate the write and this access with barrier(), or keep them disjoint (for example 'if lid < s' around writes of [lid] and reads of [lid + s])".into()),
+                            });
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn race_check(&mut self) {
+
         for p in 0..self.params.len() {
-            let acc: Vec<(KExpr, Span, bool)> = self.accesses.iter().filter(|a| a.0 == p).map(|a| (a.1.clone(), a.2, a.3)).collect();
+            let acc: Vec<(KExpr, Span, bool, Vec<KExpr>)> = self.accesses.iter().filter(|a| a.0 == p).map(|a| (a.1.clone(), a.2, a.3, a.4.clone())).collect();
             if !acc.iter().any(|a| a.2) {
                 continue;
             }
             let name = self.params[p].name.clone();
             let mut first: Option<(bool, String)> = None;
-            for (ix, span, write) in &acc {
+            for (ix, span, write, guards) in &acc {
                 let what = if *write { "writes" } else { "reads" };
-                match self.shape(ix) {
+                match self.shape(ix).or_else(|| self.group_shape(ix, guards)) {
                     None => {
                         self.errs.push(KErr {
                             code: "E_KERNEL_RACE",

@@ -1,5 +1,5 @@
 use super::*;
-use sspur_check::kernel::{KExpr, KFn, KIntr, KStmt, KTy, Kernel};
+use sspur_check::kernel::{has_barrier, KExpr, KFn, KIntr, KStmt, KTy, Kernel};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tgt {
@@ -17,6 +17,7 @@ pub(super) struct Em<'a> {
     mask: bool,
     narrow: bool,
     sync: bool,
+    lane: bool,
 }
 
 const FLT_TINY: &str = "2.3509887e-38f";
@@ -71,7 +72,7 @@ pub fn elem_c(t: KTy, tgt: Tgt) -> &'static str {
 
 impl<'a> Em<'a> {
     pub(super) fn new(k: &'a Kernel, t: Tgt, ind: usize) -> Self {
-        Em { k, t, out: String::new(), n: 0, ind, mask: false, narrow: false, sync: false }
+        Em { k, t, out: String::new(), n: 0, ind, mask: false, narrow: false, sync: false, lane: false }
     }
 
     pub(super) fn take(&mut self) -> String {
@@ -96,6 +97,10 @@ impl<'a> Em<'a> {
             _ if self.narrow => "(uint)",
             _ => "(ulong)",
         }
+    }
+
+    fn lv(&self, slot: usize) -> String {
+        if self.lane { format!("v{slot}[ss_t]") } else { format!("v{slot}") }
     }
 
     fn line(&mut self, s: &str) {
@@ -161,7 +166,7 @@ impl<'a> Em<'a> {
         match e {
             KExpr::Lit(t, b) if self.narrow && t.is_int() => format!("{}", *b as i64),
             KExpr::Lit(t, b) => lit(*t, *b, self.t),
-            KExpr::Local(s) => format!("v{s}"),
+            KExpr::Local(s) => self.lv(*s),
             KExpr::Param(p) => match self.k.params[*p].ty {
                 KTy::Bool if self.t != Tgt::C => format!("(p{p} != 0)"),
                 t if self.narrow && t.is_int() => format!("((int)p{p})"),
@@ -186,6 +191,24 @@ impl<'a> Em<'a> {
                 let vt = self.vty(et);
                 let ix = self.safe_index(&i, *p);
                 self.line(&format!("{vt} {t} = ({vt})p{p}[{ix}];"));
+                if et == KTy::F32 {
+                    match self.t {
+                        Tgt::Msl => self.fail(&format!("ss_sub(as_type<uint>({t}))"), 0, "0", "0"),
+                        Tgt::Ocl => self.fail(&format!("ss_sub(as_uint({t}))"), 0, "0", "0"),
+                        Tgt::C => {}
+                    }
+                }
+                t
+            }
+            KExpr::SLoad(a, i) => {
+                let i = self.expr(i);
+                let t = self.fresh();
+                let (et, len) = (self.k.shared[*a].1, self.k.shared[*a].2);
+                let cast = self.ucast();
+                self.fail(&format!("{cast}{i} >= {cast}{len}"), T_INDEX, &len.to_string(), &i);
+                let vt = self.vty(et);
+                let ix = if self.t == Tgt::C { i } else { format!("({cast}{i} < {cast}{len} ? {i} : 0)") };
+                self.line(&format!("{vt} {t} = ({vt})s{a}[{ix}];"));
                 if et == KTy::F32 {
                     match self.t {
                         Tgt::Msl => self.fail(&format!("ss_sub(as_type<uint>({t}))"), 0, "0", "0"),
@@ -265,6 +288,29 @@ impl<'a> Em<'a> {
                     KFn::Floor => self.line(&format!("{vt} {t} = {}({a});", fun("floor"))),
                     KFn::Ceil => self.line(&format!("{vt} {t} = {}({a});", fun("ceil"))),
                     KFn::Round => self.line(&format!("{vt} {t} = {}({a});", fun("round"))),
+                    KFn::Shl | KFn::Shr => {
+                        let b = b.unwrap();
+                        let (l, u) = if self.t == Tgt::C { ("int64_t", "uint64_t") } else { ("long", "ulong") };
+                        let op = if *f == KFn::Shl { "<<" } else { ">>" };
+                        self.line(&format!("{vt} {t} = ({vt})(({l}){b} >= 0 && ({l}){b} < 64 ? ({l})(({u})({l}){a} {op} ({u}){b}) : 0);"));
+                        if self.t == Tgt::C {
+                            match ty {
+                                KTy::I32 => self.fail(&format!("{t} < -2147483648LL || {t} > 2147483647LL"), T_OVERFLOW, "0", "0"),
+                                KTy::U32 => self.fail(&format!("{t} < 0 || {t} > 4294967295LL"), T_OVERFLOW, "0", "0"),
+                                _ => {}
+                            }
+                        } else {
+                            self.range(*ty, &t);
+                        }
+                    }
+                    KFn::Band | KFn::Bor | KFn::Bxor => {
+                        let op = match f {
+                            KFn::Band => "&",
+                            KFn::Bor => "|",
+                            _ => "^",
+                        };
+                        self.line(&format!("{vt} {t} = {a} {op} {};", b.unwrap()));
+                    }
                 }
                 t
             }
@@ -306,6 +352,7 @@ impl<'a> Em<'a> {
             KExpr::Neg(t, _) | KExpr::Cast(t, _, _) | KExpr::Call(_, t, _) => *t,
             KExpr::Not(_) => KTy::Bool,
             KExpr::If(_, a, _) => self.expr_ty(a),
+            KExpr::SLoad(a, _) => self.k.shared[*a].1,
         }
     }
 
@@ -393,6 +440,58 @@ impl<'a> Em<'a> {
         }
     }
 
+    fn lanes(&mut self, b: &[KStmt]) {
+        let g = self.k.group;
+        for s in b {
+            if !has_barrier(s) {
+                self.line(&format!("for (int64_t ss_t = 0; ss_t < {g}; ss_t++) {{"));
+                self.ind += 1;
+                self.line(&format!("int64_t gid = ss_g * {g} + ss_t; (void)gid;"));
+                self.stmt(s);
+                self.ind -= 1;
+                self.line("}");
+                continue;
+            }
+            match s {
+                KStmt::For(slot, a, b, body) => {
+                    self.line("{");
+                    self.ind += 1;
+                    self.line(&format!("int64_t ss_t = 0, gid = ss_g * {g}; (void)ss_t; (void)gid;"));
+                    let lo = self.expr(a);
+                    let hi = self.expr(b);
+                    let (l, h) = (self.fresh(), self.fresh());
+                    self.line(&format!("int64_t {l} = {lo}, {h} = {hi};"));
+                    self.line(&format!("for (int64_t ss_i = {l}; ss_i < {h}; ss_i++) {{"));
+                    self.ind += 1;
+                    self.line(&format!("for (int64_t ss_u = 0; ss_u < {g}; ss_u++) v{slot}[ss_u] = ss_i;"));
+                    self.lanes(body);
+                    self.ind -= 1;
+                    self.line("}");
+                    self.ind -= 1;
+                    self.line("}");
+                }
+                KStmt::If(c, t, f) => {
+                    self.line("{");
+                    self.ind += 1;
+                    self.line(&format!("int64_t ss_t = 0, gid = ss_g * {g}; (void)ss_t; (void)gid;"));
+                    let c = self.expr(c);
+                    self.line(&format!("if ({c}) {{"));
+                    self.ind += 1;
+                    self.lanes(t);
+                    self.ind -= 1;
+                    self.line("} else {");
+                    self.ind += 1;
+                    self.lanes(f);
+                    self.ind -= 1;
+                    self.line("}");
+                    self.ind -= 1;
+                    self.line("}");
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub(super) fn block(&mut self, b: &[KStmt]) {
         for s in b {
             self.stmt(s);
@@ -404,12 +503,32 @@ impl<'a> Em<'a> {
             KStmt::Let(slot, e) => {
                 let v = self.expr(e);
                 let vt = self.vty(self.k.locals[*slot]);
-                self.line(&format!("{vt} v{slot} = {v};"));
+                if self.lane {
+                    self.line(&format!("v{slot}[ss_t] = {v};"));
+                } else {
+                    self.line(&format!("{vt} v{slot} = {v};"));
+                }
             }
             KStmt::Set(slot, e) => {
                 let v = self.expr(e);
-                self.line(&format!("v{slot} = {v};"));
+                let l = self.lv(*slot);
+                self.line(&format!("{l} = {v};"));
             }
+            KStmt::SStore(a, i, v) => {
+                let i = self.expr(i);
+                let v = self.expr(v);
+                let (et, len) = (self.k.shared[*a].1, self.k.shared[*a].2);
+                let cast = self.ucast();
+                self.fail(&format!("{cast}{i} >= {cast}{len}"), T_INDEX, &len.to_string(), &i);
+                let et = elem_c(et, self.t);
+                let guard = if self.t == Tgt::C { "" } else { "if (!bad) " };
+                self.line(&format!("{guard}s{a}[{i}] = ({et}){v};"));
+            }
+            KStmt::Barrier => match self.t {
+                Tgt::Msl => self.line("threadgroup_barrier(mem_flags::mem_threadgroup);"),
+                Tgt::Ocl => self.line("barrier(CLK_LOCAL_MEM_FENCE);"),
+                Tgt::C => {}
+            },
             KStmt::Store(p, i, v) => {
                 let i = self.expr(i);
                 let v = self.expr(v);
@@ -425,8 +544,11 @@ impl<'a> Em<'a> {
                 let it = self.vty(KTy::Int);
                 let h = self.fresh();
                 self.line(&format!("{it} {h} = {hi};"));
-                let stop = if self.t == Tgt::C { "" } else { " && !bad" };
-                self.line(&format!("for ({it} v{slot} = {lo}; v{slot} < {h}{stop}; v{slot}++) {{"));
+                let stop = if self.t == Tgt::C || body.iter().any(has_barrier) { "" } else { " && !bad" };
+                let l = self.lv(*slot);
+                let decl = if self.lane { String::new() } else { format!("{it} ") };
+                self.line(&format!("for ({decl}{l} = {lo}; {l} < {h}{stop}; {l}++) {{"));
+
                 self.ind += 1;
                 self.block(body);
                 self.ind -= 1;
@@ -531,6 +653,15 @@ impl Iv<'_> {
                 };
                 Some(self.node(KTy::Int, lo, hi))
             }
+            KExpr::SLoad(a, i) => {
+                self.expr(i)?;
+                let et = self.k.shared[*a].1;
+                if !ty(et) {
+                    return Ok(None);
+                }
+                let (lo, hi) = et.range();
+                Some(self.node(et, big(lo), if hi > i64::MAX as i128 { big(i64::MAX as i128) } else { format!("((__int128){hi}LL)") }))
+            }
             KExpr::Load(p, i) => {
                 self.expr(i)?;
                 let et = self.k.params[*p].ty;
@@ -578,6 +709,18 @@ impl Iv<'_> {
                     (KFn::Abs, Some((lo, hi)), _) if ty(*t) => Some(self.node(*t, "0".into(), format!("iv_mag({lo}, {hi})"))),
                     (KFn::Min, Some((al, ah)), Some((bl, bh))) => Some(self.node(*t, format!("iv_min4({al}, {bl}, {al}, {bl})"), format!("iv_min4({ah}, {bh}, {ah}, {bh})"))),
                     (KFn::Max, Some((al, ah)), Some((bl, bh))) => Some(self.node(*t, format!("iv_max4({al}, {bl}, {al}, {bl})"), format!("iv_max4({ah}, {bh}, {ah}, {bh})"))),
+                    (KFn::Shl | KFn::Shr | KFn::Band | KFn::Bor | KFn::Bxor, Some((al, ah)), Some((bl, bh))) => {
+                        let ok = format!("{al} >= 0 && {bl} >= 0");
+                        let (lo, hi) = match f {
+                            KFn::Shl => (format!("{al} << {bl}"), format!("{ah} << {bh}")),
+                            KFn::Shr => (format!("iv_shr({al}, {bh})"), format!("iv_shr({ah}, {bl})")),
+                            KFn::Band => ("0".into(), format!("iv_min4({ah}, {bh}, {ah}, {bh})")),
+                            _ => ("0".into(), format!("iv_ones(iv_max4({ah}, {bh}, {ah}, {bh}))")),
+                        };
+                        let ok = if *f == KFn::Shl { format!("{ok} && {bh} < 62 && {ah} < ((__int128)1 << 62)") } else { ok };
+                        Some(self.node(*t, format!("({ok} ? {lo} : IV_MIN)"), format!("({ok} ? {hi} : IV_MAX)")))
+                    }
+                    _ if t.is_int() => return Err(()),
                     _ => None,
                 }
             }
@@ -611,10 +754,11 @@ impl Iv<'_> {
                 KStmt::Set(_, e) | KStmt::Eval(e) => {
                     self.expr(e)?;
                 }
-                KStmt::Store(_, i, v) => {
+                KStmt::Store(_, i, v) | KStmt::SStore(_, i, v) => {
                     self.expr(i)?;
                     self.expr(v)?;
                 }
+                KStmt::Barrier => {}
                 KStmt::For(slot, a, b, body) => {
                     let (lo, _) = self.expr(a)?.ok_or(())?;
                     let (_, hi) = self.expr(b)?.ok_or(())?;
@@ -642,6 +786,9 @@ pub fn narrow_pred(k: &Kernel) -> Option<String> {
 }
 
 pub fn commit_split(k: &Kernel) -> Option<usize> {
+    if k.grouped {
+        return None;
+    }
     let b = &k.body;
     let mut split = b.len();
     while split > 0 && matches!(b[split - 1], KStmt::Store(..)) {
@@ -673,6 +820,38 @@ pub fn cpu_kernel(k: &Kernel, fidx: usize) -> String {
             }
         }
     }
+    if k.grouped {
+        let g = k.group as usize;
+        let mut decls = String::new();
+        let mut off = 0usize;
+        for (i, t) in k.locals.iter().enumerate() {
+            let vt = match t {
+                KTy::F32 => "float",
+                KTy::F64 => "double",
+                KTy::Bool => "int",
+                _ => "int64_t",
+            };
+            writeln!(decls, "  {vt}* v{i} = ({vt}*)(ss_mem + {off});").unwrap();
+            off += g * 8;
+        }
+        let mut zero = String::new();
+        for (i, (_, t, len)) in k.shared.iter().enumerate() {
+            let e = elem_c(*t, Tgt::C);
+            writeln!(decls, "  {e}* s{i} = ({e}*)(ss_mem + {off});").unwrap();
+            writeln!(zero, "    memset(s{i}, 0, {});", *len as usize * es(*t)).unwrap();
+            off += (*len as usize * es(*t)).div_ceil(8) * 8;
+        }
+        let mut em = Em::new(k, Tgt::C, 2);
+        em.lane = true;
+        em.lanes(&k.body);
+        let body = em.take();
+        return format!(
+            "#define FIDX {fidx}\nstatic void kc_{}({}, int64_t ss_n, const uint32_t* ss_mask, Status* st) {{\n#pragma clang fp contract(off)\n  (void)ss_mask;\n  char* ss_mem = (char*)malloc({});\n{decls}  for (int64_t ss_g = 0; ss_g < ss_n / {g}; ss_g++) {{\n{zero}{body}  }}\n  free(ss_mem);\n}}\n#undef FIDX\n",
+            k.name,
+            sig.join(", "),
+            off.max(8)
+        );
+    }
     let mut em = Em::new(k, Tgt::C, 2);
     em.block(&k.body);
     let body = em.take();
@@ -685,7 +864,7 @@ pub fn cpu_kernel(k: &Kernel, fidx: usize) -> String {
 
 pub const MSL_PRELUDE: &str = "#include <metal_stdlib>\nusing namespace metal;\n#pragma METAL fp math_mode(safe)\n#pragma METAL fp contract(off)\n#define SS_MULHI(a, b) mulhi((long)(a), (long)(b))\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
 
-pub const OCL_PRELUDE: &str = "#ifdef __NVPTX__\n#define get_global_id(d) ((size_t)__nvvm_read_ptx_sreg_ctaid_x() * __nvvm_read_ptx_sreg_ntid_x() + __nvvm_read_ptx_sreg_tid_x())\n#define SS_MULHI(a, b) __nvvm_mulhi_ll((a), (b))\n#define fabs(x) __builtin_fabs(x)\n#define sqrt(x) __builtin_sqrt(x)\n#define floor(x) __builtin_floor(x)\n#define ceil(x) __builtin_ceil(x)\n#define round(x) __builtin_round(x)\n#define isinf(x) __builtin_isinf(x)\n#define SS_OR(p, v) __nvvm_atom_or_gen_i((volatile int*)(p), (int)(v))\n#else\n#define SS_MULHI(a, b) mul_hi((long)(a), (long)(b))\n#define SS_OR(p, v) atomic_or((p), (v))\n#endif\n#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n#pragma OPENCL FP_CONTRACT OFF\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
+pub const OCL_PRELUDE: &str = "#ifdef __NVPTX__\n#define get_global_id(d) ((size_t)__nvvm_read_ptx_sreg_ctaid_x() * __nvvm_read_ptx_sreg_ntid_x() + __nvvm_read_ptx_sreg_tid_x())\n#define SS_MULHI(a, b) __nvvm_mulhi_ll((a), (b))\n#define fabs(x) __builtin_fabs(x)\n#define sqrt(x) __builtin_sqrt(x)\n#define floor(x) __builtin_floor(x)\n#define ceil(x) __builtin_ceil(x)\n#define round(x) __builtin_round(x)\n#define isinf(x) __builtin_isinf(x)\n#define SS_OR(p, v) __nvvm_atom_or_gen_i((volatile int*)(p), (int)(v))\n#define barrier(f) __nvvm_bar_sync(0)\n#else\n#define SS_MULHI(a, b) mul_hi((long)(a), (long)(b))\n#define SS_OR(p, v) atomic_or((p), (v))\n#endif\n#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n#pragma OPENCL FP_CONTRACT OFF\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
 
 pub fn device_kernel(k: &Kernel, tgt: Tgt, narrow: bool) -> String {
     let mut sig = Vec::new();
@@ -729,6 +908,17 @@ pub fn device_kernel(k: &Kernel, tgt: Tgt, narrow: bool) -> String {
     em.mask = split.is_some();
     em.narrow = narrow;
     em.line(if tgt == Tgt::Msl { "bool bad = false;" } else { "uint bad = 0u;" });
+    for (i, (_, t, len)) in k.shared.iter().enumerate() {
+        let e = elem_c(*t, tgt);
+        let space = if tgt == Tgt::Msl { "threadgroup" } else { "__local" };
+        let g = k.group;
+        em.line(&format!("{space} {e} s{i}[{len}];"));
+        em.line(&format!("for (int ss_z = (int)(gid % {g}); ss_z < {len}; ss_z += {g}) s{i}[ss_z] = 0;"));
+    }
+    if !k.shared.is_empty() {
+        em.stmt(&KStmt::Barrier);
+    }
+
     match split {
         Some(at) => {
             em.block(&k.body[..at]);
@@ -886,7 +1076,12 @@ static inline __int128 iv_div_lo(__int128 al, __int128 ah, __int128 bl, __int128
 static inline __int128 iv_div_hi(__int128 al, __int128 ah, __int128 bl, __int128 bh) { if (bl <= 0 && bh >= 0) return iv_mag(al, ah); return iv_max4(al / bl, al / bh, ah / bl, ah / bh); }
 static inline __int128 iv_rem_m(__int128 al, __int128 ah, __int128 bl, __int128 bh) { __int128 m = iv_mag(bl, bh) - 1, a = iv_mag(al, ah); if (m < 0) m = 0; return m < a ? m : a; }
 static inline __int128 iv_rem_lo(__int128 al, __int128 ah, __int128 bl, __int128 bh) { return al >= 0 ? 0 : -iv_rem_m(al, ah, bl, bh); }
-static inline __int128 iv_rem_hi(__int128 al, __int128 ah, __int128 bl, __int128 bh) { return ah <= 0 ? 0 : iv_rem_m(al, ah, bl, bh); }
+#define IV_MIN (-(__int128)9223372036854775807LL - 1)
+#define IV_MAX ((__int128)9223372036854775807LL)
+static inline __int128 iv_shr(__int128 a, __int128 s) { return s >= 64 ? 0 : a >> (int)s; }
+static inline __int128 iv_ones(__int128 a) { __int128 m = 0; while (m < a) m = m * 2 + 1; return m; }
+static inline __int128 iv_rem_hi(
+__int128 al, __int128 ah, __int128 bl, __int128 bh) { return ah <= 0 ? 0 : iv_rem_m(al, ah, bl, bh); }
 struct SsDev { int64_t len, es; void* host; void* dev; struct SsDev* next; void* bk; uint64_t qb; int64_t qf; };
 static struct SsDev* ss_devs;
 #define SS_QMAX 256
@@ -1108,6 +1303,11 @@ impl Cx<'_> {
         let n = em.expr(&k.grid);
         s.push_str(&em.take());
         writeln!(s, "  int64_t ss_n = {n};").unwrap();
+        if k.grouped {
+            let m = c_lit(&format!("dev: the thread count of {name} is not a multiple of its group size {} (count = ", k.group));
+            writeln!(s, "  if (UNLIKELY(ss_n > 0 && ss_n % {} != 0)) {{ ss_q_sync(st); dev_fail(st, FIDX, {m}, -1, \"\", ss_n); }}", k.group).unwrap();
+        }
+        let exact = if k.grouped { 2 } else { 0 };
         let sub: Vec<String> = k.params.iter().enumerate().filter(|(_, p)| p.slice.is_none() && p.ty == KTy::F32).map(|(i, _)| format!(" && !ss_sub32(p{i})")).collect();
         gargs.push("{0, 0, &ss_n, 8, 0}".into());
         let commit = commit_split(k).is_some();
@@ -1135,7 +1335,7 @@ impl Cx<'_> {
                 writeln!(s, "      e_ = {e};\n    }}\n    L_.narrow = nar_;").unwrap();
             }
             writeln!(s, "    SsGpuArg g_[] = {{{}}};", gargs.join(", ")).unwrap();
-            writeln!(s, "    ss_q_push(st, &L_, ss_msl, e_, {}, g_, ss_n, 1, {}, 1, {});", gargs.len(), k.group, i32::from(commit)).unwrap();
+            writeln!(s, "    ss_q_push(st, &L_, ss_msl, e_, {}, g_, ss_n, 1, {}, 1, {});", gargs.len(), k.group, i32::from(commit) | exact).unwrap();
         } else {
             let masked = commit && !k.params.iter().enumerate().any(|(i, p)| p.slice == Some(true) && !dev(i));
             if k.uses_f64() {
@@ -1149,7 +1349,7 @@ impl Cx<'_> {
                     s.push_str(&save);
                 }
                 writeln!(s, "      SsGpuArg g_[] = {{{}}};", gargs.join(", ")).unwrap();
-                writeln!(s, "      r_ = ss_gpu_run(ss_msl, {e}, {}, g_, ss_n, {}, {}, &m_);", gargs.len(), k.group, i32::from(masked) + i32::from(commit)).unwrap();
+                writeln!(s, "      r_ = ss_gpu_run(ss_msl, {e}, {}, g_, ss_n, {}, {}, &m_);", gargs.len(), k.group, i32::from(masked) + i32::from(commit) + 2 * exact).unwrap();
                 if !masked {
                     s.push_str(&restore);
                 }

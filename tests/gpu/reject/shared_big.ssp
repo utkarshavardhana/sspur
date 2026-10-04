@@ -1,0 +1,5 @@
+kernel fn k(x: &[F64], y: &mut [F64]) @grid(y.len, 64)
+= do
+  t = shared[F64](8192)
+  t[lid] := x[gid]
+  y[gid] := x[gid]

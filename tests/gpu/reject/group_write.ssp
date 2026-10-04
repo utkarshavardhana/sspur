@@ -1,0 +1,2 @@
+kernel fn k(x: &[F32], y: &mut [F32]) @grid(x.len, 64)
+= y[group_id] := x[gid]

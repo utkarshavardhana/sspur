@@ -1,0 +1,101 @@
+kernel fn tree_sum(x: &[F32], out: &mut [F32]) @grid(x.len, 256)
+  pre out.len * 256 == x.len
+= do
+  sh = shared[F32](256)
+  sh[lid] := x[gid]
+  barrier()
+  for k in 0..8
+    s = 128.shr(k)
+    if lid < s then sh[lid] := sh[lid] + sh[lid + s]
+    barrier()
+  if lid == 0 then out[group_id] := sh[0]
+
+kernel fn smooth(x: &[F32], y: &mut [F32]) @grid(x.len, 64)
+  pre x.len == y.len
+= do
+  t = shared[F32](64)
+  t[lid] := x[gid]
+  barrier()
+  left = if lid > 0 then t[lid - 1] else t[lid]
+  right = if lid < 63 then t[lid + 1] else t[lid]
+  y[gid] := (left + t[lid] + right) / 3.0
+
+kernel fn imax(x: &[I32], out: &mut [I32]) @grid(x.len, 128)
+= do
+  m = shared[I32](group_size)
+  m[lid] := x[gid]
+  barrier()
+  for k in 0..7
+    h = 64.shr(k)
+    if lid < h then m[lid] := m[lid].max(m[lid + h])
+    barrier()
+  if lid == 0 then out[group_id] := m[0]
+
+kernel fn ranks(x: &[I32], out: &mut [I32]) @grid(x.len, 32)
+= do
+  v = shared[I32](32)
+  v[lid] := x[gid]
+  barrier()
+  var r = 0
+  for j in 0..32
+    if v[j] < v[lid] or (v[j] == v[lid] and j < lid) then r := r + 1
+  out[gid] := r.to_i32
+
+fn sums(n: Int) -> List[F64] ! dev
+= do
+  x = dev_f32((0..n).map(i => (i % 17).to_f64 * 0.5))
+  out = dev_f32((0..n / 256).map(i => 0.0))
+  tree_sum(&x, &mut out)
+  out.to_list
+
+fn smoothed(n: Int) -> List[F64] ! dev
+= do
+  x = dev_f32((0..n).map(i => (i * 7 % 11).to_f64))
+  y = dev_f32((0..n).map(i => 0.0))
+  smooth(&x, &mut y)
+  y.to_list
+
+fn maxes(n: Int) -> List[Int] ! dev
+= do
+  out = dev_i32((0..n / 128).map(i => 0))
+  imax(&dev_i32((0..n).map(i => (i * 7919) % 10007 - 5000)), &mut out)
+  out.to_list
+
+fn ranked() -> List[Int] ! dev
+= do
+  out = dev_i32((0..64).map(i => 0))
+  ranks(&dev_i32((0..64).map(i => (i * 13) % 7)), &mut out)
+  out.to_list
+
+fn listed() -> List[F64] ! dev
+= do
+  var out = [0.0, 0.0]
+  tree_sum(&(0..512).map(i => i.to_f64), &mut out)
+  out
+
+fn partial() -> Int ! dev
+= do
+  y = dev_f32((0..100).map(i => 0.0))
+  smooth(&dev_f32((0..100).map(i => 1.0)), &mut y)
+  y.len
+
+fn tiny_sub() -> List[F64] ! dev
+= do
+  x = dev_f32((0..256).map(i => if i == 3 then 1.0e-39 else 1.0))
+  out = dev_f32([0.0])
+  tree_sum(&x, &mut out)
+  out.to_list
+
+test sums_ok = sums(1024).len == 4
+test listed_ok = listed() == [32640.0, 98176.0]
+test partial_trap = partial() == 100
+test sub_ok = tiny_sub()[0] == 255.0
+
+fn main() ! dev, log
+= do
+  log("{sums(4096)}")
+  log("{smoothed(256).sum} {smoothed(256)[63]} {smoothed(256)[64]}")
+  log("{maxes(1024)}")
+  log("{ranked()}")
+  log("{listed()}")
+  log("{tiny_sub()}")

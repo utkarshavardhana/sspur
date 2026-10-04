@@ -80,9 +80,11 @@ int ss_gpu_ready(void) {
 }
 static int run_locked(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask_out) {
     if (!ready_locked() || n <= 0 || n > 0x7fffffff) return 2;
+    int exact = masked & 4;
+    masked &= 3;
     @autoreleasepool {
         id<MTLComputePipelineState> ps = pipe_for(src, entry);
-        if (!ps) return 2;
+        if (!ps || (exact && (int64_t)ps.maxTotalThreadsPerThreadgroup < group)) return 2;
         if (!g_flag) g_flag = [g_dev newBufferWithLength:16 options:MTLResourceStorageModeShared];
         NSUInteger words = (NSUInteger)((n + 31) / 32);
         if (masked && (!g_mask || g_mask.length < words * 4)) {
@@ -118,7 +120,7 @@ static int run_locked(const char* src, const char* entry, int32_t nargs, const S
         [en setBuffer:g_flag offset:0 atIndex:(NSUInteger)nargs];
         if (masked) [en setBuffer:g_mask offset:0 atIndex:(NSUInteger)nargs + 1];
         NSUInteger g = ps.maxTotalThreadsPerThreadgroup;
-        if ((int64_t)g > group) g = (NSUInteger)group;
+        if ((int64_t)g > group || exact) g = (NSUInteger)group;
         if ((int64_t)g > n) g = (NSUInteger)n;
         [en dispatchThreads:MTLSizeMake((NSUInteger)n, 1, 1) threadsPerThreadgroup:MTLSizeMake(g, 1, 1)];
         [en endEncoding];

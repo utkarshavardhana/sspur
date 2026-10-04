@@ -18,3 +18,12 @@ types E_KERNEL_TYPE
 value E_KERNEL_VALUE
 while E_KERNEL
 write_readonly E_KERNEL_WRITE
+barrier_branch E_KERNEL_BARRIER
+barrier_loop E_KERNEL_BARRIER
+shared_race E_KERNEL_RACE
+shared_const E_KERNEL_RACE
+shared_loop E_KERNEL_RACE
+shared_nested E_KERNEL_SHARED
+shared_big E_KERNEL_SHARED
+group_write E_KERNEL_RACE
+shared_wrap E_KERNEL_RACE

@@ -46,10 +46,10 @@ Most languages are designed around a human at a keyboard. SSPUR starts from a di
 - A `bare` profile with no runtime for bare-metal code, memory-mapped I/O, and interrupt handlers
 
 **Standard library**
-- Collections: `List`, `Map`, `Set`, `HashMap`, `HashSet`, `Heap`, `Bits`, deques, and a broad set of list algorithms
-- Text: Unicode strings, formatting specifiers, a string builder, and a backtracking-free `Regex`
-- Numbers: checked and wrapping integer arithmetic, the full `<cmath>` set, `BigInt`, fixed-point `Dec`, seeded random distributions
-- System: files and directories, stdin, time and calendars (`Time`, `Duration`), environment, and child processes, each behind its own effect
+- Collections: `List`, `Map`, `Set`, `HashMap`, `HashSet`, `Heap`, `Bits`, `FlatMap`, `MdSpan`, deques, lazy `View` pipelines, and a broad set of list algorithms
+- Text: Unicode strings with locale-independent casing and case folding, formatting specifiers, a string builder, and a backtracking-free `Regex`
+- Numbers: checked and wrapping integer arithmetic, the full `<cmath>` set, `BigInt`, fixed-point `Dec`, `Complex`, seeded random distributions and a splittable `Rng`
+- System: files, streaming `File` handles and directories, stdin, time, calendars and IANA time zones (`Time`, `Duration`, `Zone`), environment, and child processes, each behind its own effect
 - `json.encode` and `json.decode[T]` for any data type
 
 **Tooling**
@@ -138,7 +138,7 @@ More examples:
 | [`examples/crud/`](examples/crud) | A CRUD HTTP service, with `sspur deploy plan` and `sspur deploy local` |
 | [`examples/ffi/`](examples/ffi) | Calling libc and libm, and calling SSPUR from C |
 | [`examples/bare/`](examples/bare) | Bare-metal hello world and a timer interrupt on QEMU riscv64 and aarch64 |
-| [`tests/programs/`](tests/programs) | 40 runnable programs covering every language feature and library area |
+| [`tests/programs/`](tests/programs) | 47 runnable programs covering every language feature and library area |
 
 ## Using SSPUR with AI agents
 
@@ -179,7 +179,7 @@ SSPUR is at version 0.1 and under active development. The language and tools are
 | 3. Agent loop: codebase, transactions, queries, MCP, effect handlers | Done |
 | 4. Native compiler, `sys` profile, ownership, concurrency, SMT contracts | Done |
 | 5. Bare-metal profile, SIMD, C interop | Done; an LLVM backend and embedded targets beyond QEMU remain |
-| 6. Deployment, migrations, hot swap, replay, GPU kernels, standard library | Mostly done: 16 of 23 C++ library areas covered, 6 partial; a first real AWS deploy is pending |
+| 6. Deployment, migrations, hot swap, replay, GPU kernels, standard library | Mostly done: 22 of 23 C++ library areas covered, locale partial by decision; a first real AWS deploy is pending |
 | 7. Multi-agent sync, replica sync, global build cache | Exit criterion met: 100 concurrent agents, no lost work; proven rewrites and cost-driven optimization remain |
 
 See the [roadmap](docs/roadmap.md) for details and exit criteria.

@@ -30,7 +30,7 @@ Status: accepted, 2026-10-04
 | 11 | Sync exchanges commits, texts and provenance by hash and verifies each against its address. A pull whose union has conflicts or does not typecheck leaves HEAD alone and records the remote heads in `PENDING`; a `merge: true` transaction with `resolve` ops settles it. A conflicting push is refused | The replica set converges once conflicts are resolved, and HEAD still always typechecks |
 | 12 | The sync wire format is one JSON line per request over TCP (`heads`, `have`, `fetch`, `push`), served by `sspur sync serve` | Simple, no dependency, and the directory remote runs the same handler in-process |
 | 13 | Check cache key: the definition's text, the signatures of the functions it names (transitively through signatures), all type, effect, store and service definitions, and the compiler build (binary size and mtime). Value: its body diagnostics and the user-method and record-literal resolutions its hash needs. Only `app` profile modules, only definitions without holes, only written when the whole module is clean | Sound reuse across codebases without a dependency graph; `sys` and `bare` have whole-module passes |
-| 14 | Native code stays compiled per program: the shared object is cached by its generated C in `~/.cache/sspur/native` (Phase 4) and shared by every codebase | Splitting into per-definition objects would cost cross-function inlining, which the speed results depend on |
+| 14 | Native code stays compiled per program: the shared object is cached by its generated C in `~/.cache/sspur/native` (Phase 4) and shared by every codebase | Splitting into per-definition objects would cost cross-function inlining, which the speed results depend on. Superseded by ADR 0022, which splits per definition and keeps inlining by copying small callees into their callers' units |
 
 ## Measurements
 
@@ -42,7 +42,7 @@ Status: accepted, 2026-10-04
 
 ## Not done
 
-- Per-definition native objects and incremental linking (decision 14): one changed definition still recompiles the program's C.
+- Per-definition native objects and incremental linking: done in ADR 0022.
 - `profile sys` and `bare` modules are checked without the cache.
 - The distributed store is replica sync between directories and a single-threaded TCP server; there is no authentication, no team or global cache server, and no garbage collection of unreferenced objects.
-- Proven rewrites and cost-driven optimization.
+- Proven rewrites and cost-driven optimization: done in ADR 0022.

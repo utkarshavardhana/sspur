@@ -66,3 +66,19 @@ fn explain_opt_lists_proven_rewrites() {
     let (all, _) = sspur(&d, &["explain-opt", prog.to_str().unwrap(), "--all"], "");
     assert!(all.contains("note  shaky: not fusing maps: trap order could change"), "{all}");
 }
+
+#[test]
+fn profile_counts_guide_inlining() {
+    let d = fresh("profile");
+    std::fs::write(d.join("p.ssp"), "fn hot(x: Int) -> Int\n= x * 3 + 1\n\nfn cold(x: Int) -> Int\n= x - 1\n\nfn run(n: Int) -> Int\n= do\n  var s = 0\n  for i in 0..n\n    s := s + hot(i)\n  if s < 0 then cold(s) else s\n\nfn main() -> Unit ! log\n= log(\"{run(100)}\")\n").unwrap();
+    let go = |args: &[&str]| {
+        let o = Command::new(env!("CARGO_BIN_EXE_sspur")).args(args).current_dir(&d).env("SSPUR_CACHE", d.join("cache")).output().unwrap();
+        String::from_utf8_lossy(&o.stdout).to_string() + &String::from_utf8_lossy(&o.stderr)
+    };
+    let before = go(&["explain-opt", "p.ssp", "--all"]);
+    assert!(before.contains("run  inline\n    cold(s)"), "{before}");
+    let out = go(&["run", "--profile", "p.ssp"]);
+    assert!(out.starts_with("14950\nprofile: 3 functions, 102 calls"), "{out}");
+    let after = go(&["explain-opt", "p.ssp", "--all"]);
+    assert!(after.contains("run  inline\n    hot(i)") && after.contains("note  run: not inlining cold: cost: profile: never called"), "{after}");
+}

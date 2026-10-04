@@ -31,6 +31,8 @@ const USAGE: &str = "usage:
   verify proves pre/post/where clauses with z3 and reports proved, counterexample, or unknown per clause
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
   --O3 raises the optimization level; fuzz --differential compares native against the interpreter
+  sspur explain-opt file.ssp [--all]    show the proven rewrites applied before native codegen (--all adds rejected candidates)
+  sspur run --profile file.ssp          run in the interpreter and record call counts that guide inlining (ADR 0022)
   sspur build --target riscv64-qemu|aarch64-qemu file.ssp [-o kernel.elf]  build a 'profile bare' kernel (freestanding C, clang, ld.lld)
   sspur gpu file.ssp [--emit metal|opencl|spirv|ptx] [-o out]  emit the kernel fns as Metal, OpenCL C, SPIR-V or PTX (ADR 0020)
   sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status   (sspur deploy for details; ADR 0016, 0019; never calls AWS)
@@ -355,6 +357,22 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        "run" if args.has("--profile") => {
+            let it = interp(&loaded);
+            *it.calls.borrow_mut() = Some(Default::default());
+            let r = it.run_main();
+            let calls = it.calls.borrow_mut().take().unwrap_or_default();
+            if let Some(p) = sspur_native::cgen::opt::save_profile(&loaded.module, &calls) {
+                eprintln!("profile: {} functions, {} calls, written to {}", calls.len(), calls.values().sum::<u64>(), p.display());
+            }
+            match r {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("runtime error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         "explain-opt" => explain_opt(&loaded, args.has("--all")),
         "run" => match native_interp(&loaded, args).run_main() {
             Ok(()) => ExitCode::SUCCESS,

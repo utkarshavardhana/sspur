@@ -117,6 +117,7 @@ The compiler is a service. Every answer is compact JSON.
 - Every compile artifact is keyed by `(node hash, target, profile, opt level)`: typed IR, MIR, object code, proofs.
 - The cache is local, then team, then global, and is content-addressed. Rebuilding an unchanged node never happens anywhere.
 - Linking is incremental per root. A one-node change costs one node compile plus a relink.
+- As built (ADR 0021, 0022): type checking is cached per definition. Native objects are cached per definition by the text of their C unit, which contains the definition, its specializations, the signatures of its callees and the bodies of the small callees it inlines; the program library is a relink of cached objects. Proven rewrites run before codegen, so their effect is part of each unit's text.
 
 ## 9. Storage
 

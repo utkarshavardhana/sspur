@@ -100,6 +100,7 @@ pub struct Interp {
     pub fuel: Cell<u64>,
     native: Option<sspur_native::Compiled>,
     pub bypass_native: Cell<bool>,
+    pub calls: RefCell<Option<std::collections::BTreeMap<String, u64>>>,
     pub float_sums: HashSet<(u32, u32)>,
     ops: HashSet<String>,
     gen_loops: HashSet<(u32, u32)>,
@@ -148,6 +149,7 @@ impl Interp {
             fuel: Cell::new(u64::MAX),
             native: None,
             bypass_native: Cell::new(false),
+            calls: RefCell::new(None),
             float_sums: HashSet::new(),
             ops: ["yield", "log"].iter().map(|s| s.to_string()).collect(),
             gen_loops,
@@ -518,6 +520,9 @@ impl Interp {
         let d = self.depth.get() + 1;
         if d > MAX_DEPTH {
             return trap(format!("stack overflow in {}", f.name));
+        }
+        if let Some(c) = self.calls.borrow_mut().as_mut() {
+            *c.entry(f.name.clone()).or_insert(0) += 1;
         }
         self.depth.set(d);
         let r = self.call_fn_inner(f, args, parent);

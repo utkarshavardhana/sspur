@@ -59,3 +59,64 @@ The spread between runs of the same build is about 5 to 10%; no benchmark moves 
 
 - `profile bare` kernels and `export-c` libraries still build as one unit with positional ids.
 - An edit that changes a type or a widely used helper's text recompiles every unit that includes it.
+
+## 2. Proven rewrites
+
+### Delivered
+
+An AST optimizer (`sspur-native/src/cgen/opt.rs`) runs before lowering and C generation in `compile_release`. It rewrites function bodies, prints the module, re-parses and re-typechecks it, and hands the result to codegen. `sspur explain-opt file.ssp [--all]` prints each applied rewrite with its proof and cost note (and, with `--all`, every rejected candidate with the reason). `SSPUR_OPT=0` turns it off.
+
+| Rule | Rewrite | Proof obligation | Discharged by |
+|---|---|---|---|
+| `inline` | `f(a, b)` to `f`'s body with `a`, `b` substituted, or bound by fresh `let`s in argument order | `f` has no effects, contracts, refined parameter or result types, `return`, `raise`, `catch`, handlers or local functions, is not in a call-graph cycle, and no free name of its body is bound at the call site | construction |
+| `fold` | `2 + 3` to `5`, comparisons and `not` of literals, `true and x` to `x`, `x + 0`, `x * 1` and `1 * x` on Int, `if true/false` | the exact 128-bit result lies in Int range and the divisor is non-zero, so no trap is removed; identities hold for every Int | construction |
+| `dead-branch` | `if c then a else b` to the live branch | `c` is pure, cannot trap, and is constant under the facts in scope: parameter refinements, alias refinements, `pre`, enclosing conditions, `let`s and `for` ranges | intervals (the prover's `raw_op`) or Z3 (`sspur-smt`'s solver, with 64-bit bounds, the facts and their overflow-freedom asserted) |
+| `map-map` | `xs.map(f).map(g)` to `xs.map(x => g(f(x)))`, also across function boundaries after inlining | both stages pure; trap order unchanged: at most one stage can trap, or every possible trap is the same element-independent kind (`integer overflow` or `division by zero`) | construction or intervals |
+| `loop-fusion` | `src.map(..).filter(..)...sum` or `.len` to one `for` loop with an accumulator | stages pure; the same trap-order condition over the stages and the consumer (an Int `sum` can overflow) | construction or intervals |
+
+### Decisions
+
+| # | Decision | Reason |
+|---|---|---|
+| 1 | Preserved semantics: the value, the raised error, and the trap and its message. Out-of-fuel, out-of-memory and stack-depth traps are resource limits and are not preserved | The same equivalence the differential fuzzer already uses; inlining removes frames, fusion removes allocations |
+| 2 | Trap sets are computed per stage over abstract values (Int intervals, records with per-field intervals) flowing from the source through the stages; a record literal's `where` checks are discharged when the field's interval is inside the refinement | `(0..n).map(i => Item{qty: i % 7 + 1, ..})` is trap-free, so the pipeline after it may be reordered |
+| 3 | An unknown construct (calls to recursive or effectful functions, partial methods, `match`) makes a stage "may trap with anything", which blocks reordering unless every other stage is trap-free | Unknown is never assumed safe |
+| 4 | Rewrites happen on the AST, then the module is printed, parsed and checked again. A function whose rewritten text does not parse or typecheck keeps its original body | Codegen and its type information stay unchanged, and every optimized program is a valid program |
+| 5 | Inlined callees with shadowing or capture risk are skipped; let-bound arguments are only introduced in statement positions | Hygiene without a renaming pass |
+| 6 | Generated names are fresh (`x7_`, `acc3_`) against every identifier in the module | No capture |
+| 7 | `sys` and `bare` modules are not optimized | Ownership and destructor semantics are checked on the original text |
+
+### Verification
+
+- `tests/programs/rewrites.ssp` exercises every rule, including the rejected cases: `shaky` (a division trap and an index trap, not fused) and `first_trap` (overflow plus division by zero in one stage, not fused). `sspur fuzz --differential` is clean on it, also with `--edge`, and on all 48 `tests/programs` files.
+- The 199-program corpus is identical (258/258 functions native); 16 corpus programs get rewrites (inlining and loop fusion).
+- `explain_opt_lists_proven_rewrites` checks the command output, including a Z3 proof of `lo > hi` being false under `pre lo <= hi`.
+
+## 3. Cost-driven choices
+
+The optimizer estimates instructions per evaluation for each node: 1 per literal or name, 2 per checked arithmetic operation, 24 per allocation, 8 per call, and per element of a list operation, with ranges of literal bounds counted exactly and other lists assumed to hold 1000 elements. Allocation of a materialized list element costs 6.
+
+| Choice | Rule |
+|---|---|
+| Inline or call | Inline when the callee is at most 40 instructions, or when inlining exposes a pipeline (the callee builds a list that the call site consumes with `map`/`filter`/`sum`/`len`, or consumes its parameter with one and the argument is a pipeline) |
+| Fused loop or method chain | Keep the chain when native codegen fuses it in place (its lambdas are simple and can raise at most one trap kind, ADR 0008), since that path vectorizes and parallelizes; otherwise build the loop when its estimate (`n * (stages + 2)`) beats the materialized one (`n * (stages + 6 per list)`) |
+| `map.map` | Compose only when native codegen would not fuse the pair itself |
+| Profile | `sspur run --profile file.ssp` runs the interpreter with call counting and writes `~/.cache/sspur/profile/<module hash>.json`. With a profile, never-called callees are not inlined and callees with at least 10 000 calls are inlined up to 160 instructions |
+
+Parallel versus sequential stays a runtime decision (the timed warm-up of ADR 0011), which already uses measured costs.
+
+### Result (best of 5, interleaved, seconds; optimizer off / on)
+
+| Benchmark | Off | On | Rewrites |
+|---|---|---|---|
+| simd | 0.275 | 0.235 | `shifted(xs, r).sum` inlined, so native code fuses `xs.map(x => x * 5 - r).sum` instead of building a 1M-element list 40 times |
+| typical | 0.153 (85 MB peak) | 0.140 (15 MB peak) | `order_total(make_items(n))` inlined twice and fused into one loop; no 3M-record list |
+| compute_big, strings_big, app, churn, parallel | | | no rewrites, same code; differences are run-to-run noise |
+
+The simd gain is 15% and repeats across runs (0.268 to 0.223, 0.274 to 0.234). On typical the time difference is within noise, but peak memory drops 5.7x. The orders part alone (`orders_bench(3000000)`) goes from 62 ms to 55 ms and 76 MB to 6 MB.
+
+### Not done
+
+- Rewrites inside `match` arms use no facts from the pattern; `match` stages are not analyzed for traps.
+- No float rewrites (signed zero and NaN make most identities unsound).
+- The profile records call counts only, not list lengths per pipeline.

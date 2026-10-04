@@ -1,0 +1,44 @@
+kernel fn saxpy(a: F32, x: &[F32], y: &mut [F32]) @grid(y.len, 256)
+  pre x.len == y.len
+= y[gid] := a * x[gid] + y[gid]
+
+kernel fn partial(x: &[F32], out: &mut [F32], chunks: Int) @grid(out.len, 64)
+= do
+  var acc = 0.0
+  for k in 0..chunks
+    i = gid + k * out.len
+    if i < x.len then acc := acc + x[i]
+  out[gid] := acc
+
+kernel fn matmul(a: &[F32], b: &[F32], c: &mut [F32], n: Int) @grid(n * n, 64)
+= do
+  row = gid / n
+  col = gid % n
+  var acc = 0.0
+  for k in 0..n
+    acc := acc + a[row * n + k] * b[k * n + col]
+  c[gid] := acc
+
+kernel fn scale_rows(m: &mut [I32], w: Int, f: I32) @grid(m.len / w, 32)
+= do
+  for j in 0..w
+    m[gid * w + j] := m[gid * w + j] * f
+
+fn main() ! dev, log
+= do
+  xs = (0..1000).map(i => i.to_f64 * 0.5)
+  var ys = (0..1000).map(i => 1.0 / (i + 1).to_f64)
+  saxpy(1.5, &xs, &mut ys)
+  log("saxpy {ys[0]} {ys[1]} {ys[999]} {ys.sum}")
+  var parts = (0..16).map(i => 0.0)
+  partial(&xs, &mut parts, 63)
+  log("sum {parts.sum} first {parts[0]}")
+  n = 8
+  a = (0..n * n).map(i => (i % 7).to_f64 - 3.0)
+  b = (0..n * n).map(i => (i % 5).to_f64 * 0.25)
+  var c = (0..n * n).map(i => 0.0)
+  matmul(&a, &b, &mut c, n)
+  log("matmul {c[0]} {c[9]} {c.sum}")
+  var m = (0..24).map(i => i - 12)
+  scale_rows(&mut m, 6, -3)
+  log("rows {m}")

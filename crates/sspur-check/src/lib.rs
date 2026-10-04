@@ -3,6 +3,7 @@ mod builtins;
 pub mod own;
 mod deploy;
 mod json;
+pub mod kernel;
 pub mod types;
 
 use serde::Serialize;
@@ -50,6 +51,7 @@ pub struct CheckOutput {
     pub own: own::OwnInfo,
     pub stores: BTreeMap<String, (Type, Type)>,
     pub json_types: HashMap<(u32, u32), Type>,
+    pub kernels: BTreeMap<String, kernel::Kernel>,
 }
 
 pub type ExprKey = (u32, u32, u8);
@@ -177,6 +179,8 @@ struct Checker {
     stores: BTreeMap<String, (Type, Type)>,
     json_sites: Vec<((u32, u32), Type, Span, bool)>,
     refined_names: HashSet<String>,
+    kernel_sigs: HashMap<String, Vec<kernel::KParam>>,
+    kernels: BTreeMap<String, kernel::Kernel>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -266,6 +270,8 @@ pub fn check(m: &Module) -> CheckOutput {
         stores: BTreeMap::new(),
         json_sites: vec![],
         refined_names: HashSet::new(),
+        kernel_sigs: HashMap::new(),
+        kernels: BTreeMap::new(),
     };
     c.load_builtins();
     if c.sys {
@@ -363,7 +369,7 @@ pub fn check(m: &Module) -> CheckOutput {
         let found = bare::check(m, &tables);
         c.diags.extend(found);
     }
-    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info, stores: c.stores, json_types }
+    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info, stores: c.stores, json_types, kernels: c.kernels }
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -664,6 +670,13 @@ impl Checker {
                         self.check_extern(f);
                         self.scheme_of(&sspur_syntax::ffi::sspur_view(f))
                     }
+                    None if f.kernel.is_some() => {
+                        let ps: Vec<kernel::KParam> = f.params.iter().filter_map(|p| kernel::param_type(&p.ty).ok().map(|(ty, slice)| kernel::KParam { name: p.name.clone(), ty, slice })).collect();
+                        if ps.len() == f.params.len() {
+                            self.kernel_sigs.insert(f.name.clone(), ps);
+                        }
+                        self.scheme_of(&kernel::host_view(f))
+                    }
                     None => self.scheme_of(f),
                 };
                 self.fns.insert(f.name.clone(), s);
@@ -754,6 +767,10 @@ impl Checker {
         if f.ext.is_some() {
             return;
         }
+        if f.kernel.is_some() {
+            self.check_kernel(f);
+            return;
+        }
         self.cur_def = Some(f.name.clone());
         if f.interrupt.is_some() && !self.bare {
             self.push_diag("E_PROFILE", "error", f.sig_span, "interrupt handlers need 'profile bare'".into(), Some("add 'profile bare' as the first line".into()), vec![]);
@@ -766,6 +783,79 @@ impl Checker {
         self.report_holes();
         self.tparams.clear();
         self.cur_def = None;
+    }
+
+    fn check_kernel(&mut self, f: &FnDef) {
+        self.cur_def = Some(f.name.clone());
+        if self.bare {
+            self.push_diag("E_PROFILE_BARE", "error", f.sig_span, "kernel fns need a GPU host runtime, which bare code doesn't have".into(), None, vec![]);
+        }
+        match kernel::lower(f) {
+            Ok(k) => {
+                for (p, w) in k.params.iter().zip(&k.writes) {
+                    if p.slice == Some(true) && !w {
+                        self.push_diag("W_KERNEL_UNWRITTEN", "warning", f.sig_span, format!("{} declares '&mut {}' but never writes it", f.name, p.name), Some(format!("declare it '&[{}]'", p.ty.name())), vec![]);
+                    }
+                }
+                self.kernels.insert(f.name.clone(), k);
+            }
+            Err(es) => {
+                for e in es {
+                    self.push_diag(e.code, "error", e.span, e.msg, e.hint, vec![]);
+                }
+            }
+        }
+        self.cur_def = None;
+    }
+
+    fn infer_launch(&mut self, name: &str, ps: &[kernel::KParam], args: &[Expr], span: Span) -> Type {
+        if args.len() != ps.len() {
+            self.err("E_ARITY", span, format!("kernel '{name}' takes {} argument(s), got {}", ps.len(), args.len()));
+            for a in args {
+                self.infer(a, None);
+            }
+            return Type::unit();
+        }
+        let mut borrowed: Vec<(String, bool, Span)> = Vec::new();
+        for (a, p) in args.iter().zip(ps) {
+            let host = Type::con(p.ty.host());
+            let Some(mutable) = p.slice else {
+                let t = self.infer(a, Some(&host));
+                self.expect(&host, &t, a.span);
+                continue;
+            };
+            let want = if mutable { "&mut " } else { "&" };
+            let inner = match &a.kind {
+                ExprKind::Unary(op @ (UnOp::Ref | UnOp::RefMut), x) if (*op == UnOp::RefMut) == mutable => x,
+                _ => {
+                    self.push_diag("E_KERNEL_ARG", "error", a.span, format!("slice parameter '{}' of {name} is passed as {want}x", p.name), Some(format!("write {want}{}", printer::expr(a, 0).trim_start_matches("&mut ").trim_start_matches('&'))), vec![]);
+                    self.infer(a, None);
+                    continue;
+                }
+            };
+            let lt = Type::list(host.clone());
+            let t = self.infer(inner, Some(&lt));
+            self.pending_types.push((expr_key(a), t.clone()));
+            self.expect(&lt, &t, inner.span);
+            match &inner.kind {
+                ExprKind::Name(n) => {
+                    if mutable && !self.lookup(n).is_some_and(|l| l.mutable) {
+                        self.push_diag("E_BORROW_IMMUTABLE", "error", inner.span, format!("'{n}' is written by {name}, so it must be a var"), Some(format!("declare it with 'var {n} = ...'")), vec![]);
+                    }
+                    if let Some((_, m, _)) = borrowed.iter().find(|(b, _, _)| b == n)
+                        && (*m || mutable) {
+                            self.push_diag("E_BORROW_CONFLICT", "error", inner.span, format!("'{n}' is passed to {name} twice while one of the slices is &mut"), None, vec![]);
+                        }
+                    borrowed.push((n.clone(), mutable, inner.span));
+                }
+                _ if mutable => {
+                    self.push_diag("E_KERNEL_ARG", "error", inner.span, format!("&mut needs a var holding the list for '{}' of {name}", p.name), None, vec![]);
+                }
+                _ => {}
+            }
+        }
+        self.add_effect("dev".into(), span, None);
+        Type::unit()
     }
 
     fn local_fn_type(&mut self, s: &Scheme) -> Type {
@@ -1360,6 +1450,10 @@ impl Checker {
                         return Type::con(n);
                     }
                     if self.lookup(n).is_none()
+                        && let Some(ps) = self.kernel_sigs.get(n).cloned() {
+                            return self.infer_launch(n, &ps, args, e.span);
+                        }
+                    if self.lookup(n).is_none()
                         && let Some(s) = self.fns.get(n).or_else(|| self.globals.get(n)).cloned() {
                             return self.call_scheme(&s, n, None, args, e.span);
                         }
@@ -1668,6 +1762,9 @@ impl Checker {
                 self.err("E_CTOR_FIELDS", span, format!("constructor '{n}' needs its fields: {n}{{...}}"));
             }
             return self.ctor_type(&info).0;
+        }
+        if self.kernel_sigs.contains_key(n) {
+            self.push_diag("E_KERNEL_VALUE", "error", span, format!("kernel '{n}' can only be called, which launches it"), None, vec![]);
         }
         if let Some(s) = self.fns.get(n).or_else(|| self.globals.get(n)).cloned() {
             let (params, ret, atoms, rvars, fails, ueffs) = self.instantiate(&s);

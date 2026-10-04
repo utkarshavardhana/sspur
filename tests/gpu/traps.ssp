@@ -1,0 +1,91 @@
+kernel fn shift(x: &[F32], y: &mut [F32]) @grid(y.len, 32)
+= y[gid] := x[gid + 1]
+
+kernel fn times(m: &mut [I32], k: I32) @grid(m.len, 32)
+= m[gid] := m[gid] * k
+
+kernel fn inv(m: &mut [Int]) @grid(m.len, 32)
+= m[gid] := 100 / m[gid]
+
+kernel fn decr(u: &mut [U32]) @grid(u.len, 32)
+= u[gid] := u[gid] - 1
+
+kernel fn guarded(x: &[F32], y: &mut [F32]) @grid(y.len, 32)
+  pre x.len == y.len
+= y[gid] := x[gid] * 2.0
+
+kernel fn tiny(y: &mut [F32], s: F32) @grid(y.len, 32)
+= y[gid] := y[gid] * s
+
+kernel fn mixed(a: &[I32], b: &[U32], f: &mut [F64]) @grid(f.len, 8)
+= do
+  x = a[gid].to_int + b[gid].to_int
+  f[gid] := if x % 2 == 0 then x.to_f64.sqrt else -x.to_f64
+
+kernel fn conv(a: &[Int], b: &mut [I32]) @grid(a.len, 8)
+= b[gid] := a[gid].to_i32
+
+test oob_read = do
+  var ys = [0.0, 0.0, 0.0]
+  shift(&[1.0, 2.0, 3.0], &mut ys)
+  ys == [2.0, 3.0, 0.0]
+
+test shift_ok = do
+  var ys = [0.0, 0.0]
+  shift(&[1.0, 2.0, 3.0], &mut ys)
+  ys == [2.0, 3.0]
+
+test i32_overflow = do
+  var m = (0..100).map(i => i * 1000)
+  times(&mut m, 30000)
+  m[1] == 30000000
+
+test i32_ok = do
+  var m = (0..100).map(i => i - 50)
+  times(&mut m, -7)
+  m[0] == 350 and m[99] == -343
+
+test div_zero = do
+  var m = (0..80).map(i => 70 - i)
+  inv(&mut m)
+  m[0] == 1
+
+test u32_underflow = do
+  var u = [3, 2, 1, 0, 5]
+  decr(&mut u)
+  u == [2, 1, 0, 0, 4]
+
+test pre_violation = do
+  var ys = [1.0]
+  guarded(&[1.0, 2.0], &mut ys)
+  true
+
+test element_range = do
+  var m = [1, 2, 3000000000]
+  times(&mut m, 2)
+  true
+
+test scalar_range = do
+  var m = [1, 2]
+  times(&mut m, 3000000000)
+  true
+
+test f32_rounding = do
+  var ys = [0.1, 1.0e-30, 3.0e38, -2.5]
+  tiny(&mut ys, 1.0e-10)
+  ys[1] > 0.0 and ys[1] < 1.0e-39 and ys[0] != 0.1 * 1.0e-10
+
+test subnormal_input = do
+  var ys = [1.0e-40, 1.0]
+  tiny(&mut ys, 2.0)
+  ys[0] > 1.0e-40 and ys[1] == 2.0
+
+test mixed_types = do
+  var f = [0.0, 0.0, 0.0, 0.0]
+  mixed(&[1, -4, 7, 10], &[1, 1, 3, 4], &mut f)
+  f == [2.0.sqrt, 3.0, 10.0.sqrt, 14.0.sqrt]
+
+test narrowing = do
+  var b = [0, 0, 0]
+  conv(&[5, -2147483648, 2147483648], &mut b)
+  true

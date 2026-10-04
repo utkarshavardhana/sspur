@@ -116,13 +116,22 @@ pub fn print_sig(f: &FnDef) -> String {
             None => format!("{}: {}", p.name, ty(&p.ty)),
         })
         .collect();
-    let kw = if f.ext.is_some() { "extern fn" } else { "fn" };
+    let kw = if f.ext.is_some() {
+        "extern fn"
+    } else if f.kernel.is_some() {
+        "kernel fn"
+    } else {
+        "fn"
+    };
     let mut s = format!("{kw} {}{}({})", f.name, tparams(&f.tparams), params.join(", "));
     if let Some(r) = &f.ret {
         s.push_str(&format!(" -> {}", ty(r)));
     }
     if !f.effects.is_empty() {
         s.push_str(&format!(" ! {}", effects(&f.effects)));
+    }
+    if let Some(k) = &f.kernel {
+        s.push_str(&format!(" @grid({}, {})", expr(&k.grid, 0), expr(&k.group, 0)));
     }
     if let Some(x) = &f.ext {
         if let Some(l) = &x.lib {
@@ -197,6 +206,7 @@ pub fn ty(t: &Ty) -> String {
     match t {
         Ty::Named { name, args, .. } if args.is_empty() => name.clone(),
         Ty::Named { name, args, .. } if name == "&" => format!("&{}", ty(&args[0])),
+        Ty::Named { name, args, .. } if name == "[]" => format!("[{}]", ty(&args[0])),
         Ty::Named { name, args, .. } if matches!(name.as_str(), "&mut" | "own") => format!("{name} {}", ty(&args[0])),
         Ty::Named { name, args, .. } => format!("{}[{}]", name, args.iter().map(ty).collect::<Vec<_>>().join(", ")),
         Ty::Tuple(xs) => format!("({})", xs.iter().map(ty).collect::<Vec<_>>().join(", ")),
@@ -404,8 +414,15 @@ fn stmt(s: &Stmt, ind: usize) -> String {
         Stmt::Let(p, e) => format!("{} = {}", pat(p), expr(e, ind)),
         Stmt::Var(n, e) => format!("var {} = {}", n, expr(e, ind)),
         Stmt::Assign(n, e, _) => match &e.kind {
-            ExprKind::With(base, ups) if matches!(&base.kind, ExprKind::Name(b) if b == n) && ups.len() == 1 && ups[0].0.iter().all(|s| matches!(s, PathSeg::Field(_))) => {
-                format!("{n}.{} := {}", path(&ups[0].0, ind), expr(&ups[0].1, ind))
+            ExprKind::With(base, ups) if matches!(&base.kind, ExprKind::Name(b) if b == n) && ups.len() == 1 && !ups[0].0.is_empty() => {
+                let mut p = n.clone();
+                for seg in &ups[0].0 {
+                    match seg {
+                        PathSeg::Field(f) => p.push_str(&format!(".{f}")),
+                        PathSeg::Index(e) => p.push_str(&format!("[{}]", expr(e, ind))),
+                    }
+                }
+                format!("{p} := {}", expr(&ups[0].1, ind))
             }
             _ => format!("{} := {}", n, expr(e, ind)),
         },

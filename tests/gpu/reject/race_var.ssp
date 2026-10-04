@@ -1,0 +1,4 @@
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= do
+  var i = gid
+  y[i] := 1.0

@@ -1,0 +1,7 @@
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := 1.0
+
+fn main() ! dev
+= do
+  ys = [1.0]
+  k(&mut ys)

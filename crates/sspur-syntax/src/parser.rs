@@ -203,6 +203,15 @@ impl Parser {
             Tok::Kw("fn") => self.fn_def().map(Def::Fn),
             Tok::Kw("rule") => self.rule_def().map(Def::Fn),
             Tok::Ident(w) if w == "extern" && matches!(self.peek_at(1), Tok::Kw("fn")) => self.extern_def().map(Def::Fn),
+            Tok::Ident(w) if w == "kernel" && matches!(self.peek_at(1), Tok::Kw("fn")) => {
+                self.bump();
+                let mut f = self.fn_def_as(true)?;
+                if f.kernel.is_none() {
+                    return self.err("E_PARSE_KERNEL", "a kernel fn needs '@grid(threads, group)' after its signature");
+                }
+                f.span = start.to(f.span);
+                Ok(Def::Fn(f))
+            }
             Tok::Kw("test") => {
                 self.bump();
                 let name = self.expect_ident()?;
@@ -432,7 +441,7 @@ impl Parser {
     fn ty(&mut self) -> PResult<Ty> {
         if self.is_sym("&") {
             let span = self.bump().span;
-            let name = if matches!(self.peek(), Tok::Ident(m) if m == "mut") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Sym("(")) {
+            let name = if matches!(self.peek(), Tok::Ident(m) if m == "mut") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Sym("(" | "[")) {
                 self.bump();
                 "&mut"
             } else {
@@ -445,6 +454,12 @@ impl Parser {
             let span = self.bump().span;
             let inner = self.ty()?;
             return Ok(Ty::Named { name: "own".into(), args: vec![inner], span: span.to(self.prev_span()) });
+        }
+        if self.is_sym("[") {
+            let span = self.bump().span;
+            let inner = self.ty()?;
+            self.expect_sym("]")?;
+            return Ok(Ty::Named { name: "[]".into(), args: vec![inner], span: span.to(self.prev_span()) });
         }
         let base = if self.eat_sym("(") {
             let mut items = Vec::new();
@@ -578,6 +593,9 @@ impl Parser {
         let start = self.span();
         self.bump();
         let mut f = self.fn_header(start)?;
+        if f.kernel.is_some() {
+            return self.err("E_PARSE_KERNEL", "'@grid' belongs on a 'kernel fn'");
+        }
         if !f.pres.is_empty() || !f.posts.is_empty() || !f.examples.is_empty() {
             return self.err("E_PARSE_EXTERN", "extern functions have no contracts or examples");
         }
@@ -596,15 +614,22 @@ impl Parser {
     }
 
     fn fn_def(&mut self) -> PResult<FnDef> {
+        self.fn_def_as(false)
+    }
+
+    fn fn_def_as(&mut self, kernel: bool) -> PResult<FnDef> {
         let start = self.span();
         let mut f = self.fn_header(start)?;
+        if f.kernel.is_some() && !kernel {
+            return self.err("E_PARSE_KERNEL", "'@grid' belongs on a 'kernel fn'");
+        }
         if self.newline_then(|t| matches!(t, Tok::Sym("="))).is_some() {
             let Tok::Newline(c) = *self.peek() else { unreachable!() };
             self.line_indent = c;
             self.bump();
         }
         self.expect_sym("=")?;
-        f.body = self.block_or_seq()?;
+        f.body = if kernel && (self.assign_ahead() || self.place_assign_ahead()) { self.branch()? } else { self.block_or_seq()? };
         f.span = start.to(self.prev_span());
         Ok(f)
     }
@@ -616,6 +641,22 @@ impl Parser {
         let params = self.params()?;
         let ret = if self.eat_sym("->") { Some(self.ty()?) } else { None };
         let effects = if self.eat_sym("!") { self.effects()? } else { vec![] };
+        let kernel = if self.eat_sym("@") {
+            let at = self.prev_span();
+            if !matches!(self.peek(), Tok::Ident(g) if g == "grid") {
+                return self.err("E_PARSE_KERNEL", "expected 'grid' after '@'");
+            }
+            self.bump();
+            self.expect_sym("(")?;
+            let grid = self.expr()?;
+            self.expect_sym(",")?;
+            let group = self.expr()?;
+            self.expect_sym(")")?;
+            let _ = at;
+            Some(Box::new(KernelSpec { grid, group }))
+        } else {
+            None
+        };
         let sig_span = start.to(self.prev_span());
         let mut pres = Vec::new();
         let mut posts = Vec::new();
@@ -650,7 +691,7 @@ impl Parser {
             }
         }
         let body = Expr::new(ExprKind::Unit, self.prev_span());
-        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, trusted, interrupt, body, span: start.to(self.prev_span()), sig_span, ext: None })
+        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, trusted, interrupt, body, span: start.to(self.prev_span()), sig_span, ext: None, kernel })
     }
 
     fn expr_seq(&mut self) -> PResult<Expr> {
@@ -831,12 +872,60 @@ impl Parser {
         }
     }
 
-    fn field_assign_ahead(&self) -> bool {
-        let mut i = 1;
-        while matches!(self.peek_at(i), Tok::Sym(".")) && matches!(self.peek_at(i + 1), Tok::Ident(_)) {
-            i += 2;
+    fn place_assign_ahead(&self) -> bool {
+        if !matches!(self.peek(), Tok::Ident(_)) {
+            return false;
         }
-        matches!(self.peek_at(i), Tok::Sym(":="))
+        let mut i = 1;
+        let mut segs = 0;
+        loop {
+            match self.peek_at(i) {
+                Tok::Sym(".") if matches!(self.peek_at(i + 1), Tok::Ident(_)) => i += 2,
+                Tok::Sym("[") => {
+                    let mut depth = 0;
+                    loop {
+                        match self.peek_at(i) {
+                            Tok::Sym("[") => depth += 1,
+                            Tok::Sym("]") => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            Tok::Eof | Tok::Newline(_) => return false,
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                Tok::Sym(":=") => return segs > 0,
+                _ => return false,
+            }
+            segs += 1;
+        }
+    }
+
+    fn place_assign(&mut self) -> PResult<Stmt> {
+        let span = self.span();
+        let name = self.expect_ident()?;
+        let mut path = Vec::new();
+        loop {
+            if self.eat_sym(".") {
+                path.push(PathSeg::Field(self.expect_ident()?));
+            } else if self.eat_sym("[") {
+                path.push(PathSeg::Index(self.expr()?));
+                self.expect_sym("]")?;
+            } else {
+                break;
+            }
+        }
+        self.expect_sym(":=")?;
+        let value = self.expr()?;
+        let full = span.to(self.prev_span());
+        let base = Expr::new(ExprKind::Name(name.clone()), span);
+        let with = Expr::new(ExprKind::With(Box::new(base), vec![(path, value)]), full);
+        Ok(Stmt::Assign(name, with, span))
     }
 
     fn assign_ahead(&self) -> bool {
@@ -858,6 +947,11 @@ impl Parser {
     }
 
     fn branch(&mut self) -> PResult<Expr> {
+        if self.place_assign_ahead() {
+            let start = self.span();
+            let st = self.place_assign()?;
+            return Ok(Expr::new(ExprKind::Block(vec![st]), start.to(self.prev_span())));
+        }
         if !self.assign_ahead() {
             return self.block_or_expr();
         }
@@ -886,7 +980,7 @@ impl Parser {
             let guard = if self.eat_kw("if") { Some(self.expr()?) } else { None };
             self.expect_sym("=>")?;
             let saved = self.line_indent;
-            let body = if self.assign_ahead() { self.branch()? } else { self.block_or_seq()? };
+            let body = if self.assign_ahead() || self.place_assign_ahead() { self.branch()? } else { self.block_or_seq()? };
             self.line_indent = saved;
             arms.push(Arm { pat, guard, body });
         }
@@ -929,7 +1023,7 @@ impl Parser {
             };
             self.expect_sym("=>")?;
             let saved = self.line_indent;
-            let body = if self.assign_ahead() { self.branch()? } else { self.block_or_seq()? };
+            let body = if self.assign_ahead() || self.place_assign_ahead() { self.branch()? } else { self.block_or_seq()? };
             self.line_indent = saved;
             arms.push(Arm { pat, guard: None, body });
         }
@@ -1018,21 +1112,9 @@ impl Parser {
             self.bump();
             return Ok(vec![Stmt::Assign(name, self.expr()?, span)]);
         }
-        if let (Tok::Ident(name), Tok::Sym("."), Tok::Ident(_)) = (self.peek().clone(), self.peek_at(1), self.peek_at(2))
-            && self.field_assign_ahead() {
-                let span = self.span();
-                self.bump();
-                let mut path = Vec::new();
-                while self.eat_sym(".") {
-                    path.push(PathSeg::Field(self.expect_ident()?));
-                }
-                self.expect_sym(":=")?;
-                let value = self.expr()?;
-                let full = span.to(self.prev_span());
-                let base = Expr::new(ExprKind::Name(name.clone()), span);
-                let with = Expr::new(ExprKind::With(Box::new(base), vec![(path, value)]), full);
-                return Ok(vec![Stmt::Assign(name, with, span)]);
-            }
+        if self.place_assign_ahead() {
+            return Ok(vec![self.place_assign()?]);
+        }
         let saved = self.pos;
         if let Ok(p) = self.pat()
             && self.eat_sym("=") {
@@ -1168,7 +1250,7 @@ impl Parser {
             return Ok(Expr::new(ExprKind::Unary(UnOp::Not, Box::new(e)), start.to(self.prev_span())));
         }
         if self.eat_sym("&") {
-            let op = if matches!(self.peek(), Tok::Ident(m) if m == "mut") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Sym("(")) {
+            let op = if matches!(self.peek(), Tok::Ident(m) if m == "mut") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Sym("(" | "[")) {
                 self.bump();
                 UnOp::RefMut
             } else {

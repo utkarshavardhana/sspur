@@ -2,6 +2,7 @@
 mod builtins;
 mod ffi;
 pub mod fuzz;
+pub mod kernel;
 mod sched;
 mod stdlib;
 mod stdbig;
@@ -107,6 +108,7 @@ pub struct Interp {
     sched: sched::Sched,
     pub json_types: HashMap<(u32, u32), sspur_check::Type>,
     pub layouts: sspur_native::nval::Layouts,
+    kernels: RefCell<HashMap<String, Rc<sspur_check::kernel::Kernel>>>,
 }
 
 const MAX_DEPTH: u32 = 20_000;
@@ -154,6 +156,7 @@ impl Interp {
             sched: Default::default(),
             json_types: HashMap::new(),
             layouts: Default::default(),
+            kernels: RefCell::new(HashMap::new()),
         };
         for d in &m.defs {
             match d {
@@ -432,6 +435,53 @@ impl Interp {
         }
         let globals = self.globals.clone();
         self.call_fn_in(f, args, &globals)
+    }
+
+    fn launch(&self, f: &FnDef, args: &[Expr], env: &Rc<Env>) -> R {
+        let k = match self.kernels.borrow().get(&f.name).cloned() {
+            Some(k) => k,
+            None => match sspur_check::kernel::lower(f) {
+                Ok(k) => Rc::new(k),
+                Err(_) => return trap(format!("kernel {} did not check", f.name)),
+            },
+        };
+        self.kernels.borrow_mut().insert(f.name.clone(), k.clone());
+        let mut vals = Vec::with_capacity(args.len());
+        let mut cells = Vec::new();
+        for (i, (a, p)) in args.iter().zip(&k.params).enumerate() {
+            let place = match &a.kind {
+                ExprKind::Unary(UnOp::Ref | UnOp::RefMut, x) => &**x,
+                _ => a,
+            };
+            if p.slice == Some(true)
+                && let ExprKind::Name(n) = &place.kind
+                && let Some(c) = env.cell(n)
+            {
+                cells.push((i, c));
+            }
+            vals.push(self.eval(place, env)?);
+        }
+        let mut kargs = Vec::with_capacity(vals.len());
+        for (v, p) in vals.iter().zip(&k.params) {
+            kargs.push(match (p.slice, v) {
+                (None, v) => kernel::Arg::Scalar(kernel::to_kv(p.ty, v, &|| format!("argument {} of {}", p.name, f.name))?),
+                (Some(_), Value::List(xs)) => {
+                    let mut out = Vec::with_capacity(xs.len());
+                    for (j, x) in xs.iter().enumerate() {
+                        out.push(kernel::to_kv(p.ty, x, &|| format!("element {j} of {}", p.name))?);
+                    }
+                    kernel::Arg::Slice(out)
+                }
+                (Some(_), v) => return trap(format!("dev: {} expects a list, got {v}", p.name)),
+            });
+        }
+        kernel::run(f, &k, &mut kargs)?;
+        for (i, c) in cells {
+            if let kernel::Arg::Slice(xs) = &kargs[i] {
+                *c.borrow_mut() = Value::list(xs.iter().map(|x| kernel::from_kv(*x)).collect());
+            }
+        }
+        Ok(Value::Unit)
     }
 
     fn call_fn_in(&self, f: &FnDef, args: Vec<Value>, parent: &Rc<Env>) -> R {
@@ -809,6 +859,9 @@ impl Interp {
                             return Ok(Value::New(n.as_str().into(), Rc::new(v)));
                         }
                         if let Some(fd) = self.fns.get(n).cloned() {
+                            if fd.kernel.is_some() {
+                                return self.launch(&fd, args, env);
+                            }
                             let a = if self.sys { self.arg_values(&fd, &args.iter().collect::<Vec<_>>(), env)? } else { self.eval_args(args, env)? };
                             return self.call_fn(&fd, a);
                         }

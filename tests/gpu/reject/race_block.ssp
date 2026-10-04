@@ -1,0 +1,4 @@
+kernel fn k(y: &mut [F32], w: Int) @grid(y.len, 64)
+= do
+  for j in 0..w + 1
+    y[gid * w + j] := 0.0

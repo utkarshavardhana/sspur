@@ -130,6 +130,13 @@ pub struct FnDef {
     pub span: Span,
     pub sig_span: Span,
     pub ext: Option<Extern>,
+    pub kernel: Option<Box<KernelSpec>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct KernelSpec {
+    pub grid: Expr,
+    pub group: Expr,
 }
 
 #[derive(Clone, Debug, PartialEq)]

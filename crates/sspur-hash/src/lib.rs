@@ -377,6 +377,11 @@ impl<'a> Hasher<'a> {
                     enc.tag(b'Q');
                     enc.str(v);
                 }
+                if let Some(k) = &f.kernel {
+                    enc.tag(b'K');
+                    self.expr(&mut enc, &k.grid, group);
+                    self.expr(&mut enc, &k.group, group);
+                }
                 self.expr(&mut enc, &f.body, group);
                 if let Some(x) = &f.ext {
                     enc.tag(b'C');

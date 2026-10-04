@@ -10,7 +10,9 @@ static id<MTLCommandQueue> g_queue;
 static NSMutableDictionary* g_pipes;
 static int g_state = -1;
 static int trace_on(void) { const char* t = getenv("SSPUR_GPU_TRACE"); return t && *t && *t != '0'; }
-int ss_gpu_ready(void) {
+#include <pthread.h>
+static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
+static int ready_locked(void) {
     if (g_state >= 0) return g_state;
     g_state = 0;
     const char* e = getenv("SSPUR_GPU");
@@ -70,8 +72,14 @@ static id<MTLComputePipelineState> pipe_slow(const char* src, const char* entry)
 }
 static id<MTLBuffer> g_flag, g_mask;
 static int g_mask_dirty;
-int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask_out) {
-    if (!ss_gpu_ready() || n <= 0 || n > 0x7fffffff) return 2;
+int ss_gpu_ready(void) {
+    pthread_mutex_lock(&g_mu);
+    int r = ready_locked();
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+static int run_locked(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask_out) {
+    if (!ready_locked() || n <= 0 || n > 0x7fffffff) return 2;
     @autoreleasepool {
         id<MTLComputePipelineState> ps = pipe_for(src, entry);
         if (!ps) return 2;
@@ -129,11 +137,20 @@ int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg
         }
         if (flagged) {
             g_mask_dirty = 1;
-            *mask_out = (const uint32_t*)[g_mask contents];
+            uint32_t* m = (uint32_t*)malloc(words * 4);
+            if (!m) return 3;
+            memcpy(m, [g_mask contents], words * 4);
+            *mask_out = m;
             return 1;
         }
     }
     return 0;
+}
+int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask_out) {
+    pthread_mutex_lock(&g_mu);
+    int r = run_locked(src, entry, nargs, args, n, group, masked, mask_out);
+    pthread_mutex_unlock(&g_mu);
+    return r;
 }
 void* ss_gpu_alloc(int64_t bytes, void** host) {
     if (!ss_gpu_ready()) return 0;

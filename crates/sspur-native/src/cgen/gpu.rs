@@ -882,13 +882,16 @@ static struct SsDev* ss_devs;
 static void ss_dev_reset(void) {
     while (ss_devs) { struct SsDev* d = ss_devs; ss_devs = d->next; if (d->dev) ss_gpu_free(d->dev); else free(d->host); free(d); }
 }
+static pthread_mutex_t ss_dev_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct SsDev* ss_dev_alloc(int64_t n, int64_t es) {
     struct SsDev* d = (struct SsDev*)calloc(1, sizeof(struct SsDev));
     d->len = n; d->es = es;
     if (ss_gpu_ready()) d->dev = ss_gpu_alloc(n * es, &d->host);
     if (!d->dev) d->host = calloc((size_t)(n ? n : 1), (size_t)es);
+    pthread_mutex_lock(&ss_dev_mu);
     d->next = ss_devs; ss_devs = d;
     ss_reset_hook = ss_dev_reset;
+    pthread_mutex_unlock(&ss_dev_mu);
     return d;
 }
 "#;
@@ -1025,6 +1028,7 @@ impl Cx<'_> {
                 let m = c_lit(&format!("dev: the GPU failed while running {name}"));
                 writeln!(s, "    if (r_ == 3) dev_fail(st, FIDX, {m}, -1, 0, 0);").unwrap();
                 writeln!(s, "    if (r_) kc_{name}({}, ss_n, r_ == 1 ? m_ : 0, st);", cargs.join(", ")).unwrap();
+                writeln!(s, "    if (m_) free((void*)m_);").unwrap();
             } else {
                 writeln!(s, "    if (r_) kc_{name}({}, ss_n, 0, st);", cargs.join(", ")).unwrap();
             }

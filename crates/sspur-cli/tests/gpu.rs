@@ -164,7 +164,7 @@ fn kernel_traps_are_identical_in_every_tier() {
     let interp = run(&["test", "--interp"], &path, &[]);
     assert!(interp.1.contains("FAIL  alias_trap: dev: arguments x and y of half are the same buffer"), "{}", interp.1);
     assert!(interp.1.contains("FAIL  wrap_trap: integer overflow"), "{}", interp.1);
-    assert!(interp.1.contains("3 passed, 3 failed"), "{}", interp.1);
+    assert!(interp.1.contains("4 passed, 3 failed"), "{}", interp.1);
     for env in [vec![], vec![("SSPUR_GPU", "0")]] {
         let native = run(&["test"], &path, &env);
         assert_eq!(interp.1, native.1, "{env:?}");

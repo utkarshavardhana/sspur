@@ -61,6 +61,12 @@ fn wrap(n: Int) -> List[Int] ! dev
   bump(&mut m)
   m.to_list
 
+fn both() -> Bool ! dev
+= do
+  (a, b) = par(steps(2000, 3), steps(3000, 2))
+  a == steps(2000, 3) and b == steps(3000, 2)
+
+test par_ok = both()
 test steps_ok = steps(1000, 4)[999] == 1.0 + 4.0 * 0.5 * 999.0
 test mixed_ok = mixed(4) == [0.0, 1.5, 3.0, 4.5, 0.0, 1.5, 3.0, 4.5]
 test shared_ok = shared(3) == [2, 4, 6]

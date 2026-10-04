@@ -5,7 +5,10 @@ type Pt = {x: Int, y: Int}
 res type Guard = {id: Int} drop release
 
 fn putc(c: Int) ! mmio
-= if arch() == "riscv64" then mmio[U8](0x10000000).write(c) else mmio[U32](0x09000000).write(c)
+= if arch() == "riscv64" then mmio[U8](0x10000000).write(c) else if arch() == "thumbv7em" then do
+    mmio[U32](0x40004008).write(1)
+    mmio[U32](0x40004000).write(c)
+  else mmio[U32](0x09000000).write(c)
 
 fn digit(n: Int) ! mmio
 = putc(48 + n % 10)

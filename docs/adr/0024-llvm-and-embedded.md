@@ -94,3 +94,29 @@ fn fence()
 | 7 | The parser stores `asm` as a method node named `asm` on the template with records `in`, `out`, `clobber` as arguments and the output types as type arguments; the printer prints it back in source form | Same approach as `mmio[W](a)` in ADR 0017: no new AST variant, so hashing, renaming and every traversal keep working |
 
 Verified: `tests/asm/host_aarch64.ssp` (counter reads, a two-instruction add, `sdiv`/`msub` with two outputs, `cset` into `Bool`, a `dmb` barrier) runs natively on the aarch64 host; `examples/bare/cycles.ssp` reads `mcycle` (riscv64) or `cntvct_el0` (aarch64), runs an asm arithmetic loop and prints `mix 63534 counter advanced` on both QEMU machines; the rejection codes and `sspur fmt` round trip are checked in `crates/sspur-cli/tests/bare.rs`.
+
+## 5. Cortex-M: `thumbv7em-mps2`
+
+`sspur build --target thumbv7em-mps2 file.ssp -o fw.elf` builds firmware for the Cortex-M4 class (`--target=thumbv7em-none-eabihf -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard`), laid out for the Arm MPS2 AN386 board, which QEMU emulates (`qemu-system-arm -M mps2-an386`). There is no hardware here, so QEMU is the test bench; the image has the structure a real MCU needs.
+
+| Piece | What it does |
+|---|---|
+| Linker script | `FLASH` at 0x0 (4 MB, code, read-only data and the `.data` load image) and `RAM` at 0x20000000 (4 MB, `.data`, `.bss`, 256 KB stack); `.vectors` first in flash |
+| Vector table | 64 entries in C: initial stack pointer, `ss_reset`, then one dispatcher for every other exception. It reads `IPSR`: SysTick (15) runs `interrupt timer`, external interrupts (16 + n) run `interrupt n` (the NVIC IRQ number), faults halt with status 63 |
+| Startup | `ss_reset` copies `.data` from its flash load address, zeroes `.bss`, enables CP10/CP11 in `CPACR` (the hard-float ABI may use FP registers), starts CMSDK timer 0 as a free-running counter for `ticks()`, and calls `main` |
+| Builtins | `timer_start` is a one-shot SysTick (24-bit, clamped), `tick_hz()` is 25 MHz, `irq_enable(n)` sets the NVIC enable bit and `cpsie i`, `wait_irq` is `wfi`, `halt(code)` is semihosting `SYS_EXIT_EXTENDED` (`bkpt 0xab`), so QEMU exits with the status |
+| 64-bit helpers | `Int` stays 64-bit on the 32-bit core. The freestanding runtime defines `__aeabi_ldivmod`, `__aeabi_uldivmod` (naked trampolines into C shift-subtract division with a 32-bit fast path), `__mulodi4` for checked multiplication and the `__aeabi_mem*` family, since there is no compiler-rt for the target |
+| Board I/O | Clock-free, from user code through `mmio`: CMSDK UART0 at 0x40004000 (enable TX in `CTRL`, poll `STATE`, write `DATA`) and the FPGA I/O LED register at 0x40028000 |
+
+`arch()` is `"thumbv7em"`. `examples/bare/hello.ssp` and `timer.ssp` gained a third UART branch and boot unchanged on all three targets. `examples/bare/m4_hello.ssp` (about 7 KB of code) prints:
+
+```
+hello from sspur on cortex-m4
+leds 2 primask 0 64-bit 710430
+irq 5 handled
+after irq
+```
+
+It writes and reads back the LED register, reads `PRIMASK` with inline asm, divides 64-bit values at runtime, and pends NVIC interrupt 5 through `STIR` to run an `interrupt 5` handler. The test harness boots it, `hello`, `timer` (SysTick), `tests/bare/values.ssp` (records, `Opt`, tuples, generics, drops, exit status 42) and the trap test (status 65) under QEMU with a 30-second limit, and skips when `qemu-system-arm` or a clang with the ARM backend is missing.
+
+Moving to a real board means a different memory map and UART, which is board data, not compiler work; a board description format is still future work.

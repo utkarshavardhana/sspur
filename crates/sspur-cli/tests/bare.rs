@@ -24,7 +24,8 @@ fn has(bin: &str) -> bool {
 }
 
 fn build(target: &str, src: &Path, out: &Path) -> Option<()> {
-    let qemu = if target.starts_with("riscv64") { "qemu-system-riscv64" } else { "qemu-system-aarch64" };
+    let qemu = sspur_native::bare::qemu_args(target, "")[0].clone();
+    let qemu = qemu.as_str();
     if !has(qemu) {
         eprintln!("skip: {qemu} not found");
         return None;
@@ -90,6 +91,17 @@ fn hello_boots_on_aarch64() {
 }
 
 #[test]
+fn hello_boots_on_cortex_m4() {
+    boots("thumbv7em-mps2", "hello", "hello from sspur\n");
+    boots("thumbv7em-mps2", "m4_hello", "hello from sspur on cortex-m4\nleds 2 primask 0 64-bit 710430\nirq 5 handled\nafter irq\n");
+}
+
+#[test]
+fn timer_interrupt_on_cortex_m4() {
+    boots("thumbv7em-mps2", "timer", "arming timer\ntimer interrupt\n");
+}
+
+#[test]
 fn timer_interrupt_on_riscv64() {
     boots("riscv64-qemu", "timer", "arming timer\ntimer interrupt\n");
 }
@@ -101,7 +113,7 @@ fn timer_interrupt_on_aarch64() {
 
 #[test]
 fn records_options_tuples_generics_and_drops_on_both_targets() {
-    for target in ["riscv64-qemu", "aarch64-qemu"] {
+    for target in ["riscv64-qemu", "aarch64-qemu", "thumbv7em-mps2"] {
         boots_with(target, "tests/bare/values.ssp", "107581\n7", 42);
     }
 }
@@ -109,7 +121,10 @@ fn records_options_tuples_generics_and_drops_on_both_targets() {
 const TRAP: &str = "profile bare
 
 fn putc(c: Int) ! mmio
-= if arch() == \"riscv64\" then mmio[U8](0x10000000).write(c) else mmio[U32](0x09000000).write(c)
+= if arch() == \"riscv64\" then mmio[U8](0x10000000).write(c) else if arch() == \"thumbv7em\" then do
+    mmio[U32](0x40004008).write(1)
+    mmio[U32](0x40004000).write(c)
+  else mmio[U32](0x09000000).write(c)
 
 fn on_trap(code: Int) ! mmio
 = do
@@ -126,7 +141,7 @@ fn main() -> Int
 
 #[test]
 fn traps_reach_the_halt_handler() {
-    for (target, exit) in [("riscv64-qemu", 65), ("aarch64-qemu", 65)] {
+    for (target, exit) in [("riscv64-qemu", 65), ("aarch64-qemu", 65), ("thumbv7em-mps2", 65)] {
         let d = scratch(&format!("trap-{target}"));
         let src = d.join("trap.ssp");
         std::fs::write(&src, TRAP).unwrap();

@@ -105,7 +105,7 @@ impl Cx<'_> {
         if let Some(v) = &f.interrupt {
             let ok = v == "timer" || v.parse::<u32>().is_ok_and(|n| n < 1024);
             if !ok {
-                self.err("E_INTERRUPT_VEC", f.sig_span, format!("unknown interrupt '{v}'"), Some("use 'interrupt timer' or the target's interrupt number (riscv64 mcause code, aarch64 GIC INTID)"));
+                self.err("E_INTERRUPT_VEC", f.sig_span, format!("unknown interrupt '{v}'"), Some("use 'interrupt timer' or the target's interrupt number (riscv64 mcause code, aarch64 GIC INTID, Cortex-M IRQ number)"));
             }
             if sig.as_ref().is_some_and(|(ps, r)| !ps.is_empty() || *r != Type::unit()) {
                 self.err("E_INTERRUPT_SIG", f.sig_span, format!("interrupt handler {} must take no parameters and return Unit", f.name), None);

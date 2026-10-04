@@ -1,0 +1,49 @@
+profile bare
+
+fn uart_init() ! mmio
+= mmio[U32](0x40004008).write(1)
+
+fn putc(c: Int) ! mmio, div
+= do
+  while mmio[U32](0x40004004).read.band(1) != 0
+    ()
+  mmio[U32](0x40004000).write(c)
+
+fn puts(s: Str) ! mmio, div
+= do
+  for i in 0..s.byte_len
+    putc(s.byte(i))
+
+fn put_int(n: Int) ! mmio, div
+= do
+  if n >= 10 then put_int(n / 10)
+  putc(48 + n % 10)
+
+fn leds(v: Int) -> Int ! mmio
+= do
+  r = mmio[U32](0x40028000)
+  r.write(v)
+  r.read.band(3)
+
+fn primask() -> Int
+  unsafe "reads the interrupt mask register"
+= asm "mrs {m}, primask" out(m: Int)
+
+fn on_irq5() ! mmio, div
+  interrupt 5
+= puts("irq 5 handled\n")
+
+fn main() ! mmio, div
+= do
+  uart_init()
+  puts("hello from sspur on cortex-m4\n")
+  puts("leds ")
+  put_int(leds(2))
+  puts(" primask ")
+  put_int(primask())
+  puts(" 64-bit ")
+  put_int(9000000000 / 7 % 1000003)
+  putc(10)
+  irq_enable(5)
+  mmio[U32](0xE000EF00).write(5)
+  puts("after irq\n")

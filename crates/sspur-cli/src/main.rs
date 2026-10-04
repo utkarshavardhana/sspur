@@ -35,7 +35,7 @@ const USAGE: &str = "usage:
   sspur build --backend llvm file.ssp [-o prog]  direct LLVM IR prototype for the scalar and record subset (ADR 0024)
   sspur explain-opt file.ssp [--all]    show the proven rewrites applied before native codegen (--all adds rejected candidates)
   sspur run --profile file.ssp          run in the interpreter and record call counts that guide inlining (ADR 0022)
-  sspur build --target riscv64-qemu|aarch64-qemu file.ssp [-o kernel.elf]  build a 'profile bare' kernel (freestanding C, clang, ld.lld)
+  sspur build --target riscv64-qemu|aarch64-qemu|thumbv7em-mps2 file.ssp [-o kernel.elf]  build a 'profile bare' kernel or Cortex-M4 firmware (freestanding C, clang, ld.lld)
   sspur gpu file.ssp [--emit metal|opencl|spirv|ptx] [-o out]  emit the kernel fns as Metal, OpenCL C, SPIR-V or PTX (ADR 0020)
   sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status   (sspur deploy for details; ADR 0016, 0019; never calls AWS)
   sspur sync serve [--port N] | push REMOTE | pull REMOTE | status | resolve ours|theirs [PATH]   replicate by hash (REMOTE: dir or tcp://host:port; ADR 0021)";

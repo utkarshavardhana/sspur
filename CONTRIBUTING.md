@@ -9,7 +9,7 @@ Thanks for taking the time. Bug reports, design questions and patches are all we
 - `z3` for `sspur verify` and proven check elimination
 - Optional: `qemu` and `lld` for `profile bare` kernels, Homebrew `llvm` for SPIR-V and PTX output
 
-On macOS: `brew install z3 qemu llvm lld`. On Ubuntu: `sudo apt install clang lld llvm z3`.
+On macOS: `brew install z3 qemu llvm lld`. On Ubuntu: `sudo apt install clang lld llvm z3 libcurl4-openssl-dev`.
 
 Tests that need QEMU, Metal or a GPU backend skip themselves when the tool is missing, so a machine with only clang and z3 runs the rest of the suite.
 

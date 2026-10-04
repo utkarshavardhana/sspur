@@ -134,6 +134,7 @@ export PATH="$PWD/target/release:$PATH"
 |---|---|
 | `z3` | `sspur verify` and SMT-based check elimination |
 | `qemu`, `lld` | building and booting `profile bare` kernels; `lld` also for `--lto` on Linux |
+| libcurl headers (`libcurl4-openssl-dev` on Debian or Ubuntu) | `sspur deploy local` on Linux |
 | Homebrew `llvm` | `sspur gpu --emit spirv` and `--emit ptx` (Apple's clang has neither backend) |
 
 On macOS: `brew install z3 qemu llvm lld`. On Ubuntu: `sudo apt install z3 qemu-system-misc qemu-system-arm lld llvm`. GPU kernels run on Metal on macOS and on the C fallback elsewhere.

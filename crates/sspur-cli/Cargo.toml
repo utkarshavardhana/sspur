@@ -2,6 +2,15 @@
 name = "sspur-cli"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Compiler, interpreter and agent tooling for SSPUR, a programming language for AI agents"
+readme = "../../README.md"
+keywords = ["language", "compiler", "agents", "effects", "contracts"]
+categories = ["compilers", "command-line-utilities"]
 
 [[bin]]
 name = "sspur"

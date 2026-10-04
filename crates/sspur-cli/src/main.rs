@@ -23,7 +23,7 @@ const USAGE: &str = "usage:
   sspur edit [file|-] [-e SRC] [--test] replace or add definitions by name (also 'rename A B', 'remove A' lines)
   sspur apply [tx.json|-] [-e JSON] [--test] apply a transaction of ops
   sspur q <query> [target] [--budget N] query the codebase (list sig body callers callees effects find pack why impact holes diag log)
-  sspur src | log | export | spec [--full] | mcp
+  sspur src | log | export | spec [--full] | mcp | --version
   sspur bind header.h [--lib NAME] [-o out.ssp]   generate extern declarations from a C header (uses clang)
   sspur export-c file.ssp [-o libfoo] [--shared] [--prefix P]  build a C library and header from the C-compatible functions
   add --json for machine output (apply, edit, q, check)
@@ -88,6 +88,10 @@ fn cwd_store() -> Option<Store> {
 
 fn real_main() -> ExitCode {
     let args = parse_args();
+    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "-V" | "version")) {
+        println!("sspur {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
     let Some(cmd) = args.pos.first().cloned() else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);

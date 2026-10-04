@@ -3,9 +3,13 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
+authors = ["Utkarsha Vardhana"]
+repository = "https://github.com/utkarshavardhana/sspur"
+homepage = "https://github.com/utkarshavardhana/sspur"
+rust-version = "1.88"
 
 [workspace.dependencies]
 sspur-syntax = { path = "crates/sspur-syntax" }

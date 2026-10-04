@@ -602,19 +602,22 @@ pub(super) fn lower(m: &Module, check: &CheckOutput) -> Option<Lowered> {
         let mut failed = None;
         for d in &m.defs {
             match d {
-                Def::Fn(f) if ok.contains(&f.name) => match lw.lower_fn(f) {
-                    Ok(gs) => {
-                        for g in gs {
-                            origin.insert(g.name.clone(), f.name.clone());
-                            defs.push(Def::Fn(g));
+                Def::Fn(f) if ok.contains(&f.name) => {
+                    lw.fresh = 0;
+                    match lw.lower_fn(f) {
+                        Ok(gs) => {
+                            for g in gs {
+                                origin.insert(g.name.clone(), f.name.clone());
+                                defs.push(Def::Fn(g));
+                            }
+                        }
+                        Err(e) => {
+                            why.insert(f.name.clone(), e);
+                            failed = Some(f.name.clone());
+                            break;
                         }
                     }
-                    Err(e) => {
-                        why.insert(f.name.clone(), e);
-                        failed = Some(f.name.clone());
-                        break;
-                    }
-                },
+                }
                 Def::Test(_) => {}
                 d => defs.push(d.clone()),
             }

@@ -201,9 +201,10 @@ struct Inner {
     index: HashMap<String, usize>,
     rich: HashMap<String, RichFn>,
     layouts: Layouts,
-    refines: Vec<(String, String, Type)>,
+    refines: HashMap<i64, (String, String, Type)>,
     free: Option<unsafe extern "C" fn(*mut i64)>,
-    err_types: Vec<Type>,
+    err_types: HashMap<i64, Type>,
+    fids: HashMap<i64, usize>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -273,7 +274,7 @@ impl Compiled {
         let entry = unsafe { std::mem::transmute::<*const u8, extern "C" fn(*const i64, *mut Status, *mut *mut i64, *mut i64) -> i64>(f.ptr) };
         let code = entry(words.as_ptr(), &mut st, &mut out, &mut out_len);
         if code == T_RAISE {
-            let t = self.inner.err_types.get(st.err_type as usize)?;
+            let t = self.inner.err_types.get(&st.err_type)?;
             let slice = unsafe { std::slice::from_raw_parts(st.rbuf, st.rlen as usize) };
             let mut pos = 0;
             let v = self.inner.layouts.decode(slice, &mut pos, t);
@@ -325,7 +326,7 @@ impl Compiled {
     }
 
     fn message(&self, st: &Status) -> String {
-        let f = self.inner.defs.get(st.func as usize);
+        let f = if self.inner.fids.is_empty() { self.inner.defs.get(st.func as usize) } else { self.inner.fids.get(&st.func).and_then(|i| self.inner.defs.get(*i)) };
         match (st.code, f) {
             (T_OVERFLOW, _) => "integer overflow".into(),
             (T_DIV_ZERO, _) => "division by zero".into(),
@@ -350,7 +351,7 @@ impl Compiled {
                 m
             }
             (T_REFINE, _) => {
-                let (ctx, expr, t) = &self.inner.refines[st.clause as usize];
+                let Some((ctx, expr, t)) = self.inner.refines.get(&st.clause) else { return "contract violated".into() };
                 let v = self.decode_rbuf(st, t).unwrap_or_else(|| scalar_display(t, st.value));
                 format!("contract violated: {ctx} where {expr} (value = {v})")
             }
@@ -544,7 +545,7 @@ pub(crate) fn assemble(defs: Vec<FnDef>, ptrs: HashMap<String, (*const u8, usize
         max_depth: std::cell::Cell::new(DEFAULT_MAX_DEPTH),
         functions,
         skipped,
-        inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich: HashMap::new(), layouts: Layouts::default(), refines: vec![], free: None, err_types: vec![] }),
+        inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich: HashMap::new(), layouts: Layouts::default(), refines: HashMap::new(), free: None, err_types: HashMap::new(), fids: HashMap::new() }),
     }
 }
 
@@ -556,9 +557,10 @@ pub(crate) fn assemble_rich(
     skipped: BTreeMap<String, String>,
     keep: Box<dyn std::any::Any>,
     layouts: Layouts,
-    refines: Vec<(String, String, Type)>,
+    refines: HashMap<i64, (String, String, Type)>,
     free: unsafe extern "C" fn(*mut i64),
-    err_types: Vec<Type>,
+    err_types: HashMap<i64, Type>,
+    fids: HashMap<i64, usize>,
 ) -> Compiled {
     let index: HashMap<String, usize> = defs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
     let mut functions: Vec<String> = rich.keys().cloned().collect();
@@ -567,7 +569,7 @@ pub(crate) fn assemble_rich(
         max_depth: std::cell::Cell::new(DEFAULT_MAX_DEPTH),
         functions,
         skipped,
-        inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich, layouts, refines, free: Some(free), err_types }),
+        inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich, layouts, refines, free: Some(free), err_types, fids }),
     }
 }
 

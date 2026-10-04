@@ -1,6 +1,6 @@
 use super::*;
 
-const STD_RT: &str = include_str!("std_rt.c");
+pub(super) const STD_RT: &str = include_str!("std_rt.c");
 
 pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits", "#HashMap", "#HashSet", "#BigInt", "#Dec", "#Regex", "#View"];
 

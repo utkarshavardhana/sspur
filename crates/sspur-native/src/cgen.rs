@@ -16,6 +16,7 @@ mod lower;
 mod own;
 mod prove;
 mod simd;
+mod split;
 mod stdlib;
 mod stdcx;
 mod stdfile;
@@ -795,7 +796,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (src, mut plan) = generate(m, check, None, None)?;
+    let (src, mut plan) = generate(m, check, None, None, true)?;
     plan.skipped.retain(|n, _| lower::original_name(n) == n);
     if let Some((_, _, why)) = &lowered {
         for (n, reason) in plan.skipped.iter_mut() {
@@ -804,7 +805,19 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
             }
         }
     }
-    let lib = build(&src, opt, &plan.links)?;
+    let lib = if split_mode(opt) {
+        match build_split(&src, opt, &plan) {
+            Ok(l) => l,
+            Err(e) => {
+                if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
+                    eprintln!("per-definition build failed, building the whole program: {e}");
+                }
+                build(&src, opt, &plan.links)?
+            }
+        }
+    } else {
+        build(&src, opt, &plan.links)?
+    };
     let library = unsafe { libloading::Library::new(&lib) }.map_err(|e| format!("cannot load {}: {e}", lib.display()))?;
     let mut scalar = HashMap::new();
     let mut rich = HashMap::new();
@@ -820,14 +833,9 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
     }
     let free: libloading::Symbol<unsafe extern "C" fn(*mut i64)> = unsafe { library.get(b"sspur_buf_free") }.map_err(|e| e.to_string())?;
     let free = *free;
-    let defs: Vec<FnDef> = m
-        .defs
-        .iter()
-        .filter_map(|d| match d {
-            Def::Fn(f) => Some(FnDef { name: lower::original_name(&f.name).to_string(), ..f.clone() }),
-            _ => None,
-        })
-        .collect();
+    let fn_defs: Vec<&FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f) } else { None }).collect();
+    let fids: HashMap<i64, usize> = fn_defs.iter().enumerate().filter_map(|(i, f)| plan.fids.get(&f.name).map(|id| (*id as i64, i))).collect();
+    let defs: Vec<FnDef> = fn_defs.iter().map(|f| FnDef { name: lower::original_name(&f.name).to_string(), ..(*f).clone() }).collect();
     let set_host: libloading::Symbol<unsafe extern "C" fn(*const crate::HostApi)> = unsafe { library.get(b"sspur_set_host") }.map_err(|e| e.to_string())?;
     unsafe { set_host(&crate::HOST) };
     if let Ok(set_args) = unsafe { library.get::<unsafe extern "C" fn(*const [usize; 2], i64)>(b"sspur_set_args") } {
@@ -835,7 +843,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         let views: Vec<[usize; 2]> = args.iter().map(|a| [a.len(), a.as_ptr() as usize]).collect();
         unsafe { set_args(views.as_ptr(), views.len() as i64) };
     }
-    Ok(assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines, free, plan.err_types))
+    Ok(assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines.into_iter().collect(), free, plan.err_types.into_iter().collect(), fids))
 }
 
 pub struct CProgram {
@@ -852,9 +860,9 @@ pub fn c_program(m: &Module, check: &CheckOutput) -> Result<CProgram, String> {
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (src, plan) = generate(m, check, None, None)?;
+    let (src, plan) = generate(m, check, None, None, false)?;
     let fns = plan.fns.into_iter().map(|(n, (p, r, _))| (n, (p, r))).collect();
-    Ok(CProgram { src, fns, skipped: plan.skipped, err_types: plan.err_types, refines: plan.refines })
+    Ok(CProgram { src, fns, skipped: plan.skipped, err_types: plan.err_types.into_iter().map(|(_, t)| t).collect(), refines: plan.refines.into_iter().map(|(_, r)| r).collect() })
 }
 
 pub fn c_source(m: &Module, check: &CheckOutput) -> String {
@@ -863,7 +871,7 @@ pub fn c_source(m: &Module, check: &CheckOutput) -> String {
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    match generate(m, check, None, None) {
+    match generate(m, check, None, None, false) {
         Ok((src, _)) => src,
         Err(e) => format!("/* {e} */\n"),
     }
@@ -875,16 +883,18 @@ pub fn export_c(m: &Module, check: &CheckOutput, prefix: &str) -> Result<export:
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (source, plan) = generate(m, check, Some(prefix), None)?;
+    let (source, plan) = generate(m, check, Some(prefix), None, false)?;
     let w = plan.export.ok_or("no export plan")?;
     Ok(export::Export { source, header: w.header, exported: w.exported, skipped: w.skipped, links: plan.links })
 }
 
 struct Plan {
-    err_types: Vec<Type>,
+    err_types: Vec<(i64, Type)>,
     fns: BTreeMap<String, (Vec<Type>, Type, bool)>,
     skipped: BTreeMap<String, String>,
-    refines: Vec<(String, String, Type)>,
+    refines: Vec<(i64, (String, String, Type))>,
+    owned: Vec<String>,
+    fids: HashMap<String, usize>,
     links: Vec<String>,
     export: Option<export::Wrappers>,
 }
@@ -895,12 +905,17 @@ pub fn bare_c(m: &Module, check: &CheckOutput, arch: &str) -> Result<String, Str
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    generate(m, check, None, Some(arch)).map(|(src, _)| src)
+    generate(m, check, None, Some(arch), false).map(|(src, _)| src)
 }
 
-fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Option<&str>) -> Result<(String, Plan), String> {
+fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Option<&str>, stable: bool) -> Result<(String, Plan), String> {
     let defs: Vec<&FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f) } else { None }).collect();
-    let index: HashMap<String, usize> = defs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect();
+    let index: HashMap<String, usize> = if stable {
+        let mut used = HashMap::new();
+        defs.iter().map(|f| (f.name.clone(), stable_slot(&mut used, f.name.clone()) as usize)).collect()
+    } else {
+        defs.iter().enumerate().map(|(i, f)| (f.name.clone(), i)).collect()
+    };
     let mut skipped = BTreeMap::new();
     let mut ok: HashSet<String> = HashSet::new();
     for f in &defs {
@@ -944,6 +959,7 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
     }
     loop {
         let mut cx = Cx::new(check, &ok, &alias_refines, &field_refines, &smt);
+        cx.stable = stable;
         cx.sys = matches!(m.profile.as_deref(), Some("sys" | "bare"));
         cx.bare = m.profile.as_deref() == Some("bare");
         cx.target = target.map(str::to_string);
@@ -1034,7 +1050,7 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
             } else {
                 writeln!(src, "void sspur_on_trap(int64_t c) {{ (void)c; }}").unwrap();
             }
-            let plan = Plan { fns: BTreeMap::new(), skipped, refines: vec![], err_types: vec![], links: vec![], export: None };
+            let plan = Plan { fns: BTreeMap::new(), skipped, refines: vec![], err_types: vec![], links: vec![], export: None, owned: vec![], fids: index.clone() };
             return Ok((src, plan));
         }
         if failed.is_empty() {
@@ -1095,7 +1111,10 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
             }
             plan_fns.retain(|n, (p, r, _)| !p.iter().chain([&*r]).any(|t| has_fn(t) || conc::opaque(&cx.layouts, t)) && !cx.all_fns.get(n).is_some_and(|f| sys_sig(f, check)));
             let src = cx.atomize(&src);
-            let plan = Plan { fns: plan_fns, skipped, refines: cx.refines.clone(), err_types: cx.err_types.clone(), links: links.unwrap_or_default(), export: exported };
+            let owned = defs.iter().filter(|f| ok.contains(&f.name) && f.tparams.is_empty()).map(|f| f.name.clone()).collect();
+            let refines = cx.refine_ids.iter().copied().zip(cx.refines.iter().cloned()).collect();
+            let err_types = cx.err_ids.iter().copied().zip(cx.err_types.iter().cloned()).collect();
+            let plan = Plan { fns: plan_fns, skipped, refines, err_types, links: links.unwrap_or_default(), export: exported, owned, fids: index.clone() };
             return Ok((src, plan));
         }
         for (n, e) in failed {
@@ -1150,6 +1169,130 @@ fn build(src: &str, opt: &str, links: &[String]) -> Result<PathBuf, String> {
     Ok(lib)
 }
 
+fn stable_slot(used: &mut HashMap<i64, String>, key: String) -> i64 {
+    let h = blake3::hash(key.as_bytes());
+    let mut id = (u32::from_le_bytes(h.as_bytes()[..4].try_into().unwrap()) & 0x3fff_ffff) as i64;
+    loop {
+        match used.get(&id) {
+            None => {
+                used.insert(id, key);
+                return id;
+            }
+            Some(k) if *k == key => return id,
+            _ => id = (id + 1) & 0x3fff_ffff,
+        }
+    }
+}
+
+fn split_mode(opt: &str) -> bool {
+    match std::env::var("SSPUR_SPLIT").as_deref() {
+        Ok("0") => false,
+        Ok("1") => true,
+        _ => opt != "-O3",
+    }
+}
+
+fn split_units(src: &str, plan: &Plan) -> Vec<split::Tu> {
+    static RUNTIME: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
+    let runtime = RUNTIME.get_or_init(|| split::fn_names(&format!("{PRELUDE}\n{}\n{}\n{}", ffi::FFI_PRELUDE, stdlib::STD_RT, gpu::HOST_PRELUDE)));
+    split::units(src, &split::Opts { owners: &plan.owned, shared: &["enc_err"], inline_bytes: 1200, inline_max: 24, runtime, share_bytes: 400 })
+}
+
+fn build_split(src: &str, opt: &str, plan: &Plan) -> Result<PathBuf, String> {
+    let t0 = std::time::Instant::now();
+    let links: Vec<String> = plan.links.iter().map(|l| if l == gpu::SHIM_LINK { gpu::shim().map(|p| p.display().to_string()) } else { Ok(l.clone()) }).collect::<Result<_, _>>()?;
+    let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
+    let dir = cache_dir();
+    let memo = dir.join(format!("{}.split", &blake3::hash(format!("{cc} {opt} {}{}\n{src}", std::env::var_os("SSPUR_LTO").is_some(), links.iter().map(|l| format!(" {l}")).collect::<String>()).as_bytes()).to_hex()[..32]));
+    if let Ok(name) = std::fs::read_to_string(&memo) {
+        let lib = dir.join(name.trim());
+        if lib.exists() {
+            return Ok(lib);
+        }
+    }
+    let tus = split_units(src, plan);
+    let objdir = dir.join("obj");
+    std::fs::create_dir_all(&objdir).map_err(|e| e.to_string())?;
+    let lto = std::env::var_os("SSPUR_LTO").is_some();
+    let flags: Vec<&str> = if lto { vec![opt, "-c", "-fPIC", "-w", "-flto=thin"] } else { vec![opt, "-c", "-fPIC", "-w"] };
+    let stamp = format!("{cc} {}\n", flags.join(" "));
+    let keys: Vec<String> = tus.iter().map(|t| blake3::hash(format!("{stamp}{}", t.text).as_bytes()).to_hex()[..32].to_string()).collect();
+    let lkey = blake3::hash(format!("{opt}{}\n{}", links.iter().map(|l| format!(" {l}")).collect::<String>(), keys.join("\n")).as_bytes()).to_hex()[..32].to_string();
+    let lib = dir.join(format!("{lkey}.{}", std::env::consts::DLL_EXTENSION));
+    if lib.exists() {
+        let _ = std::fs::write(&memo, format!("{lkey}.{}", std::env::consts::DLL_EXTENSION));
+        return Ok(lib);
+    }
+    if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
+        eprintln!("split: units in {:?}", t0.elapsed());
+    }
+    let objs: Vec<PathBuf> = keys.iter().map(|k| objdir.join(format!("{k}.o"))).collect();
+    let todo: Vec<usize> = (0..tus.len()).filter(|&i| !objs[i].exists()).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let failed: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let jobs = std::env::var("SSPUR_JOBS").ok().and_then(|j| j.parse::<usize>().ok()).unwrap_or(4).clamp(1, 4).min(todo.len().max(1));
+    let per = todo.len().div_ceil(jobs * 2).clamp(1, 16);
+    let batches: Vec<&[usize]> = todo.chunks(per).collect();
+    std::thread::scope(|s| {
+        for _ in 0..jobs {
+            s.spawn(|| loop {
+                let b = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if b >= batches.len() || failed.lock().unwrap().is_some() {
+                    break;
+                }
+                let wd = objdir.join(format!("b{}-{b}", std::process::id()));
+                let r = (|| {
+                    std::fs::create_dir_all(&wd).map_err(|e| e.to_string())?;
+                    let mut cmd = Command::new(&cc);
+                    cmd.current_dir(&wd).args(&flags);
+                    for &i in batches[b] {
+                        let c = format!("{}.c", keys[i]);
+                        std::fs::write(wd.join(&c), &tus[i].text).map_err(|e| e.to_string())?;
+                        cmd.arg(c);
+                    }
+                    let out = cmd.output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+                    if !out.status.success() {
+                        let names: Vec<&str> = batches[b].iter().map(|&i| tus[i].name.as_str()).collect();
+                        return Err(format!("{cc} failed on {} in {}: {}", names.join(" "), wd.display(), String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
+                    }
+                    for &i in batches[b] {
+                        std::fs::rename(wd.join(format!("{}.o", keys[i])), &objs[i]).map_err(|e| e.to_string())?;
+                    }
+                    Ok(())
+                })();
+                if r.is_ok() || std::env::var_os("SSPUR_SPLIT_DEBUG").is_none() {
+                    let _ = std::fs::remove_dir_all(&wd);
+                }
+                if let Err(e) = r {
+                    failed.lock().unwrap().get_or_insert(e);
+                }
+            });
+        }
+    });
+    if let Some(e) = failed.into_inner().unwrap() {
+        return Err(e);
+    }
+    if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
+        eprintln!("split: {} units, {} compiled, {:?}", tus.len(), todo.len(), t0.elapsed());
+    }
+    let tmp = lib.with_extension(format!("{}.tmp", std::process::id()));
+    let mut link = Command::new(&cc);
+    if lto {
+        let cache = dir.join("lto");
+        link.arg("-flto=thin").arg(if cfg!(target_os = "macos") { format!("-Wl,-cache_path_lto,{}", cache.display()) } else { format!("-Wl,--thinlto-cache-dir={}", cache.display()) });
+    }
+    let out = link.args(["-shared", "-o"]).arg(&tmp).args(&objs).args(&links).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("link failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
+    }
+    if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
+        eprintln!("split: linked, {:?}", t0.elapsed());
+    }
+    std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
+    let _ = std::fs::write(&memo, format!("{lkey}.{}", std::env::consts::DLL_EXTENSION));
+    Ok(lib)
+}
+
 fn c_lit(s: &str) -> String {
     let mut out = String::from("\"");
     for b in s.bytes() {
@@ -1194,6 +1337,8 @@ struct Snapshot {
     helpers_done: HashSet<String>,
     refines: Vec<(String, String, Type)>,
     err_types: Vec<Type>,
+    refine_ids: Vec<i64>,
+    err_ids: Vec<i64>,
     lambdas: String,
     spec_done: HashSet<String>,
     spec_queue: Vec<(String, HashMap<String, Type>, String)>,
@@ -1258,6 +1403,11 @@ struct Cx<'a> {
     flags: HashMap<String, String>,
     borrow_res: HashSet<String>,
     vec: Option<simd::Vecx>,
+    stable: bool,
+    refine_ids: Vec<i64>,
+    err_ids: Vec<i64>,
+    refine_used: HashMap<i64, String>,
+    err_used: HashMap<i64, String>,
 }
 
 impl<'a> Cx<'a> {
@@ -1321,6 +1471,11 @@ impl<'a> Cx<'a> {
             flags: HashMap::new(),
             borrow_res: HashSet::new(),
             vec: None,
+            stable: false,
+            refine_ids: Vec::new(),
+            err_ids: Vec::new(),
+            refine_used: HashMap::new(),
+            err_used: HashMap::new(),
         }
     }
 
@@ -1336,6 +1491,8 @@ impl<'a> Cx<'a> {
             helpers_done: self.helpers_done.clone(),
             refines: self.refines.clone(),
             err_types: self.err_types.clone(),
+            refine_ids: self.refine_ids.clone(),
+            err_ids: self.err_ids.clone(),
             lambdas: self.lambdas.clone(),
             spec_done: self.spec_done.clone(),
             spec_queue: self.spec_queue.clone(),
@@ -1353,6 +1510,8 @@ impl<'a> Cx<'a> {
         self.helpers_done = s.helpers_done;
         self.refines = s.refines;
         self.err_types = s.err_types;
+        self.refine_ids = s.refine_ids;
+        self.err_ids = s.err_ids;
         self.lambdas = s.lambdas;
         self.spec_done = s.spec_done;
         self.spec_queue = s.spec_queue;
@@ -1363,7 +1522,7 @@ impl<'a> Cx<'a> {
 
     fn fresh(&mut self, base: &str) -> String {
         self.counter += 1;
-        format!("{base}{}", self.counter)
+        format!("{base}${}", self.counter)
     }
 
     fn mangle(&self, t: &Type) -> G {
@@ -1910,8 +2069,10 @@ impl<'a> Cx<'a> {
     }
 
     fn refine_check(&mut self, ctx: String, refine: &Expr, value_var: &str, t: &Type) -> G {
-        let idx = self.refines.len();
-        self.refines.push((ctx, printer::expr(refine, 0), t.clone()));
+        let shown = printer::expr(refine, 0);
+        let idx = if self.stable { stable_slot(&mut self.refine_used, format!("{ctx}\u{0}{shown}\u{0}{t}")) } else { self.refines.len() as i64 };
+        self.refines.push((ctx, shown, t.clone()));
+        self.refine_ids.push(idx);
         self.scopes.push(HashMap::from([("_".to_string(), (value_var.to_string(), t.clone()))]));
         let cond = self.expr(refine);
         self.scopes.pop();
@@ -2694,12 +2855,14 @@ impl<'a> Cx<'a> {
         })
     }
 
-    fn err_index(&mut self, t: &Type) -> usize {
+    fn err_index(&mut self, t: &Type) -> i64 {
         match self.err_types.iter().position(|x| x == t) {
-            Some(i) => i,
+            Some(i) => self.err_ids[i],
             None => {
+                let id = if self.stable { stable_slot(&mut self.err_used, t.to_string()) } else { self.err_types.len() as i64 };
                 self.err_types.push(t.clone());
-                self.err_types.len() - 1
+                self.err_ids.push(id);
+                id
             }
         }
     }
@@ -2727,7 +2890,8 @@ impl<'a> Cx<'a> {
     fn enc_err_fn(&mut self) -> G {
         let mut cases = String::new();
         let types = self.err_types.clone();
-        for (i, t) in types.iter().enumerate() {
+        let ids = self.err_ids.clone();
+        for (t, i) in types.iter().zip(ids) {
             let enc = self.helper_enc(t)?;
             let ec = self.cty(t)?;
             write!(cases, "case {i}: {{ Buf eb = {{0}}; {enc}(&eb, *({ec}*)st->err); st->rbuf = eb.data; st->rlen = eb.len; break; }} ").unwrap();

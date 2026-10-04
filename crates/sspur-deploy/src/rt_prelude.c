@@ -339,7 +339,9 @@ static int64_t rt_b64(const char* s, int64_t n, char* out) {
     return o;
 }
 
-typedef struct { const char* name; void (*key)(const int64_t** p, RtB* o); void (*enc)(const int64_t** p, RtB* o); int (*dec)(RtJ* v, Buf* b); const char* type; } RtStore;
+typedef int64_t (*RtEntry)(const int64_t* in, Status* st, int64_t** out, int64_t* out_len);
+typedef struct { const char* sv; int (*dec)(RtJ* v, Buf* b); void (*enc)(const int64_t** p, RtB* o); RtEntry fn; } RtMig;
+typedef struct { const char* name; void (*key)(const int64_t** p, RtB* o); void (*enc)(const int64_t** p, RtB* o); int (*dec)(RtJ* v, Buf* b); const char* type; const char* sv; const RtMig* migs; int nmigs; const RtMig* backs; int nbacks; } RtStore;
 typedef struct {
     const char* name;
     const char* const* routes;
@@ -435,16 +437,73 @@ static int64_t rt_dberr(int64_t** out, int64_t* on, const char* msg) {
     *out = (int64_t*)m; *on = (int64_t)n;
     return 1;
 }
-static int rt_item_val(const RtStore* s, RtJ* item, Buf* ob, char* err, size_t cap) {
-    RtJ* v = rt_get(rt_get(item, "v"), "S");
-    RtJ doc;
-    if (!v || v->t != RJ_STR || !rt_parse(v->s, (size_t)v->len, &doc)) { snprintf(err, cap, "store %s holds an item without a JSON document", s->name); return 0; }
+static void rt_trap_text(Status* st, char* out, size_t cap);
+static int rt_run(RtEntry fn, Buf* in, Buf* ob, char* err, size_t cap, const char* what) {
+    buf_push(in, 0);
+    Status st; memset(&st, 0, sizeof st); st.limit = 10000;
+    int64_t* o = 0; int64_t n = 0;
+    int64_t c = fn(in->data, &st, &o, &n);
+    if (c) { char m[512]; rt_trap_text(&st, m, sizeof m); snprintf(err, cap, "%s failed: %s", what, m); return 0; }
+    for (int64_t i = 0; i < n; i++) buf_push(ob, o[i]);
+    free(o);
+    return 1;
+}
+static RtJ* rt_attr_doc(RtJ* item, const char* attr, RtJ* doc) {
+    RtJ* v = rt_get(rt_get(item, attr), "S");
+    if (!v || v->t != RJ_STR || !rt_parse(v->s, (size_t)v->len, doc)) return 0;
+    return doc;
+}
+static int rt_migrate(const RtStore* s, const RtMig* m, RtJ* doc, Buf* ob, char* err, size_t cap) {
+    Buf in = {0};
     rt_np = 0;
-    if (!s->dec(&doc, ob)) { snprintf(err, cap, "store %s holds an item that is not a %s (%s); a migration is needed", s->name, s->type, rt_errbuf); return 0; }
+    if (!m->dec(doc, &in)) { snprintf(err, cap, "store %s holds an item of schema %s that does not decode (%s)", s->name, m->sv, rt_errbuf); free(in.data); return 0; }
+    char what[160]; snprintf(what, sizeof what, "migration of a %s item from schema %s", s->name, m->sv);
+    int ok = rt_run(m->fn, &in, ob, err, cap, what);
+    free(in.data);
+    return ok;
+}
+static int rt_item_val(const RtStore* s, RtJ* item, Buf* ob, char* err, size_t cap) {
+    RtJ doc;
+    char own[64]; snprintf(own, sizeof own, "v_%s", s->sv);
+    int64_t mark = ob->len;
+    if (rt_attr_doc(item, own, &doc)) { rt_np = 0; if (s->dec(&doc, ob)) return 1; ob->len = mark; }
+    if (!rt_attr_doc(item, "v", &doc)) { snprintf(err, cap, "store %s holds an item without a JSON document", s->name); return 0; }
+    RtJ* sv = rt_get(rt_get(item, "sv"), "S");
+    if (sv && sv->t == RJ_STR && !rt_eq(sv, s->sv))
+        for (int i = 0; i < s->nmigs; i++) if (rt_eq(sv, s->migs[i].sv)) return rt_migrate(s, &s->migs[i], &doc, ob, err, cap);
+    rt_np = 0;
+    if (s->dec(&doc, ob)) return 1;
+    ob->len = mark;
+    if (!sv) for (int i = 0; i < s->nmigs; i++) {
+        Buf t = {0}; rt_np = 0;
+        int fits = s->migs[i].dec(&doc, &t);
+        free(t.data);
+        if (fits) return rt_migrate(s, &s->migs[i], &doc, ob, err, cap);
+    }
+    snprintf(err, cap, "store %s holds an item that is not a %s (%s); a migration is needed", s->name, s->type, rt_errbuf);
+    return 0;
+}
+static int rt_item_body(const RtStore* s, const int64_t* v, int64_t vn, RtB* req, char* err, size_t cap) {
+    RtB val = {0};
+    const int64_t* vp = v; s->enc(&vp, &val);
+    rt_s(req, ",\"sv\":{\"S\":\""); rt_s(req, s->sv); rt_s(req, "\"},\"v\":{\"S\":"); rt_jstr(req, val.p, val.len); rt_s(req, "}");
+    free(val.p);
+    for (int i = 0; i < s->nbacks; i++) {
+        Buf in = {0}, ob = {0};
+        for (int64_t j = 0; j < vn; j++) buf_push(&in, v[j]);
+        char what[160]; snprintf(what, sizeof what, "reverse migration of a %s item to schema %s", s->name, s->backs[i].sv);
+        int ok = rt_run(s->backs[i].fn, &in, &ob, err, cap, what);
+        free(in.data);
+        if (!ok) { free(ob.data); return 0; }
+        RtB old = {0};
+        const int64_t* op = ob.data; s->backs[i].enc(&op, &old);
+        rt_s(req, ",\"v_"); rt_s(req, s->backs[i].sv); rt_s(req, "\":{\"S\":"); rt_jstr(req, old.p, old.len); rt_s(req, "}");
+        free(old.p); free(ob.data);
+    }
     return 1;
 }
 static int64_t rt_db(int64_t op, const char* store, const int64_t* k, int64_t kn, const int64_t* v, int64_t vn, int64_t** out, int64_t* on) {
-    (void)kn; (void)vn;
+    (void)kn;
     char err[1024];
     const RtStore* s = rt_store(store);
     if (!s) { snprintf(err, sizeof err, "unknown store %s", store); return rt_dberr(out, on, err); }
@@ -467,9 +526,10 @@ static int64_t rt_db(int64_t op, const char* store, const int64_t* k, int64_t kn
             if (!item) buf_push(&ob, 0); else { buf_push(&ob, 1); ok = rt_item_val(s, item, &ob, err, sizeof err); }
         } else if (ok) buf_push(&ob, rt_get(&r, "Attributes") ? 1 : 0);
     } else if (op == 2) {
-        const int64_t* vp = v; s->enc(&vp, &val);
-        rt_s(&req, ",\"Item\":{\"pk\":"); rt_put(&req, key.p, key.len); rt_s(&req, ",\"v\":{\"S\":"); rt_jstr(&req, val.p, val.len); rt_s(&req, "}}}");
-        ok = rt_ddb("PutItem", &req, &resp, err, sizeof err);
+        rt_s(&req, ",\"Item\":{\"pk\":"); rt_put(&req, key.p, key.len);
+        ok = rt_item_body(s, v, vn, &req, err, sizeof err);
+        rt_s(&req, "}}");
+        if (ok) ok = rt_ddb("PutItem", &req, &resp, err, sizeof err);
         buf_push(&ob, 0);
     } else {
         buf_push(&ob, 0);
@@ -541,10 +601,70 @@ static RtJ* rt_pathp(RtJ* ev, const char* name, int num) {
     return n;
 }
 
+static const RtStore* rt_bf;
+static void rt_backfill(RtJ* ev, RtB* out) {
+    const RtStore* s = rt_bf;
+    char err[1024], envn[160];
+    snprintf(envn, sizeof envn, "SSPUR_TABLE_%s", s->name);
+    const char* table = getenv(envn);
+    RtB req = {0}, resp = {0}, errs = {0};
+    int64_t scanned = 0, migrated = 0, current = 0, skipped = 0, failed = 0, limit = 100;
+    RtJ* lim = rt_get(ev, "limit");
+    if (lim) rt_num_i64(lim, &limit);
+    rt_s(&req, "{\"TableName\":"); rt_jstr(&req, table ? table : "", table ? strlen(table) : 0);
+    rt_s(&req, ",\"ConsistentRead\":true,\"Limit\":"); rt_i64(&req, limit);
+    RtJ* start = rt_get(ev, "start");
+    if (start && start->t == RJ_OBJ) { rt_s(&req, ",\"ExclusiveStartKey\":"); rt_write(start, &req); }
+    rt_s(&req, "}");
+    RtJ r;
+    if (!table || !rt_ddb("Scan", &req, &resp, err, sizeof err) || !rt_parse(resp.p, resp.len, &r)) {
+        if (!table) snprintf(err, sizeof err, "%s is not set", envn);
+        rt_s(out, "{\"error\":"); rt_jstr(out, err, strlen(err)); rt_s(out, "}");
+        free(req.p); free(resp.p);
+        return;
+    }
+    RtJ* items = rt_get(&r, "Items");
+    for (int64_t i = 0; items && items->t == RJ_ARR && i < items->len; i++) {
+        RtJ* item = &items->items[i];
+        scanned++;
+        RtJ* sv = rt_get(rt_get(item, "sv"), "S");
+        int done = sv && rt_eq(sv, s->sv);
+        for (int b = 0; done && b < s->nbacks; b++) { char a[64]; snprintf(a, sizeof a, "v_%s", s->backs[b].sv); done = rt_get(item, a) != 0; }
+        if (done) { current++; continue; }
+        Buf ob = {0};
+        RtB put = {0}, pr = {0};
+        int ok = rt_item_val(s, item, &ob, err, sizeof err);
+        if (ok) {
+            rt_s(&put, "{\"TableName\":"); rt_jstr(&put, table, strlen(table)); rt_s(&put, ",\"Item\":{\"pk\":"); rt_write(rt_get(item, "pk"), &put);
+            ok = rt_item_body(s, ob.data, ob.len, &put, err, sizeof err);
+        }
+        if (ok) {
+            rt_s(&put, "},\"ConditionExpression\":\"#v = :v\",\"ExpressionAttributeNames\":{\"#v\":\"v\"},\"ExpressionAttributeValues\":{\":v\":"); rt_write(rt_get(item, "v"), &put); rt_s(&put, "}}");
+            ok = rt_ddb("PutItem", &put, &pr, err, sizeof err);
+            if (ok) migrated++;
+            else if (strstr(err, "ConditionalCheckFailed")) { skipped++; ok = 1; }
+        }
+        if (!ok) { failed++; if (failed <= 5) { rt_s(&errs, errs.len ? "," : ""); rt_jstr(&errs, err, strlen(err)); } }
+        free(ob.data); free(put.p); free(pr.p);
+    }
+    rt_s(out, "{\"store\":"); rt_jstr(out, s->name, strlen(s->name));
+    rt_s(out, ",\"schema\":\""); rt_s(out, s->sv);
+    rt_s(out, "\",\"scanned\":"); rt_i64(out, scanned);
+    rt_s(out, ",\"migrated\":"); rt_i64(out, migrated);
+    rt_s(out, ",\"current\":"); rt_i64(out, current);
+    rt_s(out, ",\"skipped\":"); rt_i64(out, skipped);
+    rt_s(out, ",\"failed\":"); rt_i64(out, failed);
+    rt_s(out, ",\"errors\":["); if (errs.len) rt_put(out, errs.p, errs.len); rt_s(out, "]");
+    rt_s(out, ",\"next\":"); RtJ* last = rt_get(&r, "LastEvaluatedKey"); if (last) rt_write(last, out); else rt_s(out, "null");
+    rt_s(out, "}");
+    free(req.p); free(resp.p); free(errs.p);
+}
+
 static void rt_invoke(const RtHandler* only, const char* evs, size_t evn, RtB* out, int* status) {
     RtJ ev;
     *status = 500;
     if (!rt_parse(evs, evn, &ev)) { rt_reply_err(out, 400, "bad event", 0); *status = 400; return; }
+    if (rt_bf) { rt_backfill(&ev, out); *status = 200; return; }
     RtJ* rk = rt_get(&ev, "routeKey");
     const RtHandler* h = rt_handler_for(rk);
     if (!h || (only && h != only)) { rt_reply_err(out, 404, "no route", rk && rk->t == RJ_STR ? rk->s : 0); *status = 404; return; }
@@ -625,6 +745,12 @@ int main(void) {
     rt_lc = curl_easy_init(); rt_dc = curl_easy_init();
     const RtHandler* only = 0;
     const char* hn = getenv("SSPUR_HANDLER");
+    const char* bf = getenv("SSPUR_BACKFILL");
+    if (bf && *bf && !(rt_bf = rt_store(bf))) {
+        char b[256]; int n = snprintf(b, sizeof b, "{\"errorMessage\":\"unknown store %s\",\"errorType\":\"Runtime.HandlerNotFound\"}", bf);
+        rt_post("init/error", b, (size_t)n);
+        return 1;
+    }
     if (hn && *hn && !(only = rt_handler_named(hn))) {
         char b[256]; int n = snprintf(b, sizeof b, "{\"errorMessage\":\"unknown handler %s\",\"errorType\":\"Runtime.HandlerNotFound\"}", hn);
         rt_post("init/error", b, (size_t)n);

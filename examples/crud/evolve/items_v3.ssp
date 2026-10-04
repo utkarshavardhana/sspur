@@ -1,0 +1,56 @@
+type ItemId = new Str
+
+type Stock = {on_hand: Int where _ >= 0, unit: Str where _.len > 0}
+
+type Item = {id: ItemId, name: Str where _.len > 0, stock: Stock, tags: List[Str]}
+
+type ItemV1 = {id: ItemId, name: Str where _.len > 0, qty: Int where _ >= 0, tags: List[Str]}
+
+type Patch = {name: Str where _.len > 0, stock: Stock, tags: List[Str]}
+
+type ApiErr = NotFound{id: Str} | Conflict{id: Str}
+
+store Items = table[ItemId, Item]
+
+fn migrate_Items(old: ItemV1) -> Item
+= Item{id: old.id, name: old.name, stock: Stock{on_hand: old.qty, unit: "each"}, tags: old.tags}
+
+fn unmigrate_Items(it: Item) -> ItemV1
+= ItemV1{id: it.id, name: it.name, qty: it.stock.on_hand, tags: it.tags}
+
+fn create(it: Item) -> Item ! db.read[Items], db.write[Items], fail[ApiErr], log
+= do
+  if db.get(Items, it.id).is_some then raise Conflict{id: it.id.raw}
+  db.put(Items, it.id, it)
+  log("created {it.id.raw}")
+  it
+
+fn read(id: Str) -> Opt[Item] ! db.read[Items]
+= db.get(Items, ItemId(id))
+
+fn update(id: Str, p: Patch) -> Item ! db.read[Items], db.write[Items], fail[ApiErr]
+= do
+  old = db.get(Items, ItemId(id)).ok_or(NotFound{id: id})
+  item = old with name := p.name, stock := p.stock, tags := p.tags
+  db.put(Items, ItemId(id), item)
+  item
+
+fn remove(id: Str) -> Unit ! db.write[Items], fail[ApiErr]
+= if not db.del(Items, ItemId(id)) then raise NotFound{id: id}
+
+fn list() -> List[Item] ! db.read[Items]
+= db.scan(Items).sort_by(_.id.raw)
+
+fn in_stock(xs: List[Item]) -> Int
+= xs.filter(_.stock.on_hand > 0).len
+
+svc items
+  ep post "/items" = create
+  ep get "/items/{id}" = read
+  ep put "/items/{id}" = update
+  ep delete "/items/{id}" = remove
+  ep get "/items" = list
+
+test migrate_keeps_qty = migrate_Items(ItemV1{id: ItemId("a"), name: "a", qty: 3, tags: []}).stock.on_hand == 3
+
+test round_trip = unmigrate_Items(migrate_Items(ItemV1{id: ItemId("a"), name: "a", qty: 3, tags: ["t"]})) == ItemV1{id: ItemId("a"), name: "a", qty: 3, tags: ["t"]}

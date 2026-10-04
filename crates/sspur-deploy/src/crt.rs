@@ -235,11 +235,24 @@ pub fn generate(svc: &Service) -> Result<String, String> {
     let mut g = Codecs::new(&svc.layouts);
     let mut tail = String::new();
     let mut stores = Vec::new();
-    for s in &svc.stores {
+    for (i, s) in svc.stores.iter().enumerate() {
         let k = g.key(&s.key)?;
         let e = g.enc(&s.val)?;
         let d = g.dec(&s.val)?;
-        stores.push(format!("{{{}, {k}, {e}, {d}, {}}}", c_str(&s.name), c_str(&s.val.to_string())));
+        let mut arrays = Vec::new();
+        for (tag, ms) in [("migs", &s.migs), ("backs", &s.backs)] {
+            if ms.is_empty() {
+                arrays.push("0, 0".to_string());
+                continue;
+            }
+            let mut items = Vec::new();
+            for m in ms {
+                items.push(format!("{{{}, {}, {}, sspur_wentry_{}}}", c_str(&m.sv), g.dec(&m.ty)?, g.enc(&m.ty)?, m.fun));
+            }
+            writeln!(tail, "static const RtMig rt_{tag}{i}[] = {{{}}};", items.join(", ")).unwrap();
+            arrays.push(format!("rt_{tag}{i}, {}", ms.len()));
+        }
+        stores.push(format!("{{{}, {k}, {e}, {d}, {}, {}, {}}}", c_str(&s.name), c_str(&s.val.to_string()), c_str(&s.sv), arrays.join(", ")));
     }
     writeln!(tail, "static const RtStore rt_stores[] = {{{}}};", if stores.is_empty() { "{0}".to_string() } else { stores.join(", ") }).unwrap();
     writeln!(tail, "static const RtStore* rt_store(const char* name) {{ for (size_t i = 0; i < {}; i++) if (!strcmp(rt_stores[i].name, name)) return &rt_stores[i]; return 0; }}", svc.stores.len()).unwrap();

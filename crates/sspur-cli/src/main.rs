@@ -31,7 +31,7 @@ const USAGE: &str = "usage:
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
   --O3 raises the optimization level; fuzz --differential compares native against the interpreter
   sspur build --target riscv64-qemu|aarch64-qemu file.ssp [-o kernel.elf]  build a 'profile bare' kernel (freestanding C, clang, ld.lld)
-  sspur deploy plan <file.ssp> [--out DIR] | sspur deploy local <file.ssp> [--port N]   (see ADR 0016; never calls AWS)";
+  sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status   (sspur deploy for details; ADR 0016, 0019; never calls AWS)";
 
 fn main() -> ExitCode {
     std::thread::Builder::new().stack_size(1 << 29).spawn(real_main).unwrap().join().unwrap()
@@ -62,7 +62,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -150,7 +150,7 @@ fn real_main() -> ExitCode {
                 }
             }
         }
-        "deploy" => deploy::run(args.pos.get(1).map(String::as_str), args.pos.get(2), args.val("--out"), args.val("--port")),
+        "deploy" => deploy::run(&args.pos[1..], &args.flags),
         "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" | "build" => program_cmd(&cmd, &args),
         _ => {
             eprintln!("{USAGE}");

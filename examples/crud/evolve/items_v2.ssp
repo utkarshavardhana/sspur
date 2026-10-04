@@ -1,0 +1,44 @@
+type ItemId = new Str
+
+type Item = {id: ItemId, name: Str where _.len > 0, qty: Int where _ >= 0, tags: List[Str], note: Opt[Str]}
+
+type Patch = {name: Str where _.len > 0, qty: Int where _ >= 0, tags: List[Str], note: Opt[Str]}
+
+type ApiErr = NotFound{id: Str} | Conflict{id: Str}
+
+store Items = table[ItemId, Item]
+
+fn create(it: Item) -> Item ! db.read[Items], db.write[Items], fail[ApiErr], log
+= do
+  if db.get(Items, it.id).is_some then raise Conflict{id: it.id.raw}
+  db.put(Items, it.id, it)
+  log("created {it.id.raw}")
+  it
+
+fn read(id: Str) -> Opt[Item] ! db.read[Items]
+= db.get(Items, ItemId(id))
+
+fn update(id: Str, p: Patch) -> Item ! db.read[Items], db.write[Items], fail[ApiErr]
+= do
+  old = db.get(Items, ItemId(id)).ok_or(NotFound{id: id})
+  item = old with name := p.name, qty := p.qty, tags := p.tags, note := p.note
+  db.put(Items, ItemId(id), item)
+  item
+
+fn remove(id: Str) -> Unit ! db.write[Items], fail[ApiErr]
+= if not db.del(Items, ItemId(id)) then raise NotFound{id: id}
+
+fn list() -> List[Item] ! db.read[Items]
+= db.scan(Items).sort_by(_.id.raw)
+
+fn in_stock(xs: List[Item]) -> Int
+= xs.filter(_.qty > 0).len
+
+svc items
+  ep post "/items" = create
+  ep get "/items/{id}" = read
+  ep put "/items/{id}" = update
+  ep delete "/items/{id}" = remove
+  ep get "/items" = list
+
+test in_stock_counts = in_stock([Item{id: ItemId("a"), name: "a", qty: 0, tags: [], note: none}, Item{id: ItemId("b"), name: "b", qty: 2, tags: [], note: some("x")}]) == 1

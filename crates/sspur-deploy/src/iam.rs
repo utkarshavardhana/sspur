@@ -57,6 +57,14 @@ pub fn summary(svc: &Service) -> Value {
             json!({"handler": h.name, "routes": routes, "effects": h.row, "db_ops": ops, "actions": actions(h), "validator": h.validator})
         })
         .collect();
-    let stores: Vec<Value> = svc.stores.iter().map(|s| json!({"store": s.name, "key": s.key.to_string(), "value": s.val.to_string(), "resource": table_id(&s.name)})).collect();
-    json!({"service": svc.name, "hash": svc.hash, "stores": stores, "handlers": handlers})
+    let stores: Vec<Value> = svc
+        .stores
+        .iter()
+        .map(|s| {
+            let migs: Vec<Value> = s.migs.iter().map(|g| json!({"from": g.sv, "fn": g.fun, "reverse": s.backs.iter().find(|b| b.sv == g.sv).map(|b| &b.fun)})).collect();
+            json!({"store": s.name, "key": s.key.to_string(), "value": s.val.to_string(), "schema": s.sv, "migrations": migs, "resource": table_id(&s.name)})
+        })
+        .collect();
+    let backfills: Vec<Value> = svc.backfills.iter().map(|b| json!({"function": b.name, "actions": actions(b)})).collect();
+    json!({"service": svc.name, "hash": svc.hash, "stores": stores, "handlers": handlers, "backfills": backfills})
 }

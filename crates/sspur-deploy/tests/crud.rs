@@ -41,7 +41,19 @@ fn iam_is_least_privilege() {
     let t: Value = serde_json::from_str(&p.files["template.json"]).unwrap();
     let res = t["Resources"].as_object().unwrap();
     let roles: Vec<(&String, &Value)> = res.iter().filter(|(_, r)| r["Type"] == "AWS::IAM::Role").collect();
-    assert_eq!(roles.len(), 5);
+    assert_eq!(roles.len(), 6);
+    let cd = &res["CodeDeployRole"]["Properties"];
+    assert_eq!(cd["AssumeRolePolicyDocument"]["Statement"][0]["Principal"]["Service"], "codedeploy.amazonaws.com");
+    for s in cd["Policies"][0]["PolicyDocument"]["Statement"].as_array().unwrap() {
+        assert_eq!(s["Resource"].as_array().unwrap().len(), 10, "only this service's 5 functions and aliases, or its 10 alarms");
+    }
+    for h in expected().keys() {
+        let id = sspur_deploy::pascal(h);
+        assert_eq!(res[&format!("{id}Alias")]["Properties"]["Name"], "live");
+        assert_eq!(res[&format!("{id}Version{}", svc.hash)]["DeletionPolicy"], "Retain", "old versions stay for rollback");
+        assert_eq!(res[&format!("{id}Integration")]["Properties"]["IntegrationUri"]["Ref"], format!("{id}Alias"), "the API calls the alias");
+        assert_eq!(res[&format!("{id}DeployGroup")]["Properties"]["AutoRollbackConfiguration"]["Enabled"], true);
+    }
     for (handler, want) in expected() {
         let id = sspur_deploy::pascal(handler);
         let role = &res[&format!("{id}Role")];

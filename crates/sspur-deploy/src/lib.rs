@@ -2,6 +2,9 @@ pub mod cfn;
 pub mod crt;
 pub mod iam;
 pub mod local;
+pub mod migrate;
+pub mod replay;
+pub mod schema;
 mod validate;
 
 use sspur_check::{expr_key, CheckOutput, Type};
@@ -18,6 +21,19 @@ pub struct Store {
     pub name: String,
     pub key: Type,
     pub val: Type,
+    pub sv: String,
+    pub shape: schema::Shape,
+    pub key_shape: schema::Shape,
+    pub migs: Vec<Mig>,
+    pub backs: Vec<Mig>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Mig {
+    pub fun: String,
+    pub sv: String,
+    pub ty: Type,
+    pub shape: schema::Shape,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -60,6 +76,7 @@ pub struct Service {
     pub stores: Vec<Store>,
     pub routes: Vec<Route>,
     pub handlers: Vec<Handler>,
+    pub backfills: Vec<Handler>,
     pub program: CProgram,
     pub layouts: Layouts,
     pub source: String,
@@ -162,17 +179,76 @@ pub fn analyze(src: &str) -> Result<Service, String> {
     let source = if extra.is_empty() { src.to_string() } else { format!("{}\n\n{extra}\n", src.trim_end()) };
     let (m2, check2) = load(&source).map_err(|e| format!("generated validators do not check (compiler bug):\n{e}"))?;
     let program = sspur_native::cgen::c_program(&m2, &check2)?;
+    let stores = stores_of(&m, &check, &fn_defs)?;
+    let migfns: Vec<&String> = stores.iter().flat_map(|s| s.migs.iter().chain(&s.backs)).map(|g| &g.fun).collect();
     for h in &handlers {
-        for n in std::iter::once(&h.name).chain(h.validator.iter()) {
+        for n in std::iter::once(&h.name).chain(h.validator.iter()).chain(migfns.iter().copied()) {
             if !program.fns.contains_key(n) {
                 let why = program.skipped.get(n).cloned().unwrap_or_else(|| "is not compiled".into());
                 return Err(format!("handler {n} cannot be compiled to native code: {why}"));
             }
         }
     }
-    let stores = check.stores.iter().map(|(n, (k, v))| Store { name: n.clone(), key: k.clone(), val: v.clone() }).collect();
+    let backfills = stores
+        .iter()
+        .filter(|s| !s.migs.is_empty())
+        .map(|s| Handler {
+            name: format!("backfill_{}", s.name),
+            params: vec![],
+            ret: Type::unit(),
+            row: vec![format!("db.read[{}]", s.name), format!("db.write[{}]", s.name)],
+            db: BTreeSet::from([(s.name.clone(), "scan".to_string()), (s.name.clone(), "put".to_string())]),
+            validator: None,
+        })
+        .collect();
     let hash = blake3::hash(source.as_bytes()).to_hex()[..16].to_string();
-    Ok(Service { name: svc.name.clone(), stores, routes, handlers, layouts: Layouts::from_check(&check2), program, source, hash })
+    Ok(Service { name: svc.name.clone(), stores, routes, handlers, backfills, layouts: Layouts::from_check(&check2), program, source, hash })
+}
+
+fn stores_of(m: &Module, check: &CheckOutput, fns: &HashMap<&str, &FnDef>) -> Result<Vec<Store>, String> {
+    let mut sh = schema::Shapes::new(m);
+    let mut out = Vec::new();
+    for d in &m.defs {
+        let Def::Store(sd) = d else { continue };
+        let (key, val) = check.stores[&sd.name].clone();
+        let sv = sh.version(&sd.val);
+        let mut migs = Vec::new();
+        let mut backs = Vec::new();
+        let mut names: Vec<&&str> = fns.keys().collect();
+        names.sort();
+        for n in names {
+            let f = fns[*n];
+            let fwd = n.strip_prefix("migrate_").is_some_and(|r| r == sd.name || r.starts_with(&format!("{}_", sd.name)));
+            let back = n.strip_prefix("unmigrate_").is_some_and(|r| r == sd.name || r.starts_with(&format!("{}_", sd.name)));
+            if !fwd && !back {
+                continue;
+            }
+            let (ptys, ret) = &check.fn_types[*n];
+            let vt = printer::ty(&sd.val);
+            let bad = |want: &str| Err(format!("E_MIGRATE_SIG {n} must be `fn {n}({want}` with no effects"));
+            let (old_ty, old_ast) = if fwd {
+                if ptys.len() != 1 || *ret != val || !f.effects.is_empty() || ptys[0] == val {
+                    return bad(&format!("old: OldT) -> {vt}`, OldT the previous value type,"));
+                }
+                (ptys[0].clone(), &f.params[0].ty)
+            } else {
+                let Some(r) = f.ret.as_ref() else { return bad(&format!("new: {vt}) -> OldT`")) };
+                if ptys.len() != 1 || ptys[0] != val || !f.effects.is_empty() || *ret == val {
+                    return bad(&format!("new: {vt}) -> OldT`"));
+                }
+                (ret.clone(), r)
+            };
+            let g = Mig { fun: n.to_string(), sv: sh.version(old_ast), ty: old_ty, shape: sh.ty(old_ast) };
+            if fwd { migs.push(g) } else { backs.push(g) }
+        }
+        for b in &backs {
+            if !migs.iter().any(|g| g.sv == b.sv) {
+                return Err(format!("E_MIGRATE_SIG {} returns a type that no migrate_{} reads", b.fun, sd.name));
+            }
+        }
+        out.push(Store { name: sd.name.clone(), key, val, sv, shape: sh.ty(&sd.val), key_shape: sh.ty(&sd.key), migs, backs });
+    }
+    Ok(out)
 }
 
 pub struct Plan {
@@ -191,6 +267,13 @@ pub fn plan(svc: &Service) -> Result<Plan, String> {
     files.insert("service.ssp".to_string(), svc.source.clone());
     files.insert("build.sh".to_string(), cfn::build_script(svc));
     files.insert("deploy.sh".to_string(), cfn::deploy_script(svc));
+    files.insert("rollback.sh".to_string(), cfn::rollback_script(svc));
+    if !svc.backfills.is_empty() {
+        files.insert("backfill.sh".to_string(), cfn::backfill_script(svc));
+        for b in &svc.backfills {
+            files.insert(format!("iam/{}.json", b.name), format!("{}\n", serde_json::to_string_pretty(&iam::policy(svc, b)).unwrap()));
+        }
+    }
     Ok(Plan { files })
 }
 
@@ -217,11 +300,14 @@ pub fn build_host(c_src: &str, dir: &Path) -> Result<PathBuf, String> {
     if bin.exists() {
         return Ok(bin);
     }
-    let c = dir.join(format!("bootstrap-{key}.c"));
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let uniq = format!("{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+    let c = dir.join(format!("bootstrap-{key}-{uniq}.c"));
     std::fs::write(&c, c_src).map_err(|e| e.to_string())?;
     let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
-    let tmp = bin.with_extension("tmp");
+    let tmp = dir.join(format!("bootstrap-{key}-{uniq}.tmp"));
     let out = std::process::Command::new(&cc).args(["-O2", "-w", "-o"]).arg(&tmp).arg(&c).args(["-lcurl", "-lpthread", "-lm"]).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    let _ = std::fs::remove_file(&c);
     if !out.status.success() {
         return Err(format!("{cc} failed:\n{}", String::from_utf8_lossy(&out.stderr).lines().take(20).collect::<Vec<_>>().join("\n")));
     }

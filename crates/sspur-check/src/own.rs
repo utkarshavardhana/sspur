@@ -144,6 +144,7 @@ pub fn analyze(m: &Module, record_types: &HashMap<(u32, u32), String>, user_meth
     for d in &m.defs {
         match d {
             Def::Type(t) => a.type_def(t),
+            Def::Fn(f) if f.kernel.is_some() => {}
             Def::Fn(f) => {
                 a.cur = Some(f.name.clone());
                 a.sig(f);
@@ -597,6 +598,16 @@ impl<'a> A<'a> {
     }
 
     fn call_user(&mut self, f: &FnDef, args: &[&Expr], recv: bool, span: Span) -> K {
+        if f.kernel.is_some() {
+            for a in args {
+                let x = match &a.kind {
+                    ExprKind::Unary(UnOp::Ref | UnOp::RefMut, x) => &**x,
+                    _ => *a,
+                };
+                self.expr(x, Use::Read);
+            }
+            return K::Plain;
+        }
         let mut borrows: Vec<(String, bool, Span)> = Vec::new();
         for (i, (p, a)) in f.params.iter().zip(args).enumerate() {
             let pk = self.kind_of_ty(&p.ty);

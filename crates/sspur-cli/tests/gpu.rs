@@ -37,7 +37,7 @@ fn kernel_violations_are_rejected_with_their_codes() {
 
 #[test]
 fn accepted_kernels_check_cleanly_and_round_trip() {
-    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp"] {
+    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp", "sys.ssp"] {
         let src = std::fs::read_to_string(suite().join(name)).unwrap();
         let module = parse(&src).unwrap();
         let out = check(&module);
@@ -72,7 +72,7 @@ fn interpreter_runs_kernels_sequentially_with_f32_rounding() {
 fn portable_backends_compile_every_kernel() {
     let dir = std::env::temp_dir().join(format!("sspur-gpu-emit-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp"] {
+    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp", "sys.ssp"] {
         let path = suite().join(name);
         let module = parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
         let kernels: Vec<String> = check(&module).kernels.keys().cloned().collect();
@@ -169,4 +169,8 @@ fn kernel_traps_are_identical_in_every_tier() {
         let native = run(&["test"], &path, &env);
         assert_eq!(interp.1, native.1, "{env:?}");
     }
+    let path = suite().join("sys.ssp");
+    let interp = run(&["test", "--interp"], &path, &[]);
+    assert!(interp.1.contains("1 passed, 0 failed"), "{}", interp.1);
+    assert_eq!(interp.1, run(&["test"], &path, &[]).1);
 }

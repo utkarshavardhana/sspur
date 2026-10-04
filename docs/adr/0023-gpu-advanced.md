@@ -11,7 +11,7 @@ ADR 0020 shipped `kernel fn` with synchronous launches (about 0.25 ms of submit-
 | # | Decision | Reason |
 |---|---|---|
 | 1 | A launch whose slices are all `DevBuf`s is queued, not waited for. Native code encodes it into one open command buffer (committed every 64 launches so the GPU starts early) and keeps a launch record: the kernel's sequential C entry, its scalar arguments and buffers, and which buffers it reads and writes. The queue synchronizes when the host reads a buffer (`b.to_list`), on `gpu_sync()`, before a launch that takes lists, after 256 queued launches, and when the outermost native call returns | Memory-bound kernels were dominated by the per-launch wait; `b.len` needs no sync because lengths never change |
-| 2 | Each queued launch has its own flag word (and thread mask, for commit-safe kernels). At sync the flags are checked in launch order. A clean launch is done. A flagged commit-safe launch that no later queued launch touches reruns just its flagged threads, as before. Otherwise the first buffer state that can be restored is found (a launch's written buffers are copied on the host the first time a batch writes them, which is safe because no queued launch writes them yet), those buffers are restored and every launch from there on reruns on the CPU in order | Later launches may have consumed a flagged launch's output, so they must rerun too. One copy per written buffer per batch, instead of one per launch, keeps saxpy at the kernel's speed. A GPU failure takes the same path, so in-place launches no longer trap with `dev: the GPU failed` |
+| 2 | Each queued launch has its own flag word (and thread mask, for commit-safe kernels). At sync the flags are checked in launch order. A clean launch is done. A flagged commit-safe launch that no later queued launch touches reruns just its flagged threads, as before. Otherwise the first buffer state that can be restored is found, those buffers are restored and every launch from there on reruns on the CPU in order. Backups are host copies of each buffer a batch writes, taken once per batch just before its command buffer is committed (the GPU has not started it, and no earlier queued launch writes that buffer); a batch of one commit-safe launch needs none | Later launches may have consumed a flagged launch's output, so they must rerun too. One copy per written buffer per batch keeps queued saxpy at the kernel's speed, and the copy-free single launch keeps `launch; read` loops as fast as before. A GPU failure takes the same path; only a lone commit-safe launch still traps with `dev: the GPU failed while running k` |
 | 3 | Launches that must run on the CPU (`F64` kernels, `SSPUR_GPU=0`, no Metal, an `F32` subnormal scalar) are queued too and run at sync; a GPU launch queued after one of them synchronizes first | Uniform timing for every tier, and a CPU launch never runs before GPU work it depends on |
 | 4 | A trap inside a queued launch is reported at the next synchronization point, in every tier: the interpreter runs the threads at once but keeps the first trap pending, skips later queued launches and raises it at the same sync points (end of `main` and of each test included). A failing host check of a launch (aliasing, scalar range, `pre`) synchronizes first, so the earlier trap still wins | Native code can only see a device trap at sync. Host effects between the launch and the sync (a `log`) now happen in every tier alike |
 | 5 | `gpu_sync()` (`! dev`) waits for queued launches | Explicit timing and trap points for benchmarks and tests |
@@ -99,3 +99,34 @@ kernel fn hyp(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
 | 22 | Kernels call top-level `fn`s whose parameters and result are scalars (`Int I32 U32 F32 F64 Bool`), with no effects, generics or contracts. The lowering inlines them into the kernel IR: arguments become immutable locals, the body's statements are hoisted before the calling statement and its last expression is the value. Recursion (`E_KERNEL`) and more than 8 nested levels are rejected. A call inside an `if` branch or the right side of `and`/`or` becomes a guarded statement, so a helper only runs (and traps) when the source says it does | Inlining needs no device call ABI in Metal, OpenCL, SPIR-V, PTX, the C fallback or the interpreter, and every backend keeps consuming the one IR |
 | 23 | A helper sees only its parameters and locals: no slices, shared arrays, intrinsics, `barrier()` or atomics. Its body follows the kernel subset and typing (widths kept, literals take the other operand's type) | Purity makes inlining order-independent and keeps race analysis on the kernel itself; immutable helper locals stay transparent to it |
 | 24 | A `fn` that takes or returns `F32`, `I32` or `U32` is a device fn: its body is checked by the kernel rules even when unused, only kernels may call it (`E_KERNEL_DEVICE` from host code), and it is not compiled for the host, fuzzed or ownership-checked. A helper over `Int`, `F64` and `Bool` is an ordinary fn that host code can call too | The host has no `F32` literals or methods, so such bodies can't be host code; ordinary helpers are shared between host and device |
+
+## Verification
+
+`crates/sspur-cli/tests/gpu.rs` runs every suite file in the interpreter, on Metal and with `SSPUR_GPU=0`, and requires identical stdout and identical `test` reports (the trap texts included); without Metal it checks the CPU fallback and says so. New files:
+- `async.ssp`: a flagged launch followed by launches that consume its output (they rerun in order), mixed `F64` CPU launches and GPU launches, 300 queued launches, deferred traps, and a failing host check after a pending trap (the earlier trap wins).
+- `shared.ssp`: tree reductions over `F32` and `I32`, a neighbour stencil, rank counting with arbitrary shared reads, list arguments, a thread count that is not a multiple of the group (trap) and a subnormal input (whole-launch rerun).
+- `atomics.ssp`: global and shared-memory histograms, `atomic_min`/`max` on `I32` and `U32`, `atomic_cas` claims, `U32` wraparound, exact and inexact `F32` adds (the inexact one reruns on the CPU), list arguments.
+- `grid2.ssp`: the tiled matmul above against a naive 2D matmul (bit-identical), every 2D intrinsic, a grid that groups don't divide evenly, a shared-tile transpose and a width trap.
+- `helpers.ssp`: nested helpers, loops and `var`s in helpers, helpers under `if` and `and` that must not trap when the guard is false, `Int` helpers shared with host code, and a helper inside a shared-memory reduction.
+- 24 new rejected programs in `tests/gpu/reject.txt` (44 in all; the old `call` case is now a recursive helper): divergent barriers in branches and thread-dependent loops, shared races (neighbour, constant index, a barrier-free reduction loop, a write after a loop back edge), nested and oversized shared arrays, group writes without a `lid` guard, mixed atomic and plain access, mixed atomic kinds, non-uniform `atomic_cas`, atomic results used as values, `Int` atomics, a shared atomic phase read without a barrier, bare `gid` in a 2D kernel, `gid.x` in a 1D kernel, oversized 2D groups, a 2D index with the wrong width, effectful, slice-taking, recursive and intrinsic-using helpers, and a host call of a device fn.
+- Every suite kernel emits Metal and OpenCL, and compiles to SPIR-V and PTX (barriers map to `__nvvm_bar_sync`, atomics to `__nvvm_atom_*`, no unresolved calls).
+
+## Result
+
+`bench/native/gpu.ssp` against single-threaded C++ -O2 with the same checks and `-ffp-contract=off` (Apple M1 Pro, best of 3, output bit-identical):
+
+| Section | C++ -O2 | SSPUR (Metal) | Speedup |
+|---|---|---|---|
+| saxpy, 4M `F32`, 100 launches | 63 ms | 47 ms (73 ms with a wait per launch) | 1.3x |
+| strided reduction, 100 launches read back | 65 ms | 44 ms | 1.5x |
+| naive matmul 512 x 512, 20 launches | 284 ms | 60 ms | 4.7x |
+| shared-memory tree reduction, 100 launches read back | 35 ms | 31 ms | 1.1x |
+| tiled matmul 512 x 512 (`@grid2`, two 16 x 16 shared tiles), 20 launches | 284 ms | 34 ms | 8.4x |
+| 256-bin histogram of 4M values with shared and global atomics, 20 launches | 53 ms | 14 ms | 3.8x |
+| whole program, wall | 0.81 s | 0.35 s | 2.3x |
+
+The reductions are memory bound and wait once per read back; queued launches remove the wait between launches, not the one before the host reads.
+
+## Not yet
+
+Atomics that return old values (fetch-and-add slots, CAS loops), 3D grids, float-to-int conversions, `pre` contracts on helpers, warp-level operations, an ahead-of-time `metallib`, running SPIR-V and PTX here, and `export-c` with kernels.

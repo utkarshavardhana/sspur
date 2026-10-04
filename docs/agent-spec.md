@@ -35,19 +35,19 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 - Low to high: `or, and, not, == != < <= > >=, .., + -, * / %, **`, unary `-`. Int `/` truncates; overflow, `/ 0` and bad `xs[i]` trap.
 
 ## Builtins
-- List: `map filter flat_map fold(init, (acc, x) => e) find index_of sort sort_by(key) sort_with(cmp) lower_bound unique sum push_front pop_front slice(a, b) chunks group_by(key) counts join(sep) to_set to_hash_map to_flat_map`; Opt from `find* first last get(i) min max pop_*` (`(x, rest)`).
-- Lazy `xs.view` `iota(a, b)`: pure `map filter take zip`, then `to_list fold` or `for`. `mdspan(xs, [r, c]).get([i, j])`.
+- List: `map filter flat_map fold(init, (acc, x) => e) find index_of sort sort_by(key) sort_with(cmp) lower_bound unique sum push_front pop_front slice(a, b) chunks group_by(key) counts join(sep) to_set to_hash_map`; Opt from `find* first last get(i) min max pop_*` (`(x, rest)`).
+- Lazy `xs.view` `iota(a, b)`: pure `map filter take zip`, then `to_list fold` or `for`.
 - Str: `trim split(sep) words chars starts_with index_of replace(a, b) pad_left(n, fill) bytes to_int to_f64 fold_case compare_ci`; `.format(">10,.2f")` (Python specs).
 - Opt `or(d) is_some map get ok_or(e)`; Res `is_ok get or map`.
 - `empty_map()`/`hash_map()`: `get put(k, v) remove has keys items`; `empty_set()`/`hash_set()`: `add has union inter diff`; `empty_heap().push pop`; `str_buf().add(s).str`.
-- Int `band shl popcount gcd`, `wrapping_ checked_ saturating_` + `add sub mul`; F64 `round floor sqrt pow exp ln sin fmt(digits)`; `clamp range(a, b, step) log(s)`; `rand_int(seed, lo, hi) rand_normal rand_poisson` give `(value, next_seed)`, `rng(seed).stream(k) .gamma(k, s)` `(value, rng)`. `complex(re, im).mul abs`.
+- Int `band shl popcount gcd`, `wrapping_ checked_ saturating_` + `add sub mul`; F64 `round floor sqrt pow exp ln sin fmt(digits)`; `clamp range(a, b, step) log(s)`; `rand_int(seed, lo, hi) rand_normal rand_poisson` give `(value, next_seed)`, `rng(seed).stream(k) .gamma(k, s)` `(value, rng)`.
 - `big(n)`, `decimal("1.25")` (Opt) `.add div round(scale)`. `regex(p)` (Res) `.is_match(s) find_all replace(s, "$1")`.
 - `date(y, m, d)` (Opt) `parse_time(iso)`: `.year day format("%F %T") add(days(1)) since(t) format_in(zone, "%T %Z")`; `time_zone("Europe/Paris")` (Res, `! time`) `.offset(t) local(t) utc(wall)`.
 - `json.encode(v) json.decode[T](s)` (Res).
-- `! fs`: `read_file(p) write_file(p, s) list_dir read_bytes mkdir_all` (`Res[_, Str]`) `exists`, `with_file(p, "r", f => f.lines)`; `! io`: `read_line eprint`; `! time`: `now now_ms sleep_ms`; `! env`: `env_var args`; `! proc`: `run_cmd(prog, args, stdin)` (Res of `(status, out, err)`) `exit`.
+- `! fs`: `read_file(p) write_file(p, s) list_dir mkdir_all` (`Res[_, Str]`) `exists`, `with_file(p, "r", f => f.lines)`; `! io`: `read_line eprint`; `! time`: `now now_ms sleep_ms`; `! env`: `env_var args`; `! proc`: `run_cmd(prog, args, stdin)` (Res of `(status, out, err)`) `exit`.
 
 ## C, sys, bare, GPU
-`extern fn cbrt(x: F64) -> F64 ! ffi from "m"`. `profile sys`: `res type F = {fd: Int} drop close` (moved, dropped at scope end), `&x`/`&mut x`, `! unsafe` pointers. `profile bare`: no heap, `mmio`, `interrupt`. `kernel fn k(y: &mut [F32]) @grid(y.len, 64)` runs per thread (`gid`); `k(&mut ys)` needs `! dev`. Details: `./sspur spec --full`.
+`extern fn cbrt(x: F64) -> F64 ! ffi from "m"`. `profile sys`: `res type F = {fd: Int} drop close` (moved, dropped at scope end), `&x`/`&mut x`, `! unsafe` pointers. `profile bare`: no heap, `mmio`, `interrupt`. `kernel fn k(y: &mut [F32]) @grid(y.len, 64)` runs per thread (`gid`; `@grid2`: `gid.x`) with fn calls, `shared[F32](64)`, `barrier()`, `y.atomic_add(i, v)`; `k(&mut ys)` needs `! dev`. Details: `./sspur spec --full`.
 
 ## Services
 `store S = table[K, V]`; `db.get(S, k)` (Opt) `db.scan(S)` need `! db.read[S]`, `db.put(S, k, v) db.del` need `! db.write[S]`. `svc name` + `ep get "/items/{id}" = fname` (`{id}` binds `id`, another param is the JSON body, `none` is 404). Changing V beyond new `Opt` fields or variants needs `fn migrate_S(old: OldV) -> V`.

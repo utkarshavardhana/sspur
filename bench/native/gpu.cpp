@@ -31,6 +31,29 @@ static void matmul(const std::vector<float>& a, const std::vector<float>& b, std
         }
 }
 
+static void tree_sum(const std::vector<float>& x, std::vector<float>& out) {
+    float sh[256];
+    for (int64_t g = 0; g < (int64_t)out.size(); g++) {
+        for (int64_t l = 0; l < 256; l++) {
+            int64_t base = add(mul(g, 2048), l);
+            float acc = at(x, base);
+            for (int64_t j = 1; j < 8; j++) acc = acc + at(x, add(base, mul(j, 256)));
+            sh[l] = acc;
+        }
+        for (int64_t s = 128; s > 0; s /= 2)
+            for (int64_t l = 0; l < s; l++) sh[l] = sh[l] + sh[l + s];
+        at(out, g) = sh[0];
+    }
+}
+
+static void histogram(const std::vector<int32_t>& x, std::vector<int32_t>& h) {
+    for (int64_t i = 0; i < (int64_t)x.size(); i++) {
+        int64_t b = (int64_t)x[i] % 256;
+        if (b < 0 || b >= (int64_t)h.size()) abort();
+        h[b] = (int32_t)((uint32_t)h[b] + 1u);
+    }
+}
+
 static double sum(const std::vector<float>& v) {
     double s = -0.0;
     for (float x : v) s += (double)x;
@@ -72,5 +95,25 @@ int main() {
     for (int r = 0; r < 20; r++) matmul(a, b, c, m);
     printf("matmul %s %s %s\n", f(sum(c)).c_str(), f(c[0]).c_str(), f(c[m * m - 1]).c_str());
     auto t4 = std::chrono::steady_clock::now();
-    fprintf(stderr, "setup %lld ms, saxpy %lld ms, reduce %lld ms, matmul %lld ms\n", (long long)ms(t0, t1), (long long)ms(t1, t2), (long long)ms(t2, t3), (long long)ms(t3, t4));
+    std::vector<float> sums(n / 2048);
+    double tree = 0.0;
+    for (int r = 0; r < 100; r++) {
+        tree_sum(y, sums);
+        tree = tree + sum(sums);
+    }
+    printf("tree %s\n", f(tree).c_str());
+    auto t5 = std::chrono::steady_clock::now();
+    std::vector<float> ct(m * m);
+    for (int r = 0; r < 20; r++) matmul(a, b, ct, m);
+    printf("tiled %s %s %s %s\n", f(sum(ct)).c_str(), f(ct[0]).c_str(), f(ct[m * m - 1]).c_str(), ct == c ? "true" : "false");
+    auto t6 = std::chrono::steady_clock::now();
+    std::vector<int32_t> xs(n), hist(256);
+    for (int64_t i = 0; i < n; i++) xs[i] = (int32_t)((i * 7919) % 1000003);
+    auto t7 = std::chrono::steady_clock::now();
+    for (int r = 0; r < 20; r++) histogram(xs, hist);
+    int64_t hsum = 0;
+    for (int32_t v : hist) hsum += v;
+    printf("hist %lld %d %d %d\n", (long long)hsum, hist[0], hist[17], hist[255]);
+    auto t8 = std::chrono::steady_clock::now();
+    fprintf(stderr, "setup %lld ms, saxpy %lld ms, reduce %lld ms, matmul %lld ms, tree %lld ms, tiled %lld ms, hist %lld ms (+%lld ms setup)\n", (long long)ms(t0, t1), (long long)ms(t1, t2), (long long)ms(t2, t3), (long long)ms(t3, t4), (long long)ms(t4, t5), (long long)ms(t5, t6), (long long)ms(t7, t8), (long long)ms(t6, t7));
 }

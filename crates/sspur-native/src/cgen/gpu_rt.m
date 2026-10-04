@@ -214,12 +214,17 @@ int ss_gpu_enqueue(const char* src, const char* entry, int32_t nargs, const SsGp
             if ((int64_t)ty > ny) ty = (NSUInteger)ny;
         }
         [g_en dispatchThreads:MTLSizeMake((NSUInteger)nx, (NSUInteger)ny, 1) threadsPerThreadgroup:MTLSizeMake(tx, ty, 1)];
-        if (++g_inflight >= 64) close_locked();
+        g_inflight++;
         r = 0;
     }
 out:
     pthread_mutex_unlock(&g_mu);
     return r;
+}
+void ss_gpu_commit(void) {
+    pthread_mutex_lock(&g_mu);
+    @autoreleasepool { close_locked(); }
+    pthread_mutex_unlock(&g_mu);
 }
 int ss_gpu_wait(void) {
     pthread_mutex_lock(&g_mu);
@@ -261,6 +266,7 @@ void ss_gpu_free(void* dev) {
 int ss_gpu_ready(void) { return 0; }
 int ss_gpu_enqueue(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t opts, int32_t slot) { (void)src; (void)entry; (void)nargs; (void)args; (void)nx; (void)ny; (void)gx; (void)gy; (void)opts; (void)slot; return 2; }
 int ss_gpu_wait(void) { return 0; }
+void ss_gpu_commit(void) {}
 uint32_t ss_gpu_flag(int32_t slot) { (void)slot; return 1; }
 const uint32_t* ss_gpu_mask(int32_t slot) { (void)slot; return 0; }
 int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t masked, const uint32_t** mask_out) { (void)src; (void)entry; (void)nargs; (void)args; (void)nx; (void)ny; (void)gx; (void)gy; (void)masked; (void)mask_out; return 2; }

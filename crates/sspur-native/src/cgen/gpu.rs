@@ -215,13 +215,6 @@ impl<'a> Em<'a> {
                 let vt = self.vty(et);
                 let ix = if self.t == Tgt::C { i } else { format!("({cast}{i} < {cast}{len} ? {i} : 0)") };
                 self.line(&format!("{vt} {t} = ({vt})s{a}[{ix}];"));
-                if et == KTy::F32 {
-                    match self.t {
-                        Tgt::Msl => self.fail(&format!("ss_sub(as_type<uint>({t}))"), 0, "0", "0"),
-                        Tgt::Ocl => self.fail(&format!("ss_sub(as_uint({t}))"), 0, "0", "0"),
-                        Tgt::C => {}
-                    }
-                }
                 t
             }
             KExpr::Bin(op @ (BinOp::And | BinOp::Or), _, a, b) => {
@@ -1022,10 +1015,13 @@ pub fn device_kernel(k: &Kernel, tgt: Tgt, narrow: bool) -> String {
         let space = if tgt == Tgt::Msl { "threadgroup" } else { "__local" };
         let (g, gy) = (k.group, k.group_y);
         em.line(&format!("{space} {e} s{i}[{len}];"));
+        if !k.shared_zero[i] {
+            continue;
+        }
         let start = if two { format!("(int)((gid_y % {gy}) * {g} + gid % {g})") } else { format!("(int)(gid % {g})") };
         em.line(&format!("for (int ss_z = {start}; ss_z < {len}; ss_z += {}) s{i}[ss_z] = 0;", g * gy));
     }
-    if !k.shared.is_empty() {
+    if k.shared_zero.contains(&true) {
         em.stmt(&KStmt::Barrier);
     }
 
@@ -1158,11 +1154,13 @@ void* ss_gpu_alloc(int64_t bytes, void** host);
 void ss_gpu_free(void* dev);
 int ss_gpu_enqueue(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t opts, int32_t slot);
 int ss_gpu_wait(void);
+void ss_gpu_commit(void);
 uint32_t ss_gpu_flag(int32_t slot);
 const uint32_t* ss_gpu_mask(int32_t slot);
 #else
 static int ss_gpu_enqueue(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t opts, int32_t slot) { (void)src; (void)entry; (void)nargs; (void)args; (void)nx; (void)ny; (void)gx; (void)gy; (void)opts; (void)slot; return 2; }
 static int ss_gpu_wait(void) { return 0; }
+static void ss_gpu_commit(void) {}
 static uint32_t ss_gpu_flag(int32_t slot) { (void)slot; return 1; }
 static const uint32_t* ss_gpu_mask(int32_t slot) { (void)slot; return 0; }
 static int ss_gpu_ready(void) { return 0; }
@@ -1197,17 +1195,28 @@ static inline __int128 iv_shr(__int128 a, __int128 s) { return s >= 64 ? 0 : a >
 static inline __int128 iv_ones(__int128 a) { __int128 m = 0; while (m < a) m = m * 2 + 1; return m; }
 static inline __int128 iv_rem_hi(
 __int128 al, __int128 ah, __int128 bl, __int128 bh) { return ah <= 0 ? 0 : iv_rem_m(al, ah, bl, bh); }
-struct SsDev { int64_t len, es; void* host; void* dev; struct SsDev* next; void* bk; uint64_t qb; int64_t qf; };
+struct SsDev { int64_t len, es; void* host; void* dev; struct SsDev* next; void* bk; uint64_t qb; int64_t qf; int32_t qbk; };
 static struct SsDev* ss_devs;
 #define SS_QMAX 256
-typedef struct SsLaunch { void (*cpu)(void*, const uint32_t*, Status*); void* rec; const char* name; const char* why; int64_t n; int32_t gpu, masked, narrow, nw, nr; struct SsDev* w[16]; struct SsDev* r[16]; } SsLaunch;
+typedef struct SsLaunch { void (*cpu)(void*, const uint32_t*, Status*); void* rec; const char* name; const char* why; int64_t n, fidx; int32_t gpu, masked, narrow, nw, nr; struct SsDev* w[16]; struct SsDev* r[16]; } SsLaunch;
 static SsLaunch ss_q[SS_QMAX];
-static int ss_qn, ss_q_tail, ss_q_gpus;
+static struct SsDev* ss_q_pend[SS_QMAX * 16];
+static int ss_qn, ss_q_tail, ss_q_gpus, ss_q_npend, ss_q_incb;
 static uint64_t ss_qbatch = 1;
 static pthread_mutex_t ss_q_mu = PTHREAD_MUTEX_INITIALIZER;
 static void ss_q_drop(void) {
     for (int i = 0; i < ss_qn; i++) free(ss_q[i].rec);
-    ss_qn = 0; ss_q_tail = 0; ss_q_gpus = 0; ss_qbatch++;
+    ss_qn = 0; ss_q_tail = 0; ss_q_gpus = 0; ss_q_npend = 0; ss_q_incb = 0; ss_qbatch++;
+}
+static void ss_q_backup(void) {
+    for (int k = 0; k < ss_q_npend; k++) {
+        struct SsDev* d = ss_q_pend[k];
+        if (d->qbk) continue;
+        if (!d->bk) d->bk = malloc((size_t)(d->len ? d->len : 1) * (size_t)d->es);
+        if (d->len) memcpy(d->bk, d->host, (size_t)(d->len * d->es));
+        d->qbk = 1;
+    }
+    ss_q_npend = 0;
 }
 static void ss_q_cpu(SsLaunch* L, const uint32_t* m, Status* st) {
     jmp_buf jb; jmp_buf* saved = sspur_jb; sspur_jb = &jb;
@@ -1231,6 +1240,7 @@ static int ss_q_alone(int i) {
 static void ss_q_sync_locked(Status* st) {
     int n = ss_qn;
     if (!n) return;
+    if (n > 1 || !ss_q[0].masked) ss_q_backup();
     int ok = !ss_q_gpus || ss_gpu_wait() == 0;
     for (int i = 0; i < n; i++) {
         SsLaunch* L = &ss_q[i];
@@ -1244,7 +1254,17 @@ static void ss_q_sync_locked(Status* st) {
             if (s2 == s) break;
             s = s2;
         }
-        for (int j = s; j < n; j++) for (int k = 0; k < ss_q[j].nw; k++) { struct SsDev* d = ss_q[j].w[k]; if (d->len) memcpy(d->host, d->bk, (size_t)(d->len * d->es)); }
+        for (int j = s; j < n; j++) for (int k = 0; k < ss_q[j].nw; k++) {
+            struct SsDev* d = ss_q[j].w[k];
+            if (d->qbk) { if (d->len) memcpy(d->host, d->bk, (size_t)(d->len * d->es)); continue; }
+            if (ss_q[d->qf].gpu) {
+                SsLaunch F = ss_q[d->qf];
+                char* m = (char*)malloc(strlen(F.name) + 64);
+                sprintf(m, "dev: the GPU failed while running %s", F.name);
+                ss_q_drop(); pthread_mutex_unlock(&ss_q_mu);
+                dev_fail(st, F.fidx, m, -1, 0, 0);
+            }
+        }
         for (int j = s; j < n; j++) {
             ss_trace(ss_q[j].name, !ss_q[j].gpu ? ss_q[j].why : !ok ? "cpu rerun (GPU failure)" : j < i ? "cpu rerun (before a flagged launch)" : j > i ? "cpu rerun (after a flagged launch)" : "cpu rerun (trap or subnormal)", ss_q[j].n);
             ss_q_cpu(&ss_q[j], 0, st);
@@ -1264,18 +1284,17 @@ static void ss_q_push(Status* st, SsLaunch* L, const char* src, const char* entr
     ss_sync_hook = ss_q_sync;
     if (ss_qn == SS_QMAX || (entry && ss_q_tail)) ss_q_sync_locked(st);
     int i = ss_qn;
+    L->gpu = entry && ss_gpu_enqueue(src, entry, nargs, g, nx, ny, gx, gy, opts, i) == 0;
     for (int k = 0; k < L->nw; k++) {
         struct SsDev* d = L->w[k];
         if (d->qb == ss_qbatch) continue;
-        d->qb = ss_qbatch; d->qf = i;
-        if (!entry && !ss_q_gpus) continue;
-        if (!d->bk) d->bk = malloc((size_t)(d->len ? d->len : 1) * (size_t)d->es);
-        if (d->len) memcpy(d->bk, d->host, (size_t)(d->len * d->es));
+        d->qb = ss_qbatch; d->qf = i; d->qbk = 0;
+        if (L->gpu) ss_q_pend[ss_q_npend++] = d;
     }
-    L->gpu = entry && ss_gpu_enqueue(src, entry, nargs, g, nx, ny, gx, gy, opts, i) == 0;
     if (L->gpu) ss_q_gpus++; else ss_q_tail = 1;
     ss_q[i] = *L;
     ss_qn++;
+    if (L->gpu && ++ss_q_incb >= 64) { ss_q_backup(); ss_gpu_commit(); ss_q_incb = 0; }
     pthread_mutex_unlock(&ss_q_mu);
 }
 static void ss_dev_reset(void) {
@@ -1449,7 +1468,7 @@ impl Cx<'_> {
         if all_dev {
             writeln!(self.protos, "typedef struct {{ {} int64_t ss_n, ss_ny; }} KQ_{cname};\nstatic void kq_{cname}(void* r_, const uint32_t* m_, Status* st);", rec.join(" ")).unwrap();
             writeln!(s, "    KQ_{cname}* q_ = (KQ_{cname}*)malloc(sizeof(KQ_{cname}));\n    q_->ss_n = ss_n; q_->ss_ny = ss_ny;").unwrap();
-            writeln!(s, "    SsLaunch L_ = {{0}}; L_.cpu = kq_{cname}; L_.rec = q_; L_.name = \"{name}\"; L_.n = ss_n * ss_ny; L_.masked = {};", i32::from(commit)).unwrap();
+            writeln!(s, "    SsLaunch L_ = {{0}}; L_.cpu = kq_{cname}; L_.rec = q_; L_.name = \"{name}\"; L_.fidx = FIDX; L_.n = ss_n * ss_ny; L_.masked = {};", i32::from(commit)).unwrap();
             s.push_str(&fill);
             let why = if k.uses_f64() { "cpu (F64 is not available on the GPU)" } else { "cpu" };
             writeln!(s, "    L_.why = \"{why}\";\n    const char* e_ = 0; int nar_ = 0; (void)nar_;").unwrap();

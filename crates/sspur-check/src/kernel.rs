@@ -167,6 +167,7 @@ pub struct Kernel {
     pub locals: Vec<KTy>,
     pub writes: Vec<bool>,
     pub shared: Vec<(String, KTy, u32)>,
+    pub shared_zero: Vec<bool>,
     pub grouped: bool,
 }
 
@@ -256,6 +257,7 @@ struct SAcc {
     ver: HashMap<usize, u32>,
     loops: Vec<usize>,
     span: Span,
+    top: bool,
 }
 
 type Lin = (std::collections::BTreeMap<String, i128>, i128);
@@ -454,7 +456,8 @@ pub fn lower_with(f: &FnDef, fns: &dyn Fn(&str) -> Option<FnDef>) -> Result<Kern
         }
     }
     let grouped = lw.barriers > 0 || !lw.shared.is_empty();
-    Ok(Kernel { name: f.name.clone(), params: lw.params, grid: grid.unwrap(), group, grid_y, group_y, pres, body, locals: lw.locals, writes, shared: lw.shared, grouped })
+    let shared_zero = (0..lw.shared.len()).map(|a| lw.needs_zero(a)).collect();
+    Ok(Kernel { name: f.name.clone(), params: lw.params, grid: grid.unwrap(), group, grid_y, group_y, pres, body, locals: lw.locals, writes, shared: lw.shared, shared_zero, grouped })
 }
 
 fn atomic_op(n: &str) -> Option<AOp> {
@@ -681,7 +684,8 @@ impl Lower<'_> {
     }
 
     fn record(&mut self, arr: usize, write: bool, idx: &KExpr, span: Span) {
-        self.sacc.push(SAcc { arr, segs: self.cur.clone(), write, atomic: None, idx: idx.clone(), guards: self.guards.clone(), ver: HashMap::new(), loops: self.loops.clone(), span });
+        let top = self.nest == 0 && self.inl.is_empty();
+        self.sacc.push(SAcc { arr, segs: self.cur.clone(), write, atomic: None, idx: idx.clone(), guards: self.guards.clone(), ver: HashMap::new(), loops: self.loops.clone(), span, top });
     }
 
     fn bind(&mut self, n: &str, ty: KTy, mutable: bool, def: Def, span: Span) -> KR<usize> {
@@ -1567,7 +1571,14 @@ impl Lower<'_> {
         self.lin(&a.idx, side, &a.ver).map(|u| (u, (Default::default(), 1)))
     }
 
+    fn needs_zero(&self, arr: usize) -> bool {
+        let Some(a) = self.sacc.iter().find(|a| a.arr == arr) else { return false };
+        let full = self.shared[arr].2 == self.group * self.group_y;
+        !(full && a.write && a.atomic.is_none() && a.top && a.segs == [0] && a.guards.is_empty() && self.stid(&a.idx, 'a', &a.ver) == Some((Default::default(), 0)))
+    }
+
     fn shared_check(&mut self) {
+
         for arr in 0..self.shared.len() {
             let name = self.shared[arr].0.clone();
             let segs: HashSet<usize> = self.sacc.iter().filter(|a| a.arr == arr).flat_map(|a| a.segs.iter().copied()).collect();

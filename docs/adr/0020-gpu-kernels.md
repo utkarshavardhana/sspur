@@ -75,4 +75,4 @@ Launches are synchronous, about 0.25 ms of submit-and-wait each, and the CPU sha
 
 ## Not yet
 
-Asynchronous launch queues (they need per-launch backups or dependency tracking to keep reruns exact); threadgroup memory and barriers, so tree reductions and tiled matmul; atomics in kernels; 2D and 3D grids; float-to-int conversions; kernels calling pure helper functions; a resident subnormal-free bit on `DevBuf` to drop load checks; running SPIR-V and PTX (no Vulkan or CUDA runtime here) and an ahead-of-time `metallib`; `export-c` with kernels.
+ADR 0023 adds asynchronous launches, threadgroup memory and barriers, atomics, 2D grids and helper calls. Still open from this list: 3D grids; float-to-int conversions; a resident subnormal-free bit on `DevBuf` to drop load checks; running SPIR-V and PTX (no Vulkan or CUDA runtime here) and an ahead-of-time `metallib`; `export-c` with kernels.

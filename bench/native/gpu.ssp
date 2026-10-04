@@ -17,6 +17,44 @@ kernel fn matmul(a: &[F32], b: &[F32], c: &mut [F32], n: Int) @grid(n * n, 64)
     acc := acc + a[row * n + k] * b[k * n + col]
   c[gid] := acc
 
+kernel fn tree_sum(x: &[F32], out: &mut [F32]) @grid(x.len / 8, 256)
+  pre out.len * 2048 == x.len
+= do
+  sh = shared[F32](256)
+  base = group_id * 2048 + lid
+  var acc = x[base]
+  for j in 1..8
+    acc := acc + x[base + j * 256]
+  sh[lid] := acc
+  barrier()
+  for k in 0..8
+    s = 128.shr(k)
+    if lid < s then sh[lid] := sh[lid] + sh[lid + s]
+    barrier()
+  if lid == 0 then out[group_id] := sh[0]
+
+kernel fn tiled(a: &[F32], b: &[F32], c: &mut [F32], n: Int) @grid2(n, n, 16, 16)
+= do
+  ta = shared[F32](256)
+  tb = shared[F32](256)
+  var acc = 0.0
+  for t in 0..n / 16
+    ta[lid.y * 16 + lid.x] := a[gid.y * n + t * 16 + lid.x]
+    tb[lid.y * 16 + lid.x] := b[(t * 16 + lid.y) * n + gid.x]
+    barrier()
+    for k in 0..16
+      acc := acc + ta[lid.y * 16 + k] * tb[k * 16 + lid.x]
+    barrier()
+  c[gid.y * n + gid.x] := acc
+
+kernel fn histogram(x: &[I32], h: &mut [I32]) @grid(x.len, 256)
+  pre h.len == 256
+= do
+  local = shared[I32](256)
+  local.atomic_add(x[gid].to_int % 256, 1)
+  barrier()
+  h.atomic_add(lid, local[lid])
+
 fn main() ! dev, log, io, time
 = do
   n = 4194304
@@ -44,4 +82,25 @@ fn main() ! dev, log, io, time
   cs = c.to_list
   log("matmul {cs.sum} {cs[0]} {cs[m * m - 1]}")
   t4 = mono_ns()
-  eprint("setup {(t1 - t0) / 1000000} ms, saxpy {(t2 - t1) / 1000000} ms, reduce {(t3 - t2) / 1000000} ms, matmul {(t4 - t3) / 1000000} ms")
+  sums = dev_f32((0..n / 2048).map(i => 0.0))
+  var tree = 0.0
+  for r in 0..100
+    tree_sum(&y, &mut sums)
+    tree := tree + sums.to_list.sum
+  log("tree {tree}")
+  t5 = mono_ns()
+  ct = dev_f32((0..m * m).map(i => 0.0))
+  for r in 0..20
+    tiled(&a, &b, &mut ct, m)
+  ts = ct.to_list
+  log("tiled {ts.sum} {ts[0]} {ts[m * m - 1]} {ts == cs}")
+  t6 = mono_ns()
+  xs = dev_i32((0..n).map(i => (i * 7919) % 1000003))
+  hist = dev_i32((0..256).map(i => 0))
+  t7 = mono_ns()
+  for r in 0..20
+    histogram(&xs, &mut hist)
+  hs = hist.to_list
+  log("hist {hs.sum} {hs[0]} {hs[17]} {hs[255]}")
+  t8 = mono_ns()
+  eprint("setup {(t1 - t0) / 1000000} ms, saxpy {(t2 - t1) / 1000000} ms, reduce {(t3 - t2) / 1000000} ms, matmul {(t4 - t3) / 1000000} ms, tree {(t5 - t4) / 1000000} ms, tiled {(t6 - t5) / 1000000} ms, hist {(t8 - t7) / 1000000} ms (+{(t7 - t6) / 1000000} ms setup)")

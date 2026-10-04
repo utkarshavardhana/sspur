@@ -103,7 +103,7 @@ Every function declares what it does after `!`. Undeclared effects are compile e
 | A declared effect, e.g. `ask` | Calling one of its operations, e.g. `ask()` |
 | `yield[T]` | `yield(x)` where `x: T` (built in, for generators) |
 | `ffi` | Calling an `extern fn` |
-| `dev` | Calling a `kernel fn`, `dev_f32 dev_f64 dev_i32 dev_u32 dev_int`, `DevBuf.to_list` |
+| `dev` | Calling a `kernel fn`, `dev_f32 dev_f64 dev_i32 dev_u32 dev_int`, `DevBuf.to_list`, `gpu_sync()` |
 | `fs` | `read_file write_file append_file remove_file list_dir read_bytes write_bytes mkdir mkdir_all remove_dir rename exists is_dir file_size modified_ms` |
 | `io` | `read_line read_lines` (stdin), `eprint` (stderr) |
 | `proc` | `run_cmd exit` |
@@ -319,7 +319,7 @@ fn main() ! mmio, div
 
 ## GPU kernels
 
-A `kernel fn` runs once per thread on the GPU (ADR 0020). Any profile except `bare` can define one.
+A `kernel fn` runs once per thread on the GPU (ADR 0020, ADR 0023). Any profile except `bare` can define one.
 
 ```
 kernel fn saxpy(a: F32, x: &[F32], y: &mut [F32]) @grid(y.len, 256)
@@ -333,6 +333,23 @@ kernel fn partial(x: &[F32], out: &mut [F32]) @grid(out.len, 256)
     acc := acc + x[gid + k * out.len]
   out[gid] := acc
 
+kernel fn tree(x: &[F32], out: &mut [F32]) @grid(x.len, 256)
+= do
+  sh = shared[F32](256)
+  sh[lid] := x[gid]
+  barrier()
+  for k in 0..8
+    s = 128.shr(k)
+    if lid < s then sh[lid] := sh[lid] + sh[lid + s]
+    barrier()
+  if lid == 0 then out[group_id] := sh[0]
+
+fn sq(x: I32) -> I32
+= x * x
+
+kernel fn hist(x: &[I32], w: Int, h: &mut [I32]) @grid2(w, x.len / w, 16, 4)
+= h.atomic_add(sq(x[gid.y * w + gid.x]).to_int % h.len, 1)
+
 fn demo() -> F64 ! dev
 = do
   var ys = [1.0, 2.0]
@@ -345,15 +362,19 @@ fn demo() -> F64 ! dev
 
 | Feature | Rules |
 |---|---|
-| `@grid(n, g)` | `n` threads (an `Int` over parameters and `.len`; 0 or less launches nothing) in groups of `g`, an `Int` literal from 1 to 1024 (`E_KERNEL_GRID`) |
+| `@grid(n, g)` | `n` threads (an `Int` over parameters and `.len`; 0 or less launches nothing) in groups of `g`, an `Int` literal from 1 to 1024 (`E_KERNEL_GRID`). `@grid2(w, h, gw, gh)` is a `w` by `h` grid in `gw` by `gh` groups (`gw * gh` at most 1024), run row-major |
 | Parameters | Scalars `Int I32 U32 F32 F64 Bool`, or slices `&[T]` / `&mut [T]` of `Int I32 U32 F32 F64` (`E_KERNEL_SIG`). No result, generics or `post`; `pre` is checked before launch. Kernels may declare only `dev` (`E_KERNEL_EFFECT`) |
-| Body | `x = e`, `var x = e`, `x := e`, `y[i] := v` (`&mut` only, `E_KERNEL_WRITE`), `for i in a..b`, `if`, arithmetic, comparisons, `and or not`, `xs[i]`, `xs.len`, `.to_int .to_i32 .to_u32 .to_f32 .to_f64` (not float to int), `.sqrt .abs .floor .ceil .round .min(b) .max(b)`. No calls, `while`, lambdas, lists, records, tuples or strings (`E_KERNEL`) |
-| Intrinsics | `gid` (0 to n-1), `lid` (`gid % g`), `group_id` (`gid / g`), `group_size`, `grid_size` (all `Int`) |
+| Body | `x = e`, `var x = e`, `x := e`, `y[i] := v` (`&mut` only, `E_KERNEL_WRITE`), `for i in a..b`, `if`, arithmetic, comparisons, `and or not`, `xs[i]`, `xs.len`, `.to_int .to_i32 .to_u32 .to_f32 .to_f64` (not float to int), `.sqrt .abs .floor .ceil .round .min(b) .max(b)`, integer `.shl(n) .shr(n) .band(m) .bor(m) .bxor(m)`. No `while`, lambdas, lists, records, tuples or strings (`E_KERNEL`) |
+| Intrinsics | `gid` (0 to n-1), `lid` (`gid % g`), `group_id` (`gid / g`), `group_size`, `grid_size` (all `Int`). In `@grid2` kernels each has `.x` and `.y` and the bare names are `E_KERNEL` |
+| Helpers | Kernels call top-level `fn`s with scalar parameters and result, no effects, generics or contracts; they are inlined (recursion is `E_KERNEL`) and see only their parameters. A `fn` over `F32`, `I32` or `U32` is a device fn: checked by these rules, callable only from kernels (`E_KERNEL_DEVICE`) |
+| Shared memory | `t = shared[T](n)` at the top of the body: a zeroed per-group array (`T` numeric, `n` from literals and `group_size`, 32 KB per kernel, `E_KERNEL_SHARED`), used like a slice. `barrier()` must sit under conditions and loop bounds that are the same for the whole group: literals, scalar parameters, lengths, `group_id`, `group_size` (`E_KERNEL_BARRIER`). Thread counts must be multiples of the group size (a `dev:` trap) |
+| Atomics | `b.atomic_add(i, v)`, `atomic_min`, `atomic_max` (`I32 U32`; `atomic_add` also `F32`) and `b.atomic_cas(i, expected, new)` with thread-uniform values, on `&mut` slices and shared arrays. Statements only; integer adds wrap. A buffer updated atomically uses one operation kind and no plain access in the kernel (per phase for shared arrays) |
 | Types | Numbers keep their width: `I32`/`U32` arithmetic traps outside the type, `F32` rounds like IEEE single precision. Float literals are `F32` unless the kernel's floats are all `F64`; integer literals take the other operand's type; mixing types needs a conversion (`E_KERNEL_TYPE`) |
-| Races | Every access to a written `&mut` slice uses one per-thread index: `gid` plus a uniform offset, or `gid * s + j` with `for j in 0..s`. Otherwise `E_KERNEL_RACE` |
+| Races | Every access to a written `&mut` slice uses one per-thread index: `gid` plus a uniform offset (`gid.y * w + gid.x` with `w` the grid width), `gid * s + j` with `for j in 0..s`, or `group_id` plus an offset under `if lid == c`. Between two barriers, a written shared array is written at `lid` (or `lid.y * gw + lid.x`) plus an offset, and other accesses hit the same element or a provably disjoint range, such as `[lid + s]` under `if lid < s`. Otherwise `E_KERNEL_RACE` |
 | Launch | `k(args)` performs `dev`. Scalars convert (`F64` rounds to `F32`; out-of-range `Int` traps with `dev: argument ...`). A slice takes `&xs` (a `List[F64]` or `List[Int]`, copied in) or `&mut ys` (`ys` a `var`, replaced by the result), or a `DevBuf` |
 | `DevBuf[T]` | `dev_f32(xs)` (also `dev_f64 dev_i32 dev_u32 dev_int`) copies a list to device memory; kernels update it in place; `b.to_list` copies back, `b.len` is its length. It is a handle (copies alias); passing one buffer twice to a kernel that writes it traps. Buffers are freed when native code returns to the interpreter |
-| Semantics | The interpreter runs threads 0 to n-1 in order. Native code runs on Metal and gives the same results and traps, rerunning on the CPU when a thread could trap or meet a subnormal `F32`; `F64` kernels run on the CPU. `SSPUR_GPU=0` forces the CPU, `SSPUR_GPU_TRACE=1` reports each launch |
+| Semantics | The interpreter runs threads 0 to n-1 in order; kernels with shared memory or barriers run group by group in lockstep between barriers. Native code runs on Metal and gives the same results and traps, rerunning on the CPU when a thread could trap or meet a subnormal `F32`; `F64` kernels run on the CPU. `SSPUR_GPU=0` forces the CPU, `SSPUR_GPU_TRACE=1` reports each launch |
+| Queueing | Launches on `DevBuf`s are queued. They complete, and a trap inside one is reported, at the next `b.to_list`, `gpu_sync()`, launch with list arguments, failed launch check, or the end of the program or test, in every tier |
 
 `sspur gpu file.ssp --emit metal|opencl|spirv|ptx [-o out]` prints Metal or OpenCL C, or compiles SPIR-V and PTX with a clang that has those backends (`SSPUR_GPU_CC`, `clang`, or Homebrew LLVM).
 

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TEST_THREADS: 2
+  SSPUR_SMT_TIMEOUT: 5000
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-15
+          - name: Linux x86_64
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install z3
+
+      - name: Install tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang lld llvm z3 tzdata
+
+      - name: Toolchain versions
+        run: |
+          rustc --version
+          clang --version
+          z3 --version
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Version
+        run: ./target/release/sspur --version
+
+      - name: Clippy
+        run: cargo clippy --release --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Corpus differential check
+        env:
+          SSPUR_BIN: ${{ github.workspace }}/target/release/sspur
+        run: python3 tools/corpus_diff.py

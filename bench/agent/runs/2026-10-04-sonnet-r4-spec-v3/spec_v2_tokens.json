@@ -1,0 +1,32 @@
+{
+ "sspur/a2_wordstats": {
+  "calls": 3,
+  "tool_uses": 3,
+  "input": 95524,
+  "output": 814,
+  "total": 96338,
+  "net": 19088,
+  "read": 2086,
+  "wrote": 800
+ },
+ "sspur/a3_bank": {
+  "calls": 3,
+  "tool_uses": 3,
+  "input": 97673,
+  "output": 1173,
+  "total": 98846,
+  "net": 21596,
+  "read": 2528,
+  "wrote": 1159
+ },
+ "sspur/a6_todo": {
+  "calls": 6,
+  "tool_uses": 7,
+  "input": 208891,
+  "output": 1969,
+  "total": 210860,
+  "net": 56360,
+  "read": 2543,
+  "wrote": 1955
+ }
+}

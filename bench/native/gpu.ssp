@@ -1,0 +1,47 @@
+kernel fn saxpy(a: F32, x: &[F32], y: &mut [F32]) @grid(y.len, 256)
+= y[gid] := a * x[gid] + y[gid]
+
+kernel fn partial_sums(x: &[F32], out: &mut [F32]) @grid(out.len, 256)
+= do
+  var acc = 0.0
+  for k in 0..x.len / out.len
+    acc := acc + x[gid + k * out.len]
+  out[gid] := acc
+
+kernel fn matmul(a: &[F32], b: &[F32], c: &mut [F32], n: Int) @grid(n * n, 64)
+= do
+  row = gid / n
+  col = gid % n
+  var acc = 0.0
+  for k in 0..n
+    acc := acc + a[row * n + k] * b[k * n + col]
+  c[gid] := acc
+
+fn main() ! dev, log, io, time
+= do
+  n = 4194304
+  t0 = mono_ns()
+  x = dev_f32((0..n).map(i => (i % 1000).to_f64 * 0.001))
+  y = dev_f32((0..n).map(i => (i % 7).to_f64))
+  t1 = mono_ns()
+  for r in 0..100
+    saxpy(0.5, &x, &mut y)
+  log("saxpy {y.to_list.sum}")
+  t2 = mono_ns()
+  parts = dev_f32((0..65536).map(i => 0.0))
+  var total = 0.0
+  for r in 0..100
+    partial_sums(&y, &mut parts)
+    total := total + parts.to_list.sum
+  log("reduce {total}")
+  t3 = mono_ns()
+  m = 512
+  a = dev_f32((0..m * m).map(i => (i % 17).to_f64 * 0.125 - 1.0))
+  b = dev_f32((0..m * m).map(i => (i % 13).to_f64 * 0.25 - 1.5))
+  c = dev_f32((0..m * m).map(i => 0.0))
+  for r in 0..20
+    matmul(&a, &b, &mut c, m)
+  cs = c.to_list
+  log("matmul {cs.sum} {cs[0]} {cs[m * m - 1]}")
+  t4 = mono_ns()
+  eprint("setup {(t1 - t0) / 1000000} ms, saxpy {(t2 - t1) / 1000000} ms, reduce {(t3 - t2) / 1000000} ms, matmul {(t4 - t3) / 1000000} ms")

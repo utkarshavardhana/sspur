@@ -7,6 +7,16 @@ kernel fn bump(m: &mut [I32]) @grid(m.len, 64)
 kernel fn half(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
 = y[gid] := x[gid] * 0.5
 
+kernel fn scale(y: &mut [F32], s: F32) @grid(y.len, 32)
+= y[gid] := y[gid] * s
+
+fn partial_rerun() -> List[F64] ! dev
+= do
+  y = dev_f32((0..100).map(i => if i % 7 == 0 then 1.0e-30 else i.to_f64))
+  scale(&mut y, 1.0e-10)
+  scale(&mut y, 3.0)
+  y.to_list
+
 fn steps(n: Int, k: Int) -> List[F64] ! dev
 = do
   x = dev_f32((0..n).map(i => i.to_f64))
@@ -63,3 +73,4 @@ fn main() ! dev, log
   log("{steps(100000, 10).sum}")
   log("{mixed(5)}")
   log("{shared(4)}")
+  log("{partial_rerun()}")

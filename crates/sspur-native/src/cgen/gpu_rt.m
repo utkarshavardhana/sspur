@@ -26,7 +26,23 @@ int ss_gpu_ready(void) {
     return g_state;
 }
 static NSMutableDictionary* g_libs;
+#define PIPE_CACHE 64
+static struct { const char* src; const char* entry; void* ps; } g_fast[PIPE_CACHE];
+static id<MTLComputePipelineState> pipe_slow(const char* src, const char* entry);
 static id<MTLComputePipelineState> pipe_for(const char* src, const char* entry) {
+    for (int i = 0; i < PIPE_CACHE && g_fast[i].src; i++) {
+        if (g_fast[i].src == src && g_fast[i].entry == entry) return (__bridge id<MTLComputePipelineState>)g_fast[i].ps;
+    }
+    id<MTLComputePipelineState> ps = pipe_slow(src, entry);
+    for (int i = 0; i < PIPE_CACHE; i++) {
+        if (!g_fast[i].src) {
+            g_fast[i].src = src; g_fast[i].entry = entry; g_fast[i].ps = (__bridge void*)ps;
+            break;
+        }
+    }
+    return ps;
+}
+static id<MTLComputePipelineState> pipe_slow(const char* src, const char* entry) {
     NSString* key = [NSString stringWithFormat:@"%s\n%s", entry, src];
     id p = g_pipes[key];
     if (p) return p == [NSNull null] ? nil : p;
@@ -52,11 +68,26 @@ static id<MTLComputePipelineState> pipe_for(const char* src, const char* entry) 
     g_pipes[key] = ps ? (id)ps : (id)[NSNull null];
     return ps;
 }
-int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group) {
+static id<MTLBuffer> g_flag, g_mask;
+static int g_mask_dirty;
+int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask_out) {
     if (!ss_gpu_ready() || n <= 0 || n > 0x7fffffff) return 2;
     @autoreleasepool {
         id<MTLComputePipelineState> ps = pipe_for(src, entry);
         if (!ps) return 2;
+        if (!g_flag) g_flag = [g_dev newBufferWithLength:16 options:MTLResourceStorageModeShared];
+        NSUInteger words = (NSUInteger)((n + 31) / 32);
+        if (masked && (!g_mask || g_mask.length < words * 4)) {
+            g_mask = [g_dev newBufferWithLength:words * 4 + 4096 options:MTLResourceStorageModeShared];
+            if (g_mask) memset([g_mask contents], 0, g_mask.length);
+            g_mask_dirty = 0;
+        }
+        if (!g_flag || (masked && !g_mask)) return 2;
+        if (masked && g_mask_dirty) {
+            memset([g_mask contents], 0, g_mask.length);
+            g_mask_dirty = 0;
+        }
+        *(uint32_t*)[g_flag contents] = 0;
         NSMutableArray* bufs = [NSMutableArray arrayWithCapacity:nargs];
         id<MTLCommandBuffer> cb = [g_queue commandBuffer];
         id<MTLComputeCommandEncoder> en = [cb computeCommandEncoder];
@@ -76,9 +107,8 @@ int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg
             [en setBuffer:b offset:0 atIndex:(NSUInteger)i];
             [bufs addObject:b];
         }
-        id<MTLBuffer> flag = [g_dev newBufferWithLength:4 options:MTLResourceStorageModeShared];
-        memset([flag contents], 0, 4);
-        [en setBuffer:flag offset:0 atIndex:(NSUInteger)nargs];
+        [en setBuffer:g_flag offset:0 atIndex:(NSUInteger)nargs];
+        if (masked) [en setBuffer:g_mask offset:0 atIndex:(NSUInteger)nargs + 1];
         NSUInteger g = ps.maxTotalThreadsPerThreadgroup;
         if ((int64_t)g > group) g = (NSUInteger)group;
         if ((int64_t)g > n) g = (NSUInteger)n;
@@ -88,11 +118,19 @@ int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg
         [cb waitUntilCompleted];
         if (cb.status != MTLCommandBufferStatusCompleted) {
             if (trace_on()) fprintf(stderr, "gpu: %s failed: %s\n", entry, cb.error ? [[cb.error description] UTF8String] : "unknown error");
-            return 2;
+            g_mask_dirty = 1;
+            return 3;
         }
-        if (*(uint32_t*)[flag contents]) return 1;
+        int flagged = *(uint32_t*)[g_flag contents] != 0;
+        if (flagged && masked) g_mask_dirty = 1;
+        if (flagged && masked != 2) return 1;
         for (int32_t i = 0; i < nargs; i++) {
             if (args[i].kind == 2) memcpy((void*)args[i].ptr, [(id<MTLBuffer>)bufs[i] contents], (size_t)args[i].bytes);
+        }
+        if (flagged) {
+            g_mask_dirty = 1;
+            *mask_out = (const uint32_t*)[g_mask contents];
+            return 1;
         }
     }
     return 0;
@@ -109,7 +147,7 @@ void ss_gpu_free(void* dev) {
 }
 #else
 int ss_gpu_ready(void) { return 0; }
-int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group) { (void)src; (void)entry; (void)nargs; (void)args; (void)n; (void)group; return 2; }
+int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask_out) { (void)src; (void)entry; (void)nargs; (void)args; (void)n; (void)group; (void)masked; (void)mask_out; return 2; }
 void* ss_gpu_alloc(int64_t bytes, void** host) { (void)bytes; (void)host; return 0; }
 void ss_gpu_free(void* dev) { (void)dev; }
 #endif

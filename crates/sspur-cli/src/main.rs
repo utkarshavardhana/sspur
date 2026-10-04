@@ -322,6 +322,11 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
                 for f in &c.functions {
                     println!("native  {f}");
                 }
+                for (f, k) in &loaded.check.kernels {
+                    if !c.skipped.contains_key(f) {
+                        println!("kernel  {f}  ({})", if k.uses_f64() { "C on the CPU: F64" } else { "Metal, C fallback" });
+                    }
+                }
                 for (f, why) in &c.skipped {
                     println!("interp  {f}  ({why})");
                 }

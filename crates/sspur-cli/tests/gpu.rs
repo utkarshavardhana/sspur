@@ -141,6 +141,8 @@ fn native_kernels_match_the_interpreter_on_gpu_and_cpu() {
         let (_, _, err) = run(&["run"], &suite().join("exact.ssp"), &[("SSPUR_GPU_TRACE", "1")]);
         assert!(err.contains("gpu ops: cpu rerun"), "subnormal data must fall back: {err}");
         assert!(err.contains("gpu ops: metal"), "normal data must stay on the GPU: {err}");
+        let (_, _, err) = run(&["run"], &suite().join("devbuf.ssp"), &[("SSPUR_GPU_TRACE", "1")]);
+        assert!(err.contains("gpu scale: cpu rerun of flagged threads"), "in-place buffers rerun only flagged threads: {err}");
     }
 }
 

@@ -14,6 +14,8 @@ pub(super) struct Em<'a> {
     out: String,
     n: usize,
     ind: usize,
+    mask: bool,
+    narrow: bool,
 }
 
 const FLT_TINY: &str = "2.3509887e-38f";
@@ -68,7 +70,7 @@ pub fn elem_c(t: KTy, tgt: Tgt) -> &'static str {
 
 impl<'a> Em<'a> {
     pub(super) fn new(k: &'a Kernel, t: Tgt, ind: usize) -> Self {
-        Em { k, t, out: String::new(), n: 0, ind }
+        Em { k, t, out: String::new(), n: 0, ind, mask: false, narrow: false }
     }
 
     pub(super) fn take(&mut self) -> String {
@@ -82,7 +84,16 @@ impl<'a> Em<'a> {
             (KTy::Bool, Tgt::C) => "int",
             (KTy::Bool, _) => "bool",
             (_, Tgt::C) => "int64_t",
+            _ if self.narrow => "int",
             _ => "long",
+        }
+    }
+
+    fn ucast(&self) -> &'static str {
+        match self.t {
+            Tgt::C => "(uint64_t)",
+            _ if self.narrow => "(uint)",
+            _ => "(ulong)",
         }
     }
 
@@ -102,12 +113,31 @@ impl<'a> Em<'a> {
     fn fail(&mut self, cond: &str, code: i64, clause: &str, value: &str) {
         match self.t {
             Tgt::C => self.line(&format!("if (UNLIKELY({cond})) TRAPV({code}, {clause}, {value});")),
-            Tgt::Msl => self.line(&format!("if ({cond}) {{ atomic_store_explicit(ss_flag, 1u, memory_order_relaxed); return; }}")),
-            Tgt::Ocl => self.line(&format!("if ({cond}) {{ *ss_flag = 1u; return; }}")),
+            _ => self.line(&format!("bad |= ({cond});")),
         }
     }
 
+    fn flag(&self) -> &'static str {
+        match (self.t, self.mask) {
+            (Tgt::Msl, true) => "atomic_fetch_or_explicit(&ss_mask[gid >> 5], 1u << (uint)(gid & 31), memory_order_relaxed); atomic_store_explicit(ss_flag, 1u, memory_order_relaxed);",
+            (Tgt::Msl, false) => "atomic_store_explicit(ss_flag, 1u, memory_order_relaxed);",
+            (_, true) => "SS_OR(&ss_mask[gid >> 5], 1u << (uint)(gid & 31)); *ss_flag = 1u;",
+            _ => "*ss_flag = 1u;",
+        }
+    }
+
+    fn safe_index(&self, i: &str, p: usize) -> String {
+        if self.t == Tgt::C {
+            return i.to_string();
+        }
+        let cast = self.ucast();
+        format!("({cast}{i} < {cast}l{p} ? {i} : 0)")
+    }
+
     fn range(&mut self, t: KTy, v: &str) {
+        if self.narrow {
+            return;
+        }
         match t {
             KTy::I32 => self.fail(&format!("{v} < -2147483648LL || {v} > 2147483647LL").replace("LL", if self.t == Tgt::C { "LL" } else { "L" }), T_OVERFLOW, "0", "0"),
             KTy::U32 => self.fail(&format!("{v} < 0 || {v} > 4294967295LL").replace("LL", if self.t == Tgt::C { "LL" } else { "L" }), T_OVERFLOW, "0", "0"),
@@ -127,28 +157,33 @@ impl<'a> Em<'a> {
 
     pub(super) fn expr(&mut self, e: &KExpr) -> String {
         match e {
+            KExpr::Lit(t, b) if self.narrow && t.is_int() => format!("{}", *b as i64),
             KExpr::Lit(t, b) => lit(*t, *b, self.t),
             KExpr::Local(s) => format!("v{s}"),
             KExpr::Param(p) => match self.k.params[*p].ty {
                 KTy::Bool if self.t != Tgt::C => format!("(p{p} != 0)"),
+                t if self.narrow && t.is_int() => format!("((int)p{p})"),
                 _ => format!("p{p}"),
             },
+            KExpr::Len(p) if self.narrow => format!("((int)l{p})"),
             KExpr::Len(p) => format!("l{p}"),
             KExpr::Intr(i) => match i {
                 KIntr::Gid => "gid".into(),
                 KIntr::Lid => format!("(gid % {})", self.k.group),
                 KIntr::GroupId => format!("(gid / {})", self.k.group),
                 KIntr::GroupSize => format!("{}", self.k.group),
+                KIntr::GridSize if self.narrow => "((int)ss_n)".into(),
                 KIntr::GridSize => "ss_n".into(),
             },
             KExpr::Load(p, i) => {
                 let i = self.expr(i);
                 let t = self.fresh();
                 let et = self.k.params[*p].ty;
-                let cast = if self.t == Tgt::C { "(uint64_t)" } else { "(ulong)" };
+                let cast = self.ucast();
                 self.fail(&format!("{cast}{i} >= {cast}l{p}"), T_INDEX, &format!("l{p}"), &i);
                 let vt = self.vty(et);
-                self.line(&format!("{vt} {t} = ({vt})p{p}[{i}];"));
+                let ix = self.safe_index(&i, *p);
+                self.line(&format!("{vt} {t} = ({vt})p{p}[{ix}];"));
                 if et == KTy::F32 {
                     match self.t {
                         Tgt::Msl => self.fail(&format!("ss_sub(as_type<uint>({t}))"), 0, "0", "0"),
@@ -180,7 +215,7 @@ impl<'a> Em<'a> {
                 let a = self.expr(a);
                 let t = self.fresh();
                 let vt = self.vty(*ty);
-                if ty.is_int() {
+                if ty.is_int() && !self.narrow {
                     let min = self.min_i();
                     self.fail(&format!("{a} == {min}"), T_OVERFLOW, "0", "0");
                 }
@@ -217,7 +252,9 @@ impl<'a> Em<'a> {
                     KFn::Max => self.line(&format!("{vt} {t} = {a} > {} ? {a} : {};", b.clone().unwrap(), b.unwrap())),
                     KFn::Abs if ty.is_int() => {
                         let min = self.min_i();
-                        self.fail(&format!("{a} == {min}"), T_OVERFLOW, "0", "0");
+                        if !self.narrow {
+                            self.fail(&format!("{a} == {min}"), T_OVERFLOW, "0", "0");
+                        }
                         self.line(&format!("{vt} {t} = {a} < 0 ? -{a} : {a};"));
                         self.range(*ty, &t);
                     }
@@ -296,10 +333,16 @@ impl<'a> Em<'a> {
         match op {
             Div | Rem => {
                 self.fail(&format!("{b} == 0"), T_DIV_ZERO, "0", "0");
-                self.fail(&format!("{a} == {min} && {b} == -1"), T_OVERFLOW, "0", "0");
-                self.line(&format!("{vt} {t} = {a} {} {b};", op.symbol()));
+                if !self.narrow {
+                    self.fail(&format!("{a} == {min} && {b} == -1"), T_OVERFLOW, "0", "0");
+                }
+                if self.t == Tgt::C {
+                    self.line(&format!("{vt} {t} = {a} {} {b};", op.symbol()));
+                } else {
+                    self.line(&format!("{vt} {t} = {a} {} ({b} == 0 ? 1 : {b});", op.symbol()));
+                }
             }
-            _ if !wide => self.line(&format!("{vt} {t} = {a} {} {b};", op.symbol())),
+            _ if !wide || self.narrow => self.line(&format!("{vt} {t} = {a} {} {b};", op.symbol())),
             _ if self.t == Tgt::C => {
                 let f = match op {
                     Add => "add",
@@ -326,6 +369,28 @@ impl<'a> Em<'a> {
         t
     }
 
+    fn commit(&mut self, group: &[KStmt]) {
+        let mut done = Vec::new();
+        for st in group {
+            let KStmt::Store(p, i, v) = st else { continue };
+            let i = self.expr(i);
+            let v = self.expr(v);
+            done.push((*p, i, v));
+        }
+        let cast = self.ucast();
+        for (p, i, _) in &done {
+            self.fail(&format!("{cast}{i} >= {cast}l{p}"), T_INDEX, &format!("l{p}"), i);
+        }
+        if self.t != Tgt::C {
+            let f = self.flag();
+            self.line(&format!("if (bad) {{ {f} return; }}"));
+        }
+        for (p, i, v) in &done {
+            let et = elem_c(self.k.params[*p].ty, self.t);
+            self.line(&format!("p{p}[{i}] = ({et}){v};"));
+        }
+    }
+
     pub(super) fn block(&mut self, b: &[KStmt]) {
         for s in b {
             self.stmt(s);
@@ -346,18 +411,20 @@ impl<'a> Em<'a> {
             KStmt::Store(p, i, v) => {
                 let i = self.expr(i);
                 let v = self.expr(v);
-                let cast = if self.t == Tgt::C { "(uint64_t)" } else { "(ulong)" };
+                let cast = self.ucast();
                 self.fail(&format!("{cast}{i} >= {cast}l{p}"), T_INDEX, &format!("l{p}"), &i);
                 let et = elem_c(self.k.params[*p].ty, self.t);
-                self.line(&format!("p{p}[{i}] = ({et}){v};"));
+                let guard = if self.t == Tgt::C { "" } else { "if (!bad) " };
+                self.line(&format!("{guard}p{p}[{i}] = ({et}){v};"));
             }
             KStmt::For(slot, a, b, body) => {
                 let lo = self.expr(a);
                 let hi = self.expr(b);
-                let it = if self.t == Tgt::C { "int64_t" } else { "long" };
+                let it = self.vty(KTy::Int);
                 let h = self.fresh();
                 self.line(&format!("{it} {h} = {hi};"));
-                self.line(&format!("for ({it} v{slot} = {lo}; v{slot} < {h}; v{slot}++) {{"));
+                let stop = if self.t == Tgt::C { "" } else { " && !bad" };
+                self.line(&format!("for ({it} v{slot} = {lo}; v{slot} < {h}{stop}; v{slot}++) {{"));
                 self.ind += 1;
                 self.block(body);
                 self.ind -= 1;
@@ -395,6 +462,204 @@ pub fn scalar_c(t: KTy) -> &'static str {
     }
 }
 
+fn has_store(s: &KStmt) -> bool {
+    match s {
+        KStmt::Store(..) => true,
+        KStmt::For(_, _, _, b) => b.iter().any(has_store),
+        KStmt::If(_, t, f) => t.iter().chain(f).any(has_store),
+        _ => false,
+    }
+}
+
+struct Iv<'a> {
+    k: &'a Kernel,
+    out: String,
+    n: usize,
+    locals: HashMap<usize, (String, String)>,
+    mutable: HashSet<usize>,
+}
+
+type IvR = Result<Option<(String, String)>, ()>;
+
+fn set_slots(b: &[KStmt], out: &mut HashSet<usize>) {
+    for s in b {
+        match s {
+            KStmt::Set(slot, _) => {
+                out.insert(*slot);
+            }
+            KStmt::For(_, _, _, body) => set_slots(body, out),
+            KStmt::If(_, t, f) => {
+                set_slots(t, out);
+                set_slots(f, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Iv<'_> {
+    fn node(&mut self, t: KTy, lo: String, hi: String) -> (String, String) {
+        self.n += 1;
+        let (a, b) = (format!("lo{}", self.n), format!("hi{}", self.n));
+        let (tlo, thi) = t.range();
+        let (mn, mx) = (tlo.max(i32::MIN as i128), thi.min(i32::MAX as i128));
+        writeln!(self.out, "    __int128 {a} = {lo}, {b} = {hi}; nar_ &= {a} >= {mn} && {b} <= {mx};").unwrap();
+        (a, b)
+    }
+
+    fn expr(&mut self, e: &KExpr) -> IvR {
+        let big = |v: i128| format!("((__int128){}LL)", v as i64);
+        let ty = |t: KTy| t.is_int();
+        Ok(match e {
+            KExpr::Lit(t, b) if ty(*t) => Some(self.node(*t, big(*b as i64 as i128), big(*b as i64 as i128))),
+            KExpr::Lit(..) => None,
+            KExpr::Local(s) if ty(self.k.locals[*s]) => Some(self.locals.get(s).cloned().ok_or(())?),
+            KExpr::Local(_) => None,
+            KExpr::Param(p) if ty(self.k.params[*p].ty) => Some(self.node(self.k.params[*p].ty, format!("(__int128)p{p}"), format!("(__int128)p{p}"))),
+            KExpr::Param(_) => None,
+            KExpr::Len(p) => Some(self.node(KTy::Int, format!("(__int128)l{p}"), format!("(__int128)l{p}"))),
+            KExpr::Intr(i) => {
+                let g = self.k.group;
+                let (lo, hi) = match i {
+                    KIntr::Gid => ("0".to_string(), "(__int128)ss_n - 1".to_string()),
+                    KIntr::Lid => ("0".into(), format!("{}", g - 1)),
+                    KIntr::GroupId => ("0".into(), format!("((__int128)ss_n - 1) / {g}")),
+                    KIntr::GroupSize => (format!("{g}"), format!("{g}")),
+                    KIntr::GridSize => ("(__int128)ss_n".into(), "(__int128)ss_n".into()),
+                };
+                Some(self.node(KTy::Int, lo, hi))
+            }
+            KExpr::Load(p, i) => {
+                self.expr(i)?;
+                let et = self.k.params[*p].ty;
+                if !ty(et) {
+                    return Ok(None);
+                }
+                let (lo, hi) = et.range();
+                Some(self.node(et, big(lo), if hi > i64::MAX as i128 { big(i64::MAX as i128) } else { format!("((__int128){hi}LL)") }))
+            }
+            KExpr::Bin(op, t, a, b) => {
+                let x = self.expr(a)?;
+                let y = self.expr(b)?;
+                let (Some((al, ah)), Some((bl, bh))) = (x, y) else { return Ok(None) };
+                if !ty(*t) || matches!(op, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge) {
+                    return Ok(None);
+                }
+                let (lo, hi) = match op {
+                    BinOp::Add => (format!("{al} + {bl}"), format!("{ah} + {bh}")),
+                    BinOp::Sub => (format!("{al} - {bh}"), format!("{ah} - {bl}")),
+                    BinOp::Mul => (format!("iv_min4({al} * {bl}, {al} * {bh}, {ah} * {bl}, {ah} * {bh})"), format!("iv_max4({al} * {bl}, {al} * {bh}, {ah} * {bl}, {ah} * {bh})")),
+                    BinOp::Div => (format!("iv_div_lo({al}, {ah}, {bl}, {bh})"), format!("iv_div_hi({al}, {ah}, {bl}, {bh})")),
+                    _ => (format!("iv_rem_lo({al}, {ah}, {bl}, {bh})"), format!("iv_rem_hi({al}, {ah}, {bl}, {bh})")),
+                };
+                Some(self.node(*t, lo, hi))
+            }
+            KExpr::Neg(t, a) => match self.expr(a)? {
+                Some((lo, hi)) if ty(*t) => Some(self.node(*t, format!("-{hi}"), format!("-{lo}"))),
+                _ => None,
+            },
+            KExpr::Not(a) => {
+                self.expr(a)?;
+                None
+            }
+            KExpr::Cast(to, _, a) => match self.expr(a)? {
+                Some((lo, hi)) if ty(*to) => Some(self.node(*to, lo, hi)),
+                _ => None,
+            },
+            KExpr::Call(f, t, xs) => {
+                let a = self.expr(&xs[0])?;
+                let b = match xs.get(1) {
+                    Some(x) => self.expr(x)?,
+                    None => None,
+                };
+                match (f, a, b) {
+                    (KFn::Abs, Some((lo, hi)), _) if ty(*t) => Some(self.node(*t, "0".into(), format!("iv_mag({lo}, {hi})"))),
+                    (KFn::Min, Some((al, ah)), Some((bl, bh))) => Some(self.node(*t, format!("iv_min4({al}, {bl}, {al}, {bl})"), format!("iv_min4({ah}, {bh}, {ah}, {bh})"))),
+                    (KFn::Max, Some((al, ah)), Some((bl, bh))) => Some(self.node(*t, format!("iv_max4({al}, {bl}, {al}, {bl})"), format!("iv_max4({ah}, {bh}, {ah}, {bh})"))),
+                    _ => None,
+                }
+            }
+            KExpr::If(c, a, b) => {
+                self.expr(c)?;
+                let x = self.expr(a)?;
+                let y = self.expr(b)?;
+                match (x, y) {
+                    (Some((al, ah)), Some((bl, bh))) => {
+                        let t = if let KExpr::Local(s) = &**a { self.k.locals[*s] } else { KTy::Int };
+                        Some(self.node(t, format!("iv_min4({al}, {bl}, {al}, {bl})"), format!("iv_max4({ah}, {bh}, {ah}, {bh})")))
+                    }
+                    _ => None,
+                }
+            }
+        })
+    }
+
+    fn block(&mut self, b: &[KStmt]) -> Result<(), ()> {
+        for s in b {
+            match s {
+                KStmt::Let(slot, e) => {
+                    let r = self.expr(e)?;
+                    if self.k.locals[*slot].is_int() {
+                        if self.mutable.contains(slot) {
+                            return Err(());
+                        }
+                        self.locals.insert(*slot, r.ok_or(())?);
+                    }
+                }
+                KStmt::Set(_, e) | KStmt::Eval(e) => {
+                    self.expr(e)?;
+                }
+                KStmt::Store(_, i, v) => {
+                    self.expr(i)?;
+                    self.expr(v)?;
+                }
+                KStmt::For(slot, a, b, body) => {
+                    let (lo, _) = self.expr(a)?.ok_or(())?;
+                    let (_, hi) = self.expr(b)?.ok_or(())?;
+                    let r = self.node(KTy::Int, lo.clone(), format!("iv_max4({hi} - 1, {lo}, {lo}, {lo})"));
+                    self.locals.insert(*slot, r);
+                    self.block(body)?;
+                }
+                KStmt::If(c, t, f) => {
+                    self.expr(c)?;
+                    self.block(t)?;
+                    self.block(f)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn narrow_pred(k: &Kernel) -> Option<String> {
+    let mut mutable = HashSet::new();
+    set_slots(&k.body, &mut mutable);
+    let mut iv = Iv { k, out: String::new(), n: 0, locals: HashMap::new(), mutable };
+    iv.block(&k.body).ok()?;
+    Some(iv.out)
+}
+
+pub fn commit_split(k: &Kernel) -> Option<usize> {
+    let b = &k.body;
+    let mut split = b.len();
+    while split > 0 && matches!(b[split - 1], KStmt::Store(..)) {
+        split -= 1;
+    }
+    if b[..split].iter().any(has_store) {
+        return None;
+    }
+    let mut stored = Vec::new();
+    for s in &b[split..] {
+        let KStmt::Store(p, i, v) = s else { continue };
+        let reads = |e: &KExpr| sspur_check::kernel::expr_has(e, &|x| matches!(x, KExpr::Load(q, _) if stored.contains(q)));
+        if reads(i) || reads(v) {
+            return None;
+        }
+        stored.push(*p);
+    }
+    Some(split)
+}
+
 pub fn cpu_kernel(k: &Kernel, fidx: usize) -> String {
     let mut sig = Vec::new();
     for (i, p) in k.params.iter().enumerate() {
@@ -410,7 +675,7 @@ pub fn cpu_kernel(k: &Kernel, fidx: usize) -> String {
     em.block(&k.body);
     let body = em.take();
     format!(
-        "#define FIDX {fidx}\nstatic void kc_{}({}, int64_t ss_n, Status* st) {{\n#pragma clang fp contract(off)\n  for (int64_t gid = 0; gid < ss_n; gid++) {{\n{body}  }}\n}}\n#undef FIDX\n",
+        "#define FIDX {fidx}\nstatic void kc_{}({}, int64_t ss_n, const uint32_t* ss_mask, Status* st) {{\n#pragma clang fp contract(off)\n  for (int64_t gid = 0; gid < ss_n; gid++) {{\n    if (ss_mask && !((ss_mask[gid >> 5] >> (gid & 31)) & 1u)) continue;\n{body}  }}\n}}\n#undef FIDX\n",
         k.name,
         sig.join(", ")
     )
@@ -418,9 +683,9 @@ pub fn cpu_kernel(k: &Kernel, fidx: usize) -> String {
 
 pub const MSL_PRELUDE: &str = "#include <metal_stdlib>\nusing namespace metal;\n#pragma METAL fp math_mode(safe)\n#pragma METAL fp contract(off)\n#define SS_MULHI(a, b) mulhi((long)(a), (long)(b))\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
 
-pub const OCL_PRELUDE: &str = "#ifdef __NVPTX__\n#define get_global_id(d) ((size_t)__nvvm_read_ptx_sreg_ctaid_x() * __nvvm_read_ptx_sreg_ntid_x() + __nvvm_read_ptx_sreg_tid_x())\n#define SS_MULHI(a, b) __nvvm_mulhi_ll((a), (b))\n#define fabs(x) __builtin_fabs(x)\n#define sqrt(x) __builtin_sqrt(x)\n#define floor(x) __builtin_floor(x)\n#define ceil(x) __builtin_ceil(x)\n#define round(x) __builtin_round(x)\n#define isinf(x) __builtin_isinf(x)\n#else\n#define SS_MULHI(a, b) mul_hi((long)(a), (long)(b))\n#endif\n#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n#pragma OPENCL FP_CONTRACT OFF\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
+pub const OCL_PRELUDE: &str = "#ifdef __NVPTX__\n#define get_global_id(d) ((size_t)__nvvm_read_ptx_sreg_ctaid_x() * __nvvm_read_ptx_sreg_ntid_x() + __nvvm_read_ptx_sreg_tid_x())\n#define SS_MULHI(a, b) __nvvm_mulhi_ll((a), (b))\n#define fabs(x) __builtin_fabs(x)\n#define sqrt(x) __builtin_sqrt(x)\n#define floor(x) __builtin_floor(x)\n#define ceil(x) __builtin_ceil(x)\n#define round(x) __builtin_round(x)\n#define isinf(x) __builtin_isinf(x)\n#define SS_OR(p, v) __nvvm_atom_or_gen_i((volatile int*)(p), (int)(v))\n#else\n#define SS_MULHI(a, b) mul_hi((long)(a), (long)(b))\n#define SS_OR(p, v) atomic_or((p), (v))\n#endif\n#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n#pragma OPENCL FP_CONTRACT OFF\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
 
-pub fn device_kernel(k: &Kernel, tgt: Tgt) -> String {
+pub fn device_kernel(k: &Kernel, tgt: Tgt, narrow: bool) -> String {
     let mut sig = Vec::new();
     let mut slot = 0;
     let mut buf = |s: String, sig: &mut Vec<String>| {
@@ -453,10 +718,29 @@ pub fn device_kernel(k: &Kernel, tgt: Tgt) -> String {
     buf(format!("{con}long{r} ss_n"), &mut sig);
     let flag = if tgt == Tgt::Msl { "device atomic_uint* ss_flag" } else { "__global uint* ss_flag" };
     buf(flag.to_string(), &mut sig);
+    let split = commit_split(k);
+    if split.is_some() {
+        let mask = if tgt == Tgt::Msl { "device atomic_uint* ss_mask" } else { "__global uint* ss_mask" };
+        buf(mask.to_string(), &mut sig);
+    }
     let mut em = Em::new(k, tgt, 1);
-    em.block(&k.body);
+    em.mask = split.is_some();
+    em.narrow = narrow;
+    em.line(if tgt == Tgt::Msl { "bool bad = false;" } else { "uint bad = 0u;" });
+    match split {
+        Some(at) => {
+            em.block(&k.body[..at]);
+            em.commit(&k.body[at..]);
+        }
+        None => {
+            em.block(&k.body);
+            let f = em.flag();
+            em.line(&format!("if (bad) {{ {f} }}"));
+        }
+    }
     let body = em.take();
     match tgt {
+        Tgt::Msl if narrow => format!("kernel void k_{}_n({}, uint ss_t [[thread_position_in_grid]]) {{\n  int gid = (int)ss_t;\n  if ((long)gid >= ss_n) return;\n{body}}}\n", k.name, sig.join(", ")),
         Tgt::Msl => format!("kernel void k_{}({}, uint ss_t [[thread_position_in_grid]]) {{\n  long gid = (long)ss_t;\n  if (gid >= ss_n) return;\n{body}}}\n", k.name, sig.join(", ")),
         _ => format!("__kernel void k_{}({}) {{\n  long gid = (long)get_global_id(0);\n  if (gid >= ss_n) return;\n{body}}}\n", k.name, sig.join(", ")),
     }
@@ -465,7 +749,10 @@ pub fn device_kernel(k: &Kernel, tgt: Tgt) -> String {
 pub fn msl_source(ks: &[&Kernel]) -> String {
     let mut s = String::from(MSL_PRELUDE);
     for k in ks {
-        s.push_str(&device_kernel(k, Tgt::Msl));
+        s.push_str(&device_kernel(k, Tgt::Msl, false));
+        if narrow_pred(k).is_some() {
+            s.push_str(&device_kernel(k, Tgt::Msl, true));
+        }
     }
     s
 }
@@ -473,7 +760,7 @@ pub fn msl_source(ks: &[&Kernel]) -> String {
 pub fn opencl_source(ks: &[&Kernel]) -> String {
     let mut s = String::from(OCL_PRELUDE);
     for k in ks {
-        s.push_str(&device_kernel(k, Tgt::Ocl));
+        s.push_str(&device_kernel(k, Tgt::Ocl, false));
     }
     s
 }
@@ -560,12 +847,12 @@ pub fn shim() -> Result<PathBuf, String> {
 pub(super) const HOST_PRELUDE: &str = r#"typedef struct { int32_t kind, pad; const void* ptr; int64_t bytes; void* dev; } SsGpuArg;
 #ifdef __APPLE__
 int ss_gpu_ready(void);
-int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group);
+int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask);
 void* ss_gpu_alloc(int64_t bytes, void** host);
 void ss_gpu_free(void* dev);
 #else
 static int ss_gpu_ready(void) { return 0; }
-static int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group) { (void)src; (void)entry; (void)nargs; (void)args; (void)n; (void)group; return 2; }
+static int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask) { (void)src; (void)entry; (void)nargs; (void)args; (void)n; (void)group; (void)masked; (void)mask; return 2; }
 static void* ss_gpu_alloc(int64_t bytes, void** host) { (void)bytes; (void)host; return 0; }
 static void ss_gpu_free(void* dev) { (void)dev; }
 #endif
@@ -582,6 +869,14 @@ static void __attribute__((noinline, cold, noreturn)) dev_fail(Status* st, int64
 }
 static inline int ss_sub32(float x) { return x != 0.0f && fabsf(x) < 1.17549435e-38f; }
 static inline double ss_canon(double x) { return x != x ? NAN : x; }
+static inline __int128 iv_min4(__int128 a, __int128 b, __int128 c, __int128 d) { __int128 m = a < b ? a : b; m = m < c ? m : c; return m < d ? m : d; }
+static inline __int128 iv_max4(__int128 a, __int128 b, __int128 c, __int128 d) { __int128 m = a > b ? a : b; m = m > c ? m : c; return m > d ? m : d; }
+static inline __int128 iv_mag(__int128 a, __int128 b) { a = a < 0 ? -a : a; b = b < 0 ? -b : b; return a > b ? a : b; }
+static inline __int128 iv_div_lo(__int128 al, __int128 ah, __int128 bl, __int128 bh) { if (bl <= 0 && bh >= 0) return -iv_mag(al, ah); return iv_min4(al / bl, al / bh, ah / bl, ah / bh); }
+static inline __int128 iv_div_hi(__int128 al, __int128 ah, __int128 bl, __int128 bh) { if (bl <= 0 && bh >= 0) return iv_mag(al, ah); return iv_max4(al / bl, al / bh, ah / bl, ah / bh); }
+static inline __int128 iv_rem_m(__int128 al, __int128 ah, __int128 bl, __int128 bh) { __int128 m = iv_mag(bl, bh) - 1, a = iv_mag(al, ah); if (m < 0) m = 0; return m < a ? m : a; }
+static inline __int128 iv_rem_lo(__int128 al, __int128 ah, __int128 bl, __int128 bh) { return al >= 0 ? 0 : -iv_rem_m(al, ah, bl, bh); }
+static inline __int128 iv_rem_hi(__int128 al, __int128 ah, __int128 bl, __int128 bh) { return ah <= 0 ? 0 : iv_rem_m(al, ah, bl, bh); }
 struct SsDev { int64_t len, es; void* host; void* dev; struct SsDev* next; };
 static struct SsDev* ss_devs;
 static void ss_dev_reset(void) {
@@ -698,20 +993,41 @@ impl Cx<'_> {
         writeln!(s, "  int64_t ss_n = {n};").unwrap();
         let sub: Vec<String> = k.params.iter().enumerate().filter(|(_, p)| p.slice.is_none() && p.ty == KTy::F32).map(|(i, _)| format!(" && !ss_sub32(p{i})")).collect();
         gargs.push("{0, 0, &ss_n, 8, 0}".into());
+        let commit = commit_split(k).is_some();
+        let masked = commit && !k.params.iter().enumerate().any(|(i, p)| p.slice == Some(true) && !dev(i));
         writeln!(s, "  if (ss_n > 0) {{").unwrap();
         if k.uses_f64() {
             writeln!(s, "    ss_trace(\"{name}\", \"cpu (F64 is not available on the GPU)\", ss_n);").unwrap();
-            writeln!(s, "    kc_{name}({}, ss_n, st);", cargs.join(", ")).unwrap();
+            writeln!(s, "    kc_{name}({}, ss_n, 0, st);", cargs.join(", ")).unwrap();
         } else {
-            writeln!(s, "    int r_ = 2;").unwrap();
+            writeln!(s, "    int r_ = 2, nar_ = 0; const uint32_t* m_ = 0; (void)m_; (void)nar_;").unwrap();
             writeln!(s, "    if (ss_gpu_ready(){}) {{", sub.concat()).unwrap();
-            s.push_str(&save);
+            let entry = match narrow_pred(k) {
+                Some(code) => {
+                    let lens: String = k.params.iter().enumerate().filter(|(_, p)| p.slice.is_some()).map(|(i, _)| format!(" && l{i} <= 2147483647LL")).collect();
+                    writeln!(s, "      nar_ = ss_n <= 2147483647LL{lens};\n      if (nar_) {{\n{code}      }}").unwrap();
+                    format!("nar_ ? \"k_{name}_n\" : \"k_{name}\"")
+                }
+                None => format!("\"k_{name}\""),
+            };
+            if !masked {
+                s.push_str(&save);
+            }
             writeln!(s, "      SsGpuArg g_[] = {{{}}};", gargs.join(", ")).unwrap();
-            writeln!(s, "      r_ = ss_gpu_run(ss_msl, \"k_{name}\", {}, g_, ss_n, {});", gargs.len(), k.group).unwrap();
-            s.push_str(&restore);
+            writeln!(s, "      r_ = ss_gpu_run(ss_msl, {entry}, {}, g_, ss_n, {}, {}, &m_);", gargs.len(), k.group, i32::from(masked) + i32::from(commit)).unwrap();
+            if !masked {
+                s.push_str(&restore);
+            }
             writeln!(s, "    }}").unwrap();
-            writeln!(s, "    ss_trace(\"{name}\", r_ == 0 ? \"metal\" : r_ == 1 ? \"cpu rerun (trap or subnormal)\" : \"cpu\", ss_n);").unwrap();
-            writeln!(s, "    if (r_) kc_{name}({}, ss_n, st);", cargs.join(", ")).unwrap();
+            let rerun = if masked { "cpu rerun of flagged threads" } else { "cpu rerun (trap or subnormal)" };
+            writeln!(s, "    ss_trace(\"{name}\", r_ == 0 ? (nar_ ? \"metal, 32-bit indices\" : \"metal\") : r_ == 1 ? \"{rerun}\" : \"cpu\", ss_n);").unwrap();
+            if masked {
+                let m = c_lit(&format!("dev: the GPU failed while running {name}"));
+                writeln!(s, "    if (r_ == 3) dev_fail(st, FIDX, {m}, -1, 0, 0);").unwrap();
+                writeln!(s, "    if (r_) kc_{name}({}, ss_n, r_ == 1 ? m_ : 0, st);", cargs.join(", ")).unwrap();
+            } else {
+                writeln!(s, "    if (r_) kc_{name}({}, ss_n, 0, st);", cargs.join(", ")).unwrap();
+            }
         }
         writeln!(s, "  }}").unwrap();
         s.push_str(&back);

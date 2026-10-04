@@ -99,6 +99,7 @@ impl Interp {
             },
             Value::Dur(d) => crate::stdtime::dur_method(name, d, &a),
             Value::Bits(n, w) => crate::stdx::bits_method(name, n, &w, &a),
+            Value::View(n) => self.view_method(name, n, a),
             Value::Record(n, fs) if &*n == "#Rng" => crate::stdrng::method(name, &fs, &a),
             Value::Record(n, fs) if &*n == "#Complex" => crate::stdcx::method(name, &fs, &a),
             Value::Record(ref n, _) if &**n == "#Zone" => crate::stdtz::method(name, &recv, &a),

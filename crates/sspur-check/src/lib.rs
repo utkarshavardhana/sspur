@@ -1908,6 +1908,9 @@ impl Checker {
                 Type::bool()
             }
             Eq | Ne => {
+                if matches!(&t, Type::Con(n, _) if n == "#View") {
+                    self.err("E_OPERATOR", span, "views cannot be compared".into());
+                }
                 if matches!(t, Type::Fn(..)) {
                     self.err("E_OPERATOR", span, "functions cannot be compared".into());
                 }
@@ -2571,14 +2574,16 @@ impl Checker {
                 let frame = self.norm_frame(frame);
                 let yields = self.instances(&frame, "yield");
                 let rt = self.resolve(&t);
-                let is_list = matches!(&rt, Type::Con(n, _) if n == "List");
+                let is_list = matches!(&rt, Type::Con(n, _) if n == "List" || n == "#View");
                 let chan_elem = match &rt {
-                    Type::Con(n, a) if n == "Chan" => Some(a[0].clone()),
+                    Type::Con(n, a) if n == "Chan" || n == "#View" => Some(a[0].clone()),
                     _ => None,
                 };
                 let is_gen = !yields.is_empty() && !is_list && chan_elem.is_none();
                 let elem = if let Some(ce) = chan_elem {
-                    self.add_effect("conc".into(), it.span, None);
+                    if !matches!(&rt, Type::Con(n, _) if n == "#View") {
+                        self.add_effect("conc".into(), it.span, None);
+                    }
                     ce
                 } else if is_gen {
                     if yields.len() > 1 {

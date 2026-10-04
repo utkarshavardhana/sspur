@@ -2,7 +2,7 @@ use super::*;
 
 const STD_RT: &str = include_str!("std_rt.c");
 
-pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits", "#HashMap", "#HashSet", "#BigInt", "#Dec", "#Regex"];
+pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits", "#HashMap", "#HashSet", "#BigInt", "#Dec", "#Regex", "#View"];
 
 fn section(key: &str) -> (Vec<&'static str>, &'static str) {
     for part in STD_RT.split("//@ ").skip(1) {
@@ -62,6 +62,7 @@ impl Cx<'_> {
             "#Dec" => "DC".into(),
             "#HashMap" => format!("HM_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
             "#HashSet" => format!("HS_{}", self.mangle(&a[0])?),
+            "#View" => format!("VW_{}", self.mangle(&a[0])?),
             _ => format!("RS_{}_{}", self.mangle(&a[0])?, self.mangle(&a[1])?),
         })
     }
@@ -70,6 +71,7 @@ impl Cx<'_> {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         match n.as_str() {
             "#Time" | "#Duration" => Ok("int64_t".into()),
+            "#View" => self.view_cty(t, m),
             "#Regex" => {
                 if self.helpers_done.insert("regex_type".into()) {
                     writeln!(self.defs, "typedef struct SsRe SsRe;").unwrap();
@@ -165,6 +167,7 @@ impl Cx<'_> {
     pub(super) fn std_cmp_body(&mut self, t: &Type) -> G {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         Ok(match n.as_str() {
+            "#View" => "(void)a; (void)b; return 0;".into(),
             "#Set" => {
                 let (mm, node, _) = self.set_parts(t)?;
                 let kc = self.helper_cmp(&a[0])?;
@@ -210,6 +213,7 @@ impl Cx<'_> {
     pub(super) fn std_enc_body(&mut self, t: &Type) -> G {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         Ok(match n.as_str() {
+            "#View" => "(void)b; (void)v;".into(),
             "#Set" => {
                 let (mm, node, _) = self.set_parts(t)?;
                 let e = self.helper_enc(&a[0])?;
@@ -247,6 +251,7 @@ impl Cx<'_> {
     pub(super) fn std_dec_body(&mut self, t: &Type, c: &str) -> G {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         Ok(match n.as_str() {
+            "#View" => format!("(void)p; {c} z; memset(&z, 0, sizeof z); return z;"),
             "#Set" => {
                 let (mm, _, _) = self.set_parts(t)?;
                 let d = self.helper_dec(&a[0])?;
@@ -290,6 +295,7 @@ impl Cx<'_> {
     pub(super) fn std_show_body(&mut self, t: &Type) -> G {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         Ok(match n.as_str() {
+            "#View" => "(void)q; (void)v; sb_put(b, \"<view>\", 6);".into(),
             "#Set" => {
                 let (mm, node, _) = self.set_parts(t)?;
                 let sk = self.helper_show(&a[0])?;
@@ -342,6 +348,7 @@ impl Cx<'_> {
     pub(super) fn std_hash_body(&mut self, t: &Type) -> G {
         let Type::Con(n, a) = t else { return Err("bad std type".into()) };
         Ok(match n.as_str() {
+            "#View" => "(void)v; h = 0;".into(),
             "#Set" => {
                 let (mm, node, _) = self.set_parts(t)?;
                 let hk = self.helper_hash(&a[0])?;
@@ -413,6 +420,9 @@ impl Cx<'_> {
             return Ok(Some(x));
         }
         if let Some(x) = self.file_global(n, args, &vals, t)? {
+            return Ok(Some(x));
+        }
+        if let Some(x) = self.view_global(n, args, &vals, t)? {
             return Ok(Some(x));
         }
         let v = |i: usize| vals[i].clone();
@@ -1007,6 +1017,7 @@ impl Cx<'_> {
                 let fill = if name == "to_hash_set" { format!("e_.k = {l}.data[{i}];") } else { format!("e_.k = {l}.data[{i}].f0; e_.v = {l}.data[{i}].f1;") };
                 wrap(format!("{hc} o_ = {{0, 0}}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ {he} e_; {fill} e_.h = {kh}(e_.k); int ad_ = 0; o_.root = hm_put(o_.root, (const char*)&e_, 0, sizeof({he}), heq_{m}, &ad_); o_.len += ad_; }} o_;"))
             }
+            "view" => wrap(format!("{};", self.view_of_list(&l, lt, t)?)),
             "to_flat_map" => wrap(format!("{};", self.flat_from_pairs(&l, t)?)),
             "to_bits" => {
                 self.std("bits");

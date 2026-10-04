@@ -485,6 +485,14 @@ fn fneg(n: Int) -> Bool ! fs
 = with_file(\"/\", \"r\", f => f.read(n).is_ok).or(false)
 test t_fmode = fmode(\"rw\")
 test t_fneg = fneg(-1)
+fn vsum(n: Int) -> Int
+= iota(n, n + 3).map(x => x * 2).sum
+fn vrun(n: Int) -> Int
+= do
+  v = [n, 0, 1].view.map(x => 10 / x)
+  v.len
+test t_vsum = vsum(4611686018427387904) == 0
+test t_vrun = vrun(5) == 0
 test t_fz = fz(1440) == \"\"
 test t_zfmt = zfmt(\"%Z %Q\") == \"\"
 test t_zlocal = zlocal(9223372036854775807) == 0
@@ -505,10 +513,12 @@ test t_ok = gam(2.0) > 0.0 and bin(10) <= 10 and wpick([0.0, 1.0]) == 1 and mdba
         "FAIL  t_mdneg: mdspan extents must be >= 0",
         "FAIL  t_fmode: bad file mode 'rw'",
         "FAIL  t_fneg: read size must be >= 0",
+        "FAIL  t_vsum: integer overflow",
+        "FAIL  t_vrun: division by zero",
         "FAIL  t_fz: fixed_zone needs -1440 < minutes < 1440",
         "FAIL  t_zfmt: bad time format '%Z %Q'",
         "FAIL  t_zlocal: integer overflow",
-        "1 passed, 17 failed",
+        "1 passed, 19 failed",
     ];
     assert_trap_parity("std_round3", src, &expected);
 }

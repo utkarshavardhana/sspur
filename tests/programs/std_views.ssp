@@ -1,0 +1,96 @@
+type Pipe = {name: Str, src: View[Int]}
+
+fn evens(v: View[Int]) -> View[Int]
+= v.filter(x => x % 2 == 0)
+
+fn squares(n: Int) -> View[Int]
+= iota(0, n).map(x => x * x)
+
+fn stored(p: Pipe) -> List[Int]
+= evens(p.src).take(3).to_list
+
+fn first_big(xs: List[Int], k: Int) -> Opt[Int]
+= xs.view.map(x => x * 3).find(x => x > k)
+
+fn lazy_div(xs: List[Int]) -> Int
+= xs.view.map(x => 100 / x).take(2).sum
+
+fn trap_order(xs: List[Int]) -> Int
+= xs.view.map(x => 100 / x).filter(x => 10 / (x - 50) > -100).len
+
+fn pairs(xs: List[Str], n: Int) -> List[(Int, Str)]
+= xs.view.enumerate.drop(1).take(n % 10).to_list
+
+fn zipped(a: List[Int], b: List[Str]) -> List[(Int, Str)]
+= a.view.zip(b.view).to_list
+
+fn joined(a: List[Int], b: List[Int]) -> List[Int]
+= a.view.chain(b.view.map(x => -x)).to_list
+
+fn collatz(n: Int) -> List[Int]
+= iterate(n, x => if x % 2 == 0 then x / 2 else 3 * x + 1, 30).take_while(x => x != 1).to_list
+
+fn runs(xs: List[Int]) -> List[Int]
+= xs.view.drop_while(x => x < 5).take_while(x => x >= 5).to_list
+
+fn checks(xs: List[Int]) -> (Bool, Bool, Opt[Int], Int)
+= do
+  v = xs.view.map(x => x - 1)
+  (v.any(x => x > 3), v.all(x => x >= 0), v.first, v.fold(0, (acc, x) => acc * 2 + x))
+
+fn loop_sum(xs: List[Int]) -> Int
+= do
+  var s = 0
+  for x in xs.view.filter(x => x > 0).map(x => x * 10)
+    s := s + x
+  s
+
+fn loop_stored(v: View[Int]) -> Int
+= do
+  var s = 0
+  for (i, x) in v.enumerate
+    s := s + i * x
+  s
+
+fn total(v: View[Int]) -> Int
+= v.sum
+
+fn pick(n: Int) -> List[Int]
+= squares(n % 50).drop(2).filter(x => x % 3 == 1).to_list
+
+fn layered(xs: List[Int], k: Int) -> List[(Int, Int)]
+= do
+  v = xs.view.map(x => x * 2 + 1)
+  w = v.filter(x => x % 3 != 0).drop(1).take(k % 7)
+  e = w.enumerate.map(p => p.0 + p.1)
+  e.zip(v.take_while(x => x < 50).drop_while(x => x < 5)).to_list
+
+fn chained(xs: List[Int], n: Int) -> Int
+= do
+  a = iterate(1, x => x * 3 % 1000003, n % 40)
+  b = xs.view.map(x => 1000 / (x % 7 + 1))
+  c = a.chain(b)
+  c.fold(0, (s, x) => s * 7 % 1000000007 + x)
+
+fn runtime_traps(xs: List[Int]) -> Int
+= do
+  v = xs.view.map(x => 100 / x)
+  w = v.filter(x => 10 / (x - 50) > -100)
+  w.len
+
+fn lens(xs: List[Int]) -> (Int, Int, Opt[Int], Bool, Bool)
+= do
+  v = xs.view.filter(x => x > 2)
+  (v.len, v.sum, v.find(x => x % 2 == 0), v.any(x => x > 100), v.all(x => x > 2))
+
+test runtime_nodes = layered([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 4) == [(7, 5), (12, 7), (15, 9), (20, 11)] and chained([1, 2], 3) == 7704 and lens([1, 3, 4, 8]) == (3, 15, some(4), false, true)
+test filter_map = squares(10).filter(x => x % 2 == 1).to_list == [1, 9, 25, 49, 81] and squares(0).to_list == []
+test stored_views = stored(Pipe{name: "p", src: iota(1, 100)}) == [2, 4, 6] and "{iota(0, 3)}" == "<view>"
+test early_exit = first_big([1, 2, 3, 4, 5], 7) == some(9) and first_big([1], 7) == none
+test laziness = lazy_div([5, 10, 0, 1]) == 30 and iota(0, 1000000000).map(x => x * 2).take(3).to_list == [0, 2, 4]
+test enumerated = pairs(["a", "b", "c", "d"], 2) == [(1, "b"), (2, "c")]
+test zip_chain = zipped([1, 2, 3], ["x", "y"]) == [(1, "x"), (2, "y")] and joined([1, 2], [3]) == [1, 2, -3]
+test iterate_while = collatz(6) == [6, 3, 10, 5, 16, 8, 4, 2] and runs([1, 9, 5, 7, 2, 8]) == [9, 5, 7]
+test consumers = checks([1, 2, 5]) == (true, true, some(0), 6) and checks([]) == (false, true, none, 0)
+test loops = loop_sum([3, -1, 4]) == 70 and loop_stored(iota(5, 8)) == 0 * 5 + 1 * 6 + 2 * 7
+test sums = total(iota(1, 101)) == 5050 and total([1, 2].view) == 3 and pick(10) == [4, 16, 25, 49, 64]

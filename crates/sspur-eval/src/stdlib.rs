@@ -263,6 +263,9 @@ impl Interp {
         if let Some(v) = self.file_global(n, &a)? {
             return Ok(v);
         }
+        if let Some(v) = crate::stdview::global(n, &a)? {
+            return Ok(v);
+        }
         match n {
             "empty_flat_map" => return Ok(crate::stdflat::empty_flat()),
             "mdspan" => return crate::stdflat::mdspan(&a[0], &a[1]),
@@ -674,6 +677,7 @@ impl Interp {
             "pop_back" => opt(xs.last().map(|x| pair(x.clone(), Value::list(xs[..xs.len() - 1].to_vec())))),
             "to_set" => Value::Set(Rc::new(xs.iter().cloned().collect())),
             "to_flat_map" => crate::stdflat::to_flat(xs)?,
+            "view" => crate::stdview::of_list(xs.clone()),
             "to_bits" => crate::stdx::bits_from(xs, int(&a[0])?)?,
             "to_hash_set" => Value::Set(Rc::new(xs.iter().cloned().collect())),
             "to_hash_map" => {

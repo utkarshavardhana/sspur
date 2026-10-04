@@ -304,6 +304,10 @@ impl Interp {
                 let v = crate::stdflat::mdspan(&data, &Value::list(shape.iter().map(|e| Value::Int(*e)).collect())).ok()?;
                 if rng.chance(30) { crate::stdflat::md_method("transpose", match &v { Value::Record(_, fs) => fs, _ => return None }, &[]).ok()? } else { v }
             }
+            "View" if !self.types.contains_key(name) => {
+                let len = if deep { 0 } else { rng.below(7) };
+                crate::stdview::of_list(Rc::new((0..len).map(|_| self.generate(&arg(0), rng, opts, depth + 1)).collect::<Option<_>>()?))
+            }
             "Zone" if !self.types.contains_key(name) => {
                 const NAMES: &[&str] = &["America/New_York", "Europe/London", "Europe/Dublin", "Australia/Sydney", "Australia/Lord_Howe", "Asia/Kolkata", "America/St_Johns", "Pacific/Chatham", "Africa/Casablanca", "America/Sao_Paulo", "Antarctica/Troll", "Asia/Tehran", "America/Godthab"];
                 let k = rng.below(NAMES.len() as u64 + 3) as usize;

@@ -115,7 +115,7 @@ pub const METHODS: &[(&str, &str)] = &[
     ("*", "str[A](x: A) -> Str"),
 ];
 
-pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0), ("Regex", "#Regex", 0), ("DevBuf", "#DevBuf", 1), ("Rng", "#Rng", 0), ("Complex", "#Complex", 0), ("FlatMap", "#FlatMap", 2), ("MdSpan", "#MdSpan", 1), ("Zone", "#Zone", 0), ("File", "#File", 0)];
+pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0), ("Regex", "#Regex", 0), ("DevBuf", "#DevBuf", 1), ("Rng", "#Rng", 0), ("Complex", "#Complex", 0), ("FlatMap", "#FlatMap", 2), ("MdSpan", "#MdSpan", 1), ("Zone", "#Zone", 0), ("File", "#File", 0), ("View", "#View", 1)];
 
 pub const STD_RECORDS: &[(&str, &str)] = &[("#Rng", "type Rng = {state: Int, gamma: Int}"), ("#Complex", "type Complex = {re: F64, im: F64}"), ("#FlatMap", "type FlatMap[K, V] = {keys: List[K], values: List[V]}"), ("#MdSpan", "type MdSpan[T] = {data: List[T], offset: Int, shape: List[Int], strides: List[Int]}"), ("#Zone", "type Zone = {name: Str, trans: List[Int], idx: List[Int], offs: List[Int], dst: List[Bool], abbrs: List[Str], tail: List[Int]}"), ("#File", "type File = {fd: Int, path: Str, dev: Int, ino: Int}")];
 
@@ -179,6 +179,8 @@ pub const STD_GLOBALS: &[&str] = &[
     "local_zone() -> Res[Zone, Str] ! time",
     "fixed_zone(minutes: Int) -> Zone",
     "open_file(path: Str, mode: Str) -> Res[File, Str] ! fs",
+    "iota(start: Int, end: Int) -> View[Int]",
+    "iterate[A](x: A, f: A -> A, n: Int) -> View[A]",
     "with_file[A, e](path: Str, mode: Str, f: File -> A ! e) -> Res[A, Str] ! fs, e",
     "bits(n: Int) -> Bits",
     "regex(p: Str) -> Res[Regex, Str]",
@@ -478,6 +480,24 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("#Zone", "utc(z: Zone, wall: Time) -> Opt[Time]"),
     ("#Time", "format_in(t: Time, z: Zone, pat: Str) -> Str"),
     ("#Time", "iso_in(t: Time, z: Zone) -> Str"),
+    ("List", "view[A](xs: List[A]) -> View[A]"),
+    ("#View", "map[A, B](v: View[A], f: A -> B) -> View[B]"),
+    ("#View", "filter[A](v: View[A], f: A -> Bool) -> View[A]"),
+    ("#View", "take[A](v: View[A], n: Int) -> View[A]"),
+    ("#View", "drop[A](v: View[A], n: Int) -> View[A]"),
+    ("#View", "take_while[A](v: View[A], f: A -> Bool) -> View[A]"),
+    ("#View", "drop_while[A](v: View[A], f: A -> Bool) -> View[A]"),
+    ("#View", "enumerate[A](v: View[A]) -> View[(Int, A)]"),
+    ("#View", "zip[A, B](v: View[A], w: View[B]) -> View[(A, B)]"),
+    ("#View", "chain[A](v: View[A], w: View[A]) -> View[A]"),
+    ("#View", "to_list[A](v: View[A]) -> List[A]"),
+    ("#View", "fold[A, B](v: View[A], init: B, f: (B, A) -> B) -> B"),
+    ("#View", "len[A](v: View[A]) -> Int"),
+    ("#View", "sum(v: View[Int]) -> Int"),
+    ("#View", "first[A](v: View[A]) -> Opt[A]"),
+    ("#View", "find[A](v: View[A], f: A -> Bool) -> Opt[A]"),
+    ("#View", "any[A](v: View[A], f: A -> Bool) -> Bool"),
+    ("#View", "all[A](v: View[A], f: A -> Bool) -> Bool"),
     ("#File", "read(f: File, n: Int) -> Res[List[Int], Str] ! fs"),
     ("#File", "read_line(f: File) -> Res[Opt[Str], Str] ! fs"),
     ("#File", "read_all(f: File) -> Res[Str, Str] ! fs"),
@@ -492,7 +512,7 @@ pub const STD_METHODS: &[(&str, &str)] = &[
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "rand_binomial", "rand_poisson", "rand_geometric", "rand_gamma", "rand_beta", "rand_weighted", "rng", "complex", "polar", "empty_flat_map", "mdspan", "time_zone", "local_zone", "fixed_zone", "open_file", "with_file", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "exit", "regex", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days", "dev_f32", "dev_f64", "dev_i32", "dev_u32", "dev_int",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "rand_binomial", "rand_poisson", "rand_geometric", "rand_gamma", "rand_beta", "rand_weighted", "rng", "complex", "polar", "empty_flat_map", "mdspan", "time_zone", "local_zone", "fixed_zone", "open_file", "with_file", "iota", "iterate", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "eprint", "run_cmd", "exit", "regex", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days", "dev_f32", "dev_f64", "dev_i32", "dev_u32", "dev_int",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

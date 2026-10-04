@@ -41,6 +41,7 @@ pub enum Value {
     Dec(Rc<sspur_native::bigint::Big>, i64),
     Regex(Rc<crate::stdre::Re>),
     Dev(Rc<crate::kernel::DevCell>),
+    View(Rc<crate::stdview::Node>),
 }
 
 pub struct AtomCell {
@@ -120,6 +121,7 @@ impl Value {
             Value::Dec(..) => 25,
             Value::Regex(_) => 26,
             Value::Dev(_) => 27,
+            Value::View(_) => 28,
         }
     }
 
@@ -299,6 +301,7 @@ impl fmt::Display for Value {
             Value::Big(b) => write!(f, "{b}"),
             Value::Regex(r) => write!(f, "/{}/", r.src),
             Value::Dev(d) => write!(f, "<devbuf {} x{}>", d.ty.name(), d.data.borrow().len()),
+            Value::View(_) => write!(f, "<view>"),
             Value::Dec(m, s) => write!(f, "{}", sspur_native::bigint::dec_str(m, *s)),
             Value::Bits(n, w) => {
                 let items: Vec<String> = crate::stdx::bits_items(*n, w).iter().map(|i| i.to_string()).collect();

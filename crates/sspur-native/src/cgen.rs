@@ -22,6 +22,7 @@ mod stdfile;
 mod stdflat;
 mod stdrng;
 mod stdtz;
+mod stdview;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
 type G<T = String> = Result<T, String>;
@@ -3277,6 +3278,9 @@ impl<'a> Cx<'a> {
             let src: Vec<Expr> = std::iter::once(recv.clone()).chain(args.iter().cloned()).collect();
             return self.call_user(name, vals, Some(t), Some((e, &src)));
         }
+        if self.ty(recv).is_ok_and(|rt| matches!(&rt, Type::Con(n, _) if n == "#View")) {
+            return self.view_method(e, recv, name, args, t);
+        }
         if let Some(r) = self.fused(e, name, recv, args, t) {
             return r;
         }
@@ -3975,6 +3979,9 @@ impl<'a> Cx<'a> {
                     }
                 if self.ty(it).is_ok_and(|t| elem(&t, "Chan").is_some()) {
                     return self.chan_for(p, it, body);
+                }
+                if self.ty(it).is_ok_and(|t| matches!(&t, Type::Con(n, _) if n == "#View")) {
+                    return self.view_for(p, it, body);
                 }
                 if let (Pat::Bind(i), ExprKind::Range(a, b)) = (p, &it.kind) {
                     let (av, bv) = (self.expr(a)?, self.expr(b)?);

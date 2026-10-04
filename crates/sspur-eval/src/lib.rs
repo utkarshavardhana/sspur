@@ -13,6 +13,7 @@ mod stdre;
 mod stdrng;
 mod stdtime;
 mod stdtz;
+mod stdview;
 mod stdx;
 pub mod value;
 
@@ -1170,6 +1171,16 @@ impl Interp {
                 }
                 let xs = match self.eval(it, env)? {
                     Value::List(xs) => xs,
+                    Value::View(n) => {
+                        self.for_view(&n, |x| {
+                            let inner = Env::child(env);
+                            if self.bind_pat(p, &x, &inner) {
+                                self.eval(body, &inner)?;
+                            }
+                            Ok(())
+                        })?;
+                        return Ok(Value::Unit);
+                    }
                     Value::Chan(c) => {
                         while let Some(x) = self.chan_recv(&c)? {
                             let inner = Env::child(env);

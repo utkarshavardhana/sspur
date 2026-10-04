@@ -643,17 +643,28 @@ impl Parser {
         let effects = if self.eat_sym("!") { self.effects()? } else { vec![] };
         let kernel = if self.eat_sym("@") {
             let at = self.prev_span();
-            if !matches!(self.peek(), Tok::Ident(g) if g == "grid") {
-                return self.err("E_PARSE_KERNEL", "expected 'grid' after '@'");
+            let two = matches!(self.peek(), Tok::Ident(g) if g == "grid2");
+            if !two && !matches!(self.peek(), Tok::Ident(g) if g == "grid") {
+                return self.err("E_PARSE_KERNEL", "expected 'grid' or 'grid2' after '@'");
             }
             self.bump();
             self.expect_sym("(")?;
             let grid = self.expr()?;
             self.expect_sym(",")?;
+            let mut h = None;
+            if two {
+                h = Some(self.expr()?);
+                self.expect_sym(",")?;
+            }
             let group = self.expr()?;
+            let mut y = None;
+            if let Some(h) = h {
+                self.expect_sym(",")?;
+                y = Some((h, self.expr()?));
+            }
             self.expect_sym(")")?;
             let _ = at;
-            Some(Box::new(KernelSpec { grid, group }))
+            Some(Box::new(KernelSpec { grid, group, y }))
         } else {
             None
         };

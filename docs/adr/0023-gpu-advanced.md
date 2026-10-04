@@ -55,3 +55,28 @@ kernel fn hist(x: &[I32], h: &mut [I32]) @grid(x.len, 256)
 | 15 | Race exemption: a buffer updated atomically may only be updated with one atomic operation kind (and one `expected`/`new` pair) per kernel, at any index, and is not read or written directly (`E_KERNEL_RACE`). For shared arrays the rule is per phase, so a local histogram is built atomically, then read after a `barrier()` | Mixing `add` with `max`, or a direct read with atomic updates, is order dependent |
 | 16 | `F32` `atomic_add` runs as a compare-and-swap loop on Metal and OpenCL and is exact only when every addend is a non-negative integer and every value seen stays an integer of magnitude at most 2^24; the device flags anything else and the launch reruns on the CPU in order. Kernels with atomics are never partially rerun | Then every order sums exactly, so the GPU result is the sequential one; otherwise rounding would depend on the order |
 | 17 | Metal uses `atomic_fetch_{add,min,max}_explicit` (relaxed) on `device` or `threadgroup` pointers and a weak-CAS loop for `atomic_cas`; OpenCL uses `atomic_add/min/max/cmpxchg`, and the PTX build maps them to `__nvvm_atom_*` | Relaxed order suffices because nothing reads the buffer during the launch |
+
+## 2D grids
+
+```
+kernel fn tiled(a: &[F32], b: &[F32], c: &mut [F32], n: Int) @grid2(n, n, 16, 16)
+= do
+  ta = shared[F32](256)
+  tb = shared[F32](256)
+  var acc = 0.0
+  for t in 0..n / 16
+    ta[lid.y * 16 + lid.x] := a[gid.y * n + t * 16 + lid.x]
+    tb[lid.y * 16 + lid.x] := b[(t * 16 + lid.y) * n + gid.x]
+    barrier()
+    for k in 0..16
+      acc := acc + ta[lid.y * 16 + k] * tb[k * 16 + lid.x]
+    barrier()
+  c[gid.y * n + gid.x] := acc
+```
+
+| # | Decision | Reason |
+|---|---|---|
+| 18 | `@grid2(w, h, gw, gh)` launches a `w` by `h` grid in `gw` by `gh` groups (literals, `gw * gh` from 1 to 1024). The intrinsics become `gid.x gid.y lid.x lid.y group_id.x group_id.y group_size.x group_size.y grid_size.x grid_size.y`; the plain names are `E_KERNEL` in a 2D kernel and the `.x`/`.y` forms in a 1D one | Matrix and image kernels index naturally, and explicit axes avoid guessing what a bare `gid` means |
+| 19 | Sequential order is row-major: `gid.y` outer, `gid.x` inner. Grouped 2D kernels run group rows then group columns, with lanes in row-major `lid` order; both extents must be multiples of the group's (host checks naming the width or height) | One fixed order for every tier's first trap |
+| 20 | Per-thread shapes accept `gid.y * W + gid.x` when `W` is the grid width expression, and shared shapes `lid.y * gw + lid.x`; masks and flags use that linear index | They are bijections onto the grid and the group, so the 1D race rules carry over unchanged |
+| 21 | Metal dispatches a 2D grid with `uint2` positions and the declared group (shrunk to the pipeline limit unless the kernel has barriers); OpenCL uses `get_global_id(1)`, PTX the `y` special registers | The device code is the 1D code with a second coordinate |

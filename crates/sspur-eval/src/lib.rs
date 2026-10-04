@@ -506,7 +506,7 @@ impl Interp {
     }
 
     #[allow(clippy::type_complexity)]
-    fn launch_args(&self, f: &FnDef, k: &sspur_check::kernel::Kernel, vals: &[Value]) -> R<(Vec<kernel::Arg>, Vec<(usize, Rc<kernel::DevCell>)>, i64)> {
+    fn launch_args(&self, f: &FnDef, k: &sspur_check::kernel::Kernel, vals: &[Value]) -> R<(Vec<kernel::Arg>, Vec<(usize, Rc<kernel::DevCell>)>, (i64, i64))> {
         for (i, (v, p)) in vals.iter().zip(&k.params).enumerate() {
             for (w, q) in vals.iter().zip(&k.params).take(i) {
                 if let (Value::Dev(a), Value::Dev(b)) = (v, w)

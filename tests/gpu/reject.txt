@@ -33,3 +33,7 @@ atomic_cas E_KERNEL_RACE
 atomic_value E_KERNEL
 atomic_type E_KERNEL_TYPE
 atomic_shared E_KERNEL_RACE
+grid2_plain E_KERNEL
+grid1_axis E_KERNEL
+grid2_group E_KERNEL_GRID
+grid2_race E_KERNEL_RACE

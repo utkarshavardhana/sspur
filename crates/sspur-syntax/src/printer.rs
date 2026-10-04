@@ -131,7 +131,10 @@ pub fn print_sig(f: &FnDef) -> String {
         s.push_str(&format!(" ! {}", effects(&f.effects)));
     }
     if let Some(k) = &f.kernel {
-        s.push_str(&format!(" @grid({}, {})", expr(&k.grid, 0), expr(&k.group, 0)));
+        match &k.y {
+            Some((h, gh)) => s.push_str(&format!(" @grid2({}, {}, {}, {})", expr(&k.grid, 0), expr(h, 0), expr(&k.group, 0), expr(gh, 0))),
+            None => s.push_str(&format!(" @grid({}, {})", expr(&k.grid, 0), expr(&k.group, 0))),
+        }
     }
     if let Some(x) = &f.ext {
         if let Some(l) = &x.lib {

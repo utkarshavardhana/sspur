@@ -381,6 +381,11 @@ impl<'a> Hasher<'a> {
                     enc.tag(b'K');
                     self.expr(&mut enc, &k.grid, group);
                     self.expr(&mut enc, &k.group, group);
+                    if let Some((h, gh)) = &k.y {
+                        enc.tag(b'Y');
+                        self.expr(&mut enc, h, group);
+                        self.expr(&mut enc, gh, group);
+                    }
                 }
                 self.expr(&mut enc, &f.body, group);
                 if let Some(x) = &f.ext {

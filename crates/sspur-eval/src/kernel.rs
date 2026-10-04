@@ -85,6 +85,8 @@ struct Run<'a> {
     locals: Vec<KV>,
     gid: i64,
     n: i64,
+    gid_y: i64,
+    ny: i64,
     shared: Vec<Vec<KV>>,
 }
 
@@ -97,54 +99,74 @@ fn zero(t: KTy) -> KV {
     }
 }
 
-pub fn prepare(f: &FnDef, k: &Kernel, args: &mut [Arg]) -> R<i64> {
-    let mut r = Run { k, args, locals: vec![KV::I(0); k.locals.len()], gid: 0, n: 0, shared: vec![] };
+pub fn prepare(f: &FnDef, k: &Kernel, args: &mut [Arg]) -> R<(i64, i64)> {
+    let mut r = Run { k, args, locals: vec![KV::I(0); k.locals.len()], gid: 0, n: 0, gid_y: 0, ny: 1, shared: vec![] };
     for (i, p) in k.pres.iter().enumerate() {
         if !r.expr(p)?.b() {
             return trap(format!("contract violated: pre {} in {}", printer::expr(&f.pres[i], 0), f.name));
         }
     }
     let n = r.expr(&k.grid)?.i();
-    let g = k.group as i64;
-    if k.grouped && n > 0 && n % g != 0 {
-        return trap(format!("dev: the thread count of {} is not a multiple of its group size {g} (count = {n})", k.name));
+    let ny = match &k.grid_y {
+        Some(h) => r.expr(h)?.i(),
+        None => 1,
+    };
+    let (g, gy) = (k.group as i64, k.group_y as i64);
+    if k.grouped && n > 0 && ny > 0 {
+        if k.grid_y.is_none() && n % g != 0 {
+            return trap(format!("dev: the thread count of {} is not a multiple of its group size {g} (count = {n})", k.name));
+        }
+        if n % g != 0 {
+            return trap(format!("dev: the grid width of {} is not a multiple of its group width {g} (width = {n})", k.name));
+        }
+        if ny % gy != 0 {
+            return trap(format!("dev: the grid height of {} is not a multiple of its group height {gy} (height = {ny})", k.name));
+        }
     }
-    Ok(n)
+    Ok((n, ny))
 }
 
-pub fn run(k: &Kernel, args: &mut [Arg], n: i64) -> R<()> {
-    let mut r = Run { k, args, locals: vec![KV::I(0); k.locals.len()], gid: 0, n: n.max(0), shared: vec![] };
+pub fn run(k: &Kernel, args: &mut [Arg], (n, ny): (i64, i64)) -> R<()> {
+    let (n, ny) = if n <= 0 || ny <= 0 { (0, 0) } else { (n, ny) };
+    let mut r = Run { k, args, locals: vec![KV::I(0); k.locals.len()], gid: 0, n, gid_y: 0, ny, shared: vec![] };
     if k.grouped {
-        let g = k.group as i64;
-        let mut lanes = vec![vec![KV::I(0); k.locals.len()]; g as usize];
-        for grp in 0..n.max(0) / g {
-            r.shared = k.shared.iter().map(|(_, t, len)| vec![zero(*t); *len as usize]).collect();
-            r.gblock(&k.body, &mut lanes, grp * g)?;
+        let (g, gy) = (k.group as i64, k.group_y as i64);
+        let mut lanes = vec![vec![KV::I(0); k.locals.len()]; (g * gy) as usize];
+        for by in 0..ny / gy {
+            for bx in 0..n / g {
+                r.shared = k.shared.iter().map(|(_, t, len)| vec![zero(*t); *len as usize]).collect();
+                r.gblock(&k.body, &mut lanes, (bx * g, by * gy))?;
+            }
         }
         return Ok(());
     }
-    for gid in 0..n {
-        r.gid = gid;
-        r.block(&k.body)?;
+    for y in 0..ny {
+        r.gid_y = y;
+        for gid in 0..n {
+            r.gid = gid;
+            r.block(&k.body)?;
+        }
     }
     Ok(())
 }
 
 impl Run<'_> {
-    fn lane0<T>(&mut self, lanes: &mut [Vec<KV>], base: i64, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+    fn lane0<T>(&mut self, lanes: &mut [Vec<KV>], base: (i64, i64), f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
         std::mem::swap(&mut self.locals, &mut lanes[0]);
-        self.gid = base;
+        (self.gid, self.gid_y) = base;
         let r = f(self);
         std::mem::swap(&mut self.locals, &mut lanes[0]);
         r
     }
 
-    fn gblock(&mut self, b: &[KStmt], lanes: &mut [Vec<KV>], base: i64) -> R<()> {
+    fn gblock(&mut self, b: &[KStmt], lanes: &mut [Vec<KV>], base: (i64, i64)) -> R<()> {
+        let g = self.k.group as i64;
         for s in b {
             if !has_barrier(s) {
                 for (t, lane) in lanes.iter_mut().enumerate() {
                     std::mem::swap(&mut self.locals, lane);
-                    self.gid = base + t as i64;
+                    self.gid = base.0 + t as i64 % g;
+                    self.gid_y = base.1 + t as i64 / g;
                     let r = self.stmt(s);
                     std::mem::swap(&mut self.locals, lane);
                     r?;
@@ -270,6 +292,12 @@ impl Run<'_> {
                 KIntr::GroupId => self.gid / self.k.group as i64,
                 KIntr::GroupSize => self.k.group as i64,
                 KIntr::GridSize => self.n,
+                KIntr::GidY => self.gid_y,
+                KIntr::LidY => self.gid_y % self.k.group_y as i64,
+                KIntr::GroupIdY => self.gid_y / self.k.group_y as i64,
+                KIntr::GroupSizeY => self.k.group_y as i64,
+                KIntr::GridSizeY => self.ny,
+
             }),
             KExpr::Load(p, i) => {
                 let i = self.expr(i)?.i();

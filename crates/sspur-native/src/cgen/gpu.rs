@@ -126,9 +126,9 @@ impl<'a> Em<'a> {
 
     fn flag(&self) -> &'static str {
         match (self.t, self.mask) {
-            (Tgt::Msl, true) => "atomic_fetch_or_explicit(&ss_mask[gid >> 5], 1u << (uint)(gid & 31), memory_order_relaxed); atomic_store_explicit(ss_flag, 1u, memory_order_relaxed);",
+            (Tgt::Msl, true) => "atomic_fetch_or_explicit(&ss_mask[ss_lin >> 5], 1u << (uint)(ss_lin & 31), memory_order_relaxed); atomic_store_explicit(ss_flag, 1u, memory_order_relaxed);",
             (Tgt::Msl, false) => "atomic_store_explicit(ss_flag, 1u, memory_order_relaxed);",
-            (_, true) => "SS_OR(&ss_mask[gid >> 5], 1u << (uint)(gid & 31)); *ss_flag = 1u;",
+            (_, true) => "SS_OR(&ss_mask[ss_lin >> 5], 1u << (uint)(ss_lin & 31)); *ss_flag = 1u;",
             _ => "*ss_flag = 1u;",
         }
     }
@@ -181,6 +181,12 @@ impl<'a> Em<'a> {
                 KIntr::GroupSize => format!("{}", self.k.group),
                 KIntr::GridSize if self.narrow => "((int)ss_n)".into(),
                 KIntr::GridSize => "ss_n".into(),
+                KIntr::GidY => "gid_y".into(),
+                KIntr::LidY => format!("(gid_y % {})", self.k.group_y),
+                KIntr::GroupIdY => format!("(gid_y / {})", self.k.group_y),
+                KIntr::GroupSizeY => format!("{}", self.k.group_y),
+                KIntr::GridSizeY if self.narrow => "((int)ss_ny)".into(),
+                KIntr::GridSizeY => "ss_ny".into(),
             },
             KExpr::Load(p, i) => {
                 let i = self.expr(i);
@@ -441,12 +447,14 @@ impl<'a> Em<'a> {
     }
 
     fn lanes(&mut self, b: &[KStmt]) {
-        let g = self.k.group;
+        let (g, gy) = (self.k.group, self.k.group_y);
+        let n = g * gy;
+        let base = format!("int64_t ss_t = 0, gid = ss_bx * {g}, gid_y = ss_by * {gy}; (void)ss_t; (void)gid; (void)gid_y;");
         for s in b {
             if !has_barrier(s) {
-                self.line(&format!("for (int64_t ss_t = 0; ss_t < {g}; ss_t++) {{"));
+                self.line(&format!("for (int64_t ss_t = 0; ss_t < {n}; ss_t++) {{"));
                 self.ind += 1;
-                self.line(&format!("int64_t gid = ss_g * {g} + ss_t; (void)gid;"));
+                self.line(&format!("int64_t gid = ss_bx * {g} + ss_t % {g}, gid_y = ss_by * {gy} + ss_t / {g}; (void)gid; (void)gid_y;"));
                 self.stmt(s);
                 self.ind -= 1;
                 self.line("}");
@@ -456,14 +464,14 @@ impl<'a> Em<'a> {
                 KStmt::For(slot, a, b, body) => {
                     self.line("{");
                     self.ind += 1;
-                    self.line(&format!("int64_t ss_t = 0, gid = ss_g * {g}; (void)ss_t; (void)gid;"));
+                    self.line(&base);
                     let lo = self.expr(a);
                     let hi = self.expr(b);
                     let (l, h) = (self.fresh(), self.fresh());
                     self.line(&format!("int64_t {l} = {lo}, {h} = {hi};"));
                     self.line(&format!("for (int64_t ss_i = {l}; ss_i < {h}; ss_i++) {{"));
                     self.ind += 1;
-                    self.line(&format!("for (int64_t ss_u = 0; ss_u < {g}; ss_u++) v{slot}[ss_u] = ss_i;"));
+                    self.line(&format!("for (int64_t ss_u = 0; ss_u < {n}; ss_u++) v{slot}[ss_u] = ss_i;"));
                     self.lanes(body);
                     self.ind -= 1;
                     self.line("}");
@@ -473,7 +481,7 @@ impl<'a> Em<'a> {
                 KStmt::If(c, t, f) => {
                     self.line("{");
                     self.ind += 1;
-                    self.line(&format!("int64_t ss_t = 0, gid = ss_g * {g}; (void)ss_t; (void)gid;"));
+                    self.line(&base);
                     let c = self.expr(c);
                     self.line(&format!("if ({c}) {{"));
                     self.ind += 1;
@@ -724,12 +732,18 @@ impl Iv<'_> {
             KExpr::Len(p) => Some(self.node(KTy::Int, format!("(__int128)l{p}"), format!("(__int128)l{p}"))),
             KExpr::Intr(i) => {
                 let g = self.k.group;
+                let gy = self.k.group_y;
                 let (lo, hi) = match i {
                     KIntr::Gid => ("0".to_string(), "(__int128)ss_n - 1".to_string()),
                     KIntr::Lid => ("0".into(), format!("{}", g - 1)),
                     KIntr::GroupId => ("0".into(), format!("((__int128)ss_n - 1) / {g}")),
                     KIntr::GroupSize => (format!("{g}"), format!("{g}")),
                     KIntr::GridSize => ("(__int128)ss_n".into(), "(__int128)ss_n".into()),
+                    KIntr::GidY => ("0".to_string(), "(__int128)ss_ny - 1".to_string()),
+                    KIntr::LidY => ("0".into(), format!("{}", gy - 1)),
+                    KIntr::GroupIdY => ("0".into(), format!("((__int128)ss_ny - 1) / {gy}")),
+                    KIntr::GroupSizeY => (format!("{gy}"), format!("{gy}")),
+                    KIntr::GridSizeY => ("(__int128)ss_ny".into(), "(__int128)ss_ny".into()),
                 };
                 Some(self.node(KTy::Int, lo, hi))
             }
@@ -908,7 +922,7 @@ pub fn cpu_kernel(k: &Kernel, fidx: usize) -> String {
         }
     }
     if k.grouped {
-        let g = k.group as usize;
+        let g = k.group_threads() as usize;
         let mut decls = String::new();
         let mut off = 0usize;
         for (i, t) in k.locals.iter().enumerate() {
@@ -933,17 +947,19 @@ pub fn cpu_kernel(k: &Kernel, fidx: usize) -> String {
         em.lanes(&k.body);
         let body = em.take();
         return format!(
-            "#define FIDX {fidx}\nstatic void kc_{}({}, int64_t ss_n, const uint32_t* ss_mask, Status* st) {{\n#pragma clang fp contract(off)\n  (void)ss_mask;\n  char* ss_mem = (char*)malloc({});\n{decls}  for (int64_t ss_g = 0; ss_g < ss_n / {g}; ss_g++) {{\n{zero}{body}  }}\n  free(ss_mem);\n}}\n#undef FIDX\n",
+            "#define FIDX {fidx}\nstatic void kc_{}({}, int64_t ss_n, int64_t ss_ny, const uint32_t* ss_mask, Status* st) {{\n#pragma clang fp contract(off)\n  (void)ss_mask;\n  char* ss_mem = (char*)malloc({});\n{decls}  for (int64_t ss_by = 0; ss_by < ss_ny / {}; ss_by++) for (int64_t ss_bx = 0; ss_bx < ss_n / {}; ss_bx++) {{\n{zero}{body}  }}\n  free(ss_mem);\n}}\n#undef FIDX\n",
             k.name,
             sig.join(", "),
-            off.max(8)
+            off.max(8),
+            k.group_y,
+            k.group
         );
     }
     let mut em = Em::new(k, Tgt::C, 2);
     em.block(&k.body);
     let body = em.take();
     format!(
-        "#define FIDX {fidx}\nstatic void kc_{}({}, int64_t ss_n, const uint32_t* ss_mask, Status* st) {{\n#pragma clang fp contract(off)\n  for (int64_t gid = 0; gid < ss_n; gid++) {{\n    if (ss_mask && !((ss_mask[gid >> 5] >> (gid & 31)) & 1u)) continue;\n{body}  }}\n}}\n#undef FIDX\n",
+        "#define FIDX {fidx}\nstatic void kc_{}({}, int64_t ss_n, int64_t ss_ny, const uint32_t* ss_mask, Status* st) {{\n#pragma clang fp contract(off)\n  for (int64_t gid_y = 0; gid_y < ss_ny; gid_y++) for (int64_t gid = 0; gid < ss_n; gid++) {{\n    int64_t ss_lin = gid_y * ss_n + gid; (void)ss_lin; (void)gid_y;\n    if (ss_mask && !((ss_mask[ss_lin >> 5] >> (ss_lin & 31)) & 1u)) continue;\n{body}  }}\n}}\n#undef FIDX\n",
         k.name,
         sig.join(", ")
     )
@@ -951,7 +967,8 @@ pub fn cpu_kernel(k: &Kernel, fidx: usize) -> String {
 
 pub const MSL_PRELUDE: &str = "#include <metal_stdlib>\nusing namespace metal;\n#pragma METAL fp math_mode(safe)\n#pragma METAL fp contract(off)\n#define SS_MULHI(a, b) mulhi((long)(a), (long)(b))\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
 
-pub const OCL_PRELUDE: &str = "#ifdef __NVPTX__\n#define get_global_id(d) ((size_t)__nvvm_read_ptx_sreg_ctaid_x() * __nvvm_read_ptx_sreg_ntid_x() + __nvvm_read_ptx_sreg_tid_x())\n#define SS_MULHI(a, b) __nvvm_mulhi_ll((a), (b))\n#define fabs(x) __builtin_fabs(x)\n#define sqrt(x) __builtin_sqrt(x)\n#define floor(x) __builtin_floor(x)\n#define ceil(x) __builtin_ceil(x)\n#define round(x) __builtin_round(x)\n#define isinf(x) __builtin_isinf(x)\n#define SS_OR(p, v) __nvvm_atom_or_gen_i((volatile int*)(p), (int)(v))\n#define barrier(f) __nvvm_bar_sync(0)\n#define SS_AADD(p, v) __nvvm_atom_add_gen_i((volatile int*)(p), (int)(v))\n#define SS_AMIN(p, v) __nvvm_atom_min_gen_i((volatile int*)(p), (int)(v))\n#define SS_AMAX(p, v) __nvvm_atom_max_gen_i((volatile int*)(p), (int)(v))\n#define SS_AMINU(p, v) __nvvm_atom_min_gen_ui((volatile unsigned int*)(p), (unsigned int)(v))\n#define SS_AMAXU(p, v) __nvvm_atom_max_gen_ui((volatile unsigned int*)(p), (unsigned int)(v))\n#define SS_ACAS(p, e, d) (uint)__nvvm_atom_cas_gen_i((volatile int*)(p), (int)(e), (int)(d))\n#else\n#define SS_MULHI(a, b) mul_hi((long)(a), (long)(b))\n#define SS_OR(p, v) atomic_or((p), (v))\n#define SS_AADD(p, v) atomic_add((p), (v))\n#define SS_AMIN(p, v) atomic_min((p), (v))\n#define SS_AMAX(p, v) atomic_max((p), (v))\n#define SS_AMINU(p, v) atomic_min((p), (v))\n#define SS_AMAXU(p, v) atomic_max((p), (v))\n#define SS_ACAS(p, e, d) atomic_cmpxchg((p), (e), (d))\n#endif
+pub const OCL_PRELUDE: &str = "#ifdef __NVPTX__\n#define get_global_id(d) ((d) == 0 ? (size_t)__nvvm_read_ptx_sreg_ctaid_x() * __nvvm_read_ptx_sreg_ntid_x() + __nvvm_read_ptx_sreg_tid_x() : (size_t)__nvvm_read_ptx_sreg_ctaid_y() * __nvvm_read_ptx_sreg_ntid_y() + __nvvm_read_ptx_sreg_tid_y())
+\n#define SS_MULHI(a, b) __nvvm_mulhi_ll((a), (b))\n#define fabs(x) __builtin_fabs(x)\n#define sqrt(x) __builtin_sqrt(x)\n#define floor(x) __builtin_floor(x)\n#define ceil(x) __builtin_ceil(x)\n#define round(x) __builtin_round(x)\n#define isinf(x) __builtin_isinf(x)\n#define SS_OR(p, v) __nvvm_atom_or_gen_i((volatile int*)(p), (int)(v))\n#define barrier(f) __nvvm_bar_sync(0)\n#define SS_AADD(p, v) __nvvm_atom_add_gen_i((volatile int*)(p), (int)(v))\n#define SS_AMIN(p, v) __nvvm_atom_min_gen_i((volatile int*)(p), (int)(v))\n#define SS_AMAX(p, v) __nvvm_atom_max_gen_i((volatile int*)(p), (int)(v))\n#define SS_AMINU(p, v) __nvvm_atom_min_gen_ui((volatile unsigned int*)(p), (unsigned int)(v))\n#define SS_AMAXU(p, v) __nvvm_atom_max_gen_ui((volatile unsigned int*)(p), (unsigned int)(v))\n#define SS_ACAS(p, e, d) (uint)__nvvm_atom_cas_gen_i((volatile int*)(p), (int)(e), (int)(d))\n#else\n#define SS_MULHI(a, b) mul_hi((long)(a), (long)(b))\n#define SS_OR(p, v) atomic_or((p), (v))\n#define SS_AADD(p, v) atomic_add((p), (v))\n#define SS_AMIN(p, v) atomic_min((p), (v))\n#define SS_AMAX(p, v) atomic_max((p), (v))\n#define SS_AMINU(p, v) atomic_min((p), (v))\n#define SS_AMAXU(p, v) atomic_max((p), (v))\n#define SS_ACAS(p, e, d) atomic_cmpxchg((p), (e), (d))\n#endif
 \n#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n#pragma OPENCL FP_CONTRACT OFF\nstatic inline bool ss_sub(uint b) { return (b & 0x7f800000u) == 0u && (b & 0x007fffffu) != 0u; }\n";
 
 pub fn device_kernel(k: &Kernel, tgt: Tgt, narrow: bool) -> String {
@@ -985,6 +1002,10 @@ pub fn device_kernel(k: &Kernel, tgt: Tgt, narrow: bool) -> String {
     }
     let r = if tgt == Tgt::Msl { "&" } else { "" };
     buf(format!("{con}long{r} ss_n"), &mut sig);
+    let two = k.grid_y.is_some();
+    if two {
+        buf(format!("{con}long{r} ss_ny"), &mut sig);
+    }
     let flag = if tgt == Tgt::Msl { "device atomic_uint* ss_flag" } else { "__global uint* ss_flag" };
     buf(flag.to_string(), &mut sig);
     let split = commit_split(k);
@@ -999,9 +1020,10 @@ pub fn device_kernel(k: &Kernel, tgt: Tgt, narrow: bool) -> String {
     for (i, (_, t, len)) in k.shared.iter().enumerate() {
         let e = elem_c(*t, tgt);
         let space = if tgt == Tgt::Msl { "threadgroup" } else { "__local" };
-        let g = k.group;
+        let (g, gy) = (k.group, k.group_y);
         em.line(&format!("{space} {e} s{i}[{len}];"));
-        em.line(&format!("for (int ss_z = (int)(gid % {g}); ss_z < {len}; ss_z += {g}) s{i}[ss_z] = 0;"));
+        let start = if two { format!("(int)((gid_y % {gy}) * {g} + gid % {g})") } else { format!("(int)(gid % {g})") };
+        em.line(&format!("for (int ss_z = {start}; ss_z < {len}; ss_z += {}) s{i}[ss_z] = 0;", g * gy));
     }
     if !k.shared.is_empty() {
         em.stmt(&KStmt::Barrier);
@@ -1019,10 +1041,14 @@ pub fn device_kernel(k: &Kernel, tgt: Tgt, narrow: bool) -> String {
         }
     }
     let body = em.take();
-    match tgt {
-        Tgt::Msl if narrow => format!("kernel void k_{}_n({}, uint ss_t [[thread_position_in_grid]]) {{\n  int gid = (int)ss_t;\n  if ((long)gid >= ss_n) return;\n{body}}}\n", k.name, sig.join(", ")),
-        Tgt::Msl => format!("kernel void k_{}({}, uint ss_t [[thread_position_in_grid]]) {{\n  long gid = (long)ss_t;\n  if (gid >= ss_n) return;\n{body}}}\n", k.name, sig.join(", ")),
-        _ => format!("__kernel void k_{}({}) {{\n  long gid = (long)get_global_id(0);\n  if (gid >= ss_n) return;\n{body}}}\n", k.name, sig.join(", ")),
+    let (name, sig) = (&k.name, sig.join(", "));
+    match (tgt, two) {
+        (Tgt::Msl, false) if narrow => format!("kernel void k_{name}_n({sig}, uint ss_t [[thread_position_in_grid]]) {{\n  int gid = (int)ss_t;\n  if ((long)gid >= ss_n) return;\n  int ss_lin = gid; (void)ss_lin;\n{body}}}\n"),
+        (Tgt::Msl, false) => format!("kernel void k_{name}({sig}, uint ss_t [[thread_position_in_grid]]) {{\n  long gid = (long)ss_t;\n  if (gid >= ss_n) return;\n  long ss_lin = gid; (void)ss_lin;\n{body}}}\n"),
+        (Tgt::Msl, true) if narrow => format!("kernel void k_{name}_n({sig}, uint2 ss_t [[thread_position_in_grid]]) {{\n  int gid = (int)ss_t.x, gid_y = (int)ss_t.y;\n  if ((long)gid >= ss_n || (long)gid_y >= ss_ny) return;\n  int ss_lin = gid_y * (int)ss_n + gid; (void)ss_lin;\n{body}}}\n"),
+        (Tgt::Msl, true) => format!("kernel void k_{name}({sig}, uint2 ss_t [[thread_position_in_grid]]) {{\n  long gid = (long)ss_t.x, gid_y = (long)ss_t.y;\n  if (gid >= ss_n || gid_y >= ss_ny) return;\n  long ss_lin = gid_y * ss_n + gid; (void)ss_lin;\n{body}}}\n"),
+        (_, false) => format!("__kernel void k_{name}({sig}) {{\n  long gid = (long)get_global_id(0);\n  if (gid >= ss_n) return;\n  long ss_lin = gid;\n{body}}}\n"),
+        (_, true) => format!("__kernel void k_{name}({sig}) {{\n  long gid = (long)get_global_id(0), gid_y = (long)get_global_id(1);\n  if (gid >= ss_n || gid_y >= ss_ny) return;\n  long ss_lin = gid_y * ss_n + gid;\n{body}}}\n"),
     }
 }
 
@@ -1127,7 +1153,7 @@ pub fn shim() -> Result<PathBuf, String> {
 pub(super) const HOST_PRELUDE: &str = r#"typedef struct { int32_t kind, pad; const void* ptr; int64_t bytes; void* dev; } SsGpuArg;
 #ifdef __APPLE__
 int ss_gpu_ready(void);
-int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask);
+int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t masked, const uint32_t** mask);
 void* ss_gpu_alloc(int64_t bytes, void** host);
 void ss_gpu_free(void* dev);
 int ss_gpu_enqueue(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t opts, int32_t slot);
@@ -1140,7 +1166,8 @@ static int ss_gpu_wait(void) { return 0; }
 static uint32_t ss_gpu_flag(int32_t slot) { (void)slot; return 1; }
 static const uint32_t* ss_gpu_mask(int32_t slot) { (void)slot; return 0; }
 static int ss_gpu_ready(void) { return 0; }
-static int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask) { (void)src; (void)entry; (void)nargs; (void)args; (void)n; (void)group; (void)masked; (void)mask; return 2; }
+static int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t masked, const uint32_t** mask) { (void)src; (void)entry; (void)nargs; (void)args; (void)nx; (void)ny; (void)gx; (void)gy; (void)masked; (void)mask; return 2; }
+
 static void* ss_gpu_alloc(int64_t bytes, void** host) { (void)bytes; (void)host; return 0; }
 static void ss_gpu_free(void* dev) { (void)dev; }
 #endif
@@ -1389,30 +1416,40 @@ impl Cx<'_> {
             em.fail(&format!("!({c})"), T_PRE, &i.to_string(), "0");
         }
         let n = em.expr(&k.grid);
+        let ny = k.grid_y.as_ref().map(|g| em.expr(g)).unwrap_or_else(|| "1".into());
         s.push_str(&em.take());
-        writeln!(s, "  int64_t ss_n = {n};").unwrap();
-        if k.grouped {
-            let m = c_lit(&format!("dev: the thread count of {name} is not a multiple of its group size {} (count = ", k.group));
-            writeln!(s, "  if (UNLIKELY(ss_n > 0 && ss_n % {} != 0)) {{ ss_q_sync(st); dev_fail(st, FIDX, {m}, -1, \"\", ss_n); }}", k.group).unwrap();
+        writeln!(s, "  int64_t ss_n = {n}, ss_ny = {ny};").unwrap();
+        let (gx, gy) = (k.group, k.group_y);
+        if k.grouped && k.grid_y.is_none() {
+            let m = c_lit(&format!("dev: the thread count of {name} is not a multiple of its group size {gx} (count = "));
+            writeln!(s, "  if (UNLIKELY(ss_n > 0 && ss_n % {gx} != 0)) {{ ss_q_sync(st); dev_fail(st, FIDX, {m}, -1, \"\", ss_n); }}").unwrap();
+        } else if k.grouped {
+            let m = c_lit(&format!("dev: the grid width of {name} is not a multiple of its group width {gx} (width = "));
+            writeln!(s, "  if (UNLIKELY(ss_n > 0 && ss_ny > 0 && ss_n % {gx} != 0)) {{ ss_q_sync(st); dev_fail(st, FIDX, {m}, -1, \"\", ss_n); }}").unwrap();
+            let m = c_lit(&format!("dev: the grid height of {name} is not a multiple of its group height {gy} (height = "));
+            writeln!(s, "  if (UNLIKELY(ss_n > 0 && ss_ny > 0 && ss_ny % {gy} != 0)) {{ ss_q_sync(st); dev_fail(st, FIDX, {m}, -1, \"\", ss_ny); }}").unwrap();
         }
         let exact = if k.grouped { 2 } else { 0 };
         let sub: Vec<String> = k.params.iter().enumerate().filter(|(_, p)| p.slice.is_none() && p.ty == KTy::F32).map(|(i, _)| format!(" && !ss_sub32(p{i})")).collect();
         gargs.push("{0, 0, &ss_n, 8, 0}".into());
+        if k.grid_y.is_some() {
+            gargs.push("{0, 0, &ss_ny, 8, 0}".into());
+        }
         let commit = commit_split(k).is_some();
         let narrow = narrow_pred(k);
         let entry = |s: &mut String| match &narrow {
             Some(code) => {
                 let lens: String = k.params.iter().enumerate().filter(|(_, p)| p.slice.is_some()).map(|(i, _)| format!(" && l{i} <= 2147483647LL")).collect();
-                writeln!(s, "      nar_ = ss_n <= 2147483647LL{lens};\n      if (nar_) {{\n{code}      }}").unwrap();
+                writeln!(s, "      nar_ = ss_n <= 2147483647LL && ss_ny <= 2147483647LL && ss_n * ss_ny <= 2147483647LL{lens};\n      if (nar_) {{\n{code}      }}").unwrap();
                 format!("nar_ ? \"k_{name}_n\" : \"k_{name}\"")
             }
             None => format!("\"k_{name}\""),
         };
-        writeln!(s, "  if (ss_n > 0) {{").unwrap();
+        writeln!(s, "  if (ss_n > 0 && ss_ny > 0) {{").unwrap();
         if all_dev {
-            writeln!(self.protos, "typedef struct {{ {} int64_t ss_n; }} KQ_{cname};\nstatic void kq_{cname}(void* r_, const uint32_t* m_, Status* st);", rec.join(" ")).unwrap();
-            writeln!(s, "    KQ_{cname}* q_ = (KQ_{cname}*)malloc(sizeof(KQ_{cname}));\n    q_->ss_n = ss_n;").unwrap();
-            writeln!(s, "    SsLaunch L_ = {{0}}; L_.cpu = kq_{cname}; L_.rec = q_; L_.name = \"{name}\"; L_.n = ss_n; L_.masked = {};", i32::from(commit)).unwrap();
+            writeln!(self.protos, "typedef struct {{ {} int64_t ss_n, ss_ny; }} KQ_{cname};\nstatic void kq_{cname}(void* r_, const uint32_t* m_, Status* st);", rec.join(" ")).unwrap();
+            writeln!(s, "    KQ_{cname}* q_ = (KQ_{cname}*)malloc(sizeof(KQ_{cname}));\n    q_->ss_n = ss_n; q_->ss_ny = ss_ny;").unwrap();
+            writeln!(s, "    SsLaunch L_ = {{0}}; L_.cpu = kq_{cname}; L_.rec = q_; L_.name = \"{name}\"; L_.n = ss_n * ss_ny; L_.masked = {};", i32::from(commit)).unwrap();
             s.push_str(&fill);
             let why = if k.uses_f64() { "cpu (F64 is not available on the GPU)" } else { "cpu" };
             writeln!(s, "    L_.why = \"{why}\";\n    const char* e_ = 0; int nar_ = 0; (void)nar_;").unwrap();
@@ -1423,12 +1460,12 @@ impl Cx<'_> {
                 writeln!(s, "      e_ = {e};\n    }}\n    L_.narrow = nar_;").unwrap();
             }
             writeln!(s, "    SsGpuArg g_[] = {{{}}};", gargs.join(", ")).unwrap();
-            writeln!(s, "    ss_q_push(st, &L_, ss_msl, e_, {}, g_, ss_n, 1, {}, 1, {});", gargs.len(), k.group, i32::from(commit) | exact).unwrap();
+            writeln!(s, "    ss_q_push(st, &L_, ss_msl, e_, {}, g_, ss_n, ss_ny, {gx}, {gy}, {});", gargs.len(), i32::from(commit) | exact).unwrap();
         } else {
             let masked = commit && !k.params.iter().enumerate().any(|(i, p)| p.slice == Some(true) && !dev(i));
             if k.uses_f64() {
-                writeln!(s, "    ss_trace(\"{name}\", \"cpu (F64 is not available on the GPU)\", ss_n);").unwrap();
-                writeln!(s, "    kc_{name}({}, ss_n, 0, st);", cargs.join(", ")).unwrap();
+                writeln!(s, "    ss_trace(\"{name}\", \"cpu (F64 is not available on the GPU)\", ss_n * ss_ny);").unwrap();
+                writeln!(s, "    kc_{name}({}, ss_n, ss_ny, 0, st);", cargs.join(", ")).unwrap();
             } else {
                 writeln!(s, "    int r_ = 2, nar_ = 0; const uint32_t* m_ = 0; (void)m_; (void)nar_;").unwrap();
                 writeln!(s, "    if (ss_gpu_ready(){}) {{", sub.concat()).unwrap();
@@ -1437,20 +1474,20 @@ impl Cx<'_> {
                     s.push_str(&save);
                 }
                 writeln!(s, "      SsGpuArg g_[] = {{{}}};", gargs.join(", ")).unwrap();
-                writeln!(s, "      r_ = ss_gpu_run(ss_msl, {e}, {}, g_, ss_n, {}, {}, &m_);", gargs.len(), k.group, i32::from(masked) + i32::from(commit) + 2 * exact).unwrap();
+                writeln!(s, "      r_ = ss_gpu_run(ss_msl, {e}, {}, g_, ss_n, ss_ny, {gx}, {gy}, {}, &m_);", gargs.len(), i32::from(masked) + i32::from(commit) + 2 * exact).unwrap();
                 if !masked {
                     s.push_str(&restore);
                 }
                 writeln!(s, "    }}").unwrap();
                 let rerun = if masked { "cpu rerun of flagged threads" } else { "cpu rerun (trap or subnormal)" };
-                writeln!(s, "    ss_trace(\"{name}\", r_ == 0 ? (nar_ ? \"metal, 32-bit indices\" : \"metal\") : r_ == 1 ? \"{rerun}\" : \"cpu\", ss_n);").unwrap();
+                writeln!(s, "    ss_trace(\"{name}\", r_ == 0 ? (nar_ ? \"metal, 32-bit indices\" : \"metal\") : r_ == 1 ? \"{rerun}\" : \"cpu\", ss_n * ss_ny);").unwrap();
                 if masked {
                     let m = c_lit(&format!("dev: the GPU failed while running {name}"));
                     writeln!(s, "    if (r_ == 3) dev_fail(st, FIDX, {m}, -1, 0, 0);").unwrap();
-                    writeln!(s, "    if (r_) kc_{name}({}, ss_n, r_ == 1 ? m_ : 0, st);", cargs.join(", ")).unwrap();
+                    writeln!(s, "    if (r_) kc_{name}({}, ss_n, ss_ny, r_ == 1 ? m_ : 0, st);", cargs.join(", ")).unwrap();
                     writeln!(s, "    if (m_) free((void*)m_);").unwrap();
                 } else {
-                    writeln!(s, "    if (r_) kc_{name}({}, ss_n, 0, st);", cargs.join(", ")).unwrap();
+                    writeln!(s, "    if (r_) kc_{name}({}, ss_n, ss_ny, 0, st);", cargs.join(", ")).unwrap();
                 }
             }
         }
@@ -1459,7 +1496,7 @@ impl Cx<'_> {
         writeln!(s, "  return ({rr}){{0, 0}};\n}}\n#undef FIDX").unwrap();
         if all_dev {
             let call: String = qargs.iter().map(|a| format!("{a}, ")).collect();
-            writeln!(s, "static void kq_{cname}(void* r_, const uint32_t* m_, Status* st) {{\n  KQ_{cname}* q_ = (KQ_{cname}*)r_;\n  kc_{name}({call}q_->ss_n, m_, st);\n}}").unwrap();
+            writeln!(s, "static void kq_{cname}(void* r_, const uint32_t* m_, Status* st) {{\n  KQ_{cname}* q_ = (KQ_{cname}*)r_;\n  kc_{name}({call}q_->ss_n, q_->ss_ny, m_, st);\n}}").unwrap();
         }
         Ok(s)
     }

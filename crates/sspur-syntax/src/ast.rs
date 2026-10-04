@@ -137,6 +137,7 @@ pub struct FnDef {
 pub struct KernelSpec {
     pub grid: Expr,
     pub group: Expr,
+    pub y: Option<(Expr, Expr)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

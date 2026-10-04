@@ -1,0 +1,83 @@
+kernel fn tiled(a: &[F32], b: &[F32], c: &mut [F32], n: Int) @grid2(n, n, 16, 16)
+  pre a.len == n * n and b.len == n * n and c.len == n * n
+= do
+  ta = shared[F32](256)
+  tb = shared[F32](256)
+  tx = lid.x
+  ty = lid.y
+  var acc = 0.0
+  for t in 0..n / 16
+    ta[ty * 16 + tx] := a[gid.y * n + t * 16 + tx]
+    tb[ty * 16 + tx] := b[(t * 16 + ty) * n + gid.x]
+    barrier()
+    for k in 0..16
+      acc := acc + ta[ty * 16 + k] * tb[k * 16 + tx]
+    barrier()
+  c[gid.y * n + gid.x] := acc
+
+kernel fn naive(a: &[F32], b: &[F32], c: &mut [F32], n: Int) @grid2(n, n, 8, 8)
+= do
+  var acc = 0.0
+  for k in 0..n
+    acc := acc + a[gid.y * n + k] * b[k * n + gid.x]
+  c[gid.y * n + gid.x] := acc
+
+kernel fn coords(w: Int, out: &mut [I32]) @grid2(w, out.len / w, 4, 2)
+= out[gid.y * w + gid.x] := (gid.x * 1000 + gid.y * 10 + lid.x + lid.y * 4 + group_id.x * 100000 + group_id.y * 1000000 + grid_size.x * 0 + group_size.y * 0).to_i32
+
+kernel fn transpose(x: &[F32], y: &mut [F32], w: Int, h: Int) @grid2(w, h, 8, 8)
+  pre x.len == w * h and y.len == w * h
+= do
+  t = shared[F32](64)
+  t[lid.y * 8 + lid.x] := x[gid.y * w + gid.x]
+  barrier()
+  y[gid.y * w + gid.x] := t[lid.x * 8 + lid.y] + 0.0 * (h.to_f32)
+
+fn mats(n: Int) -> (List[F64], List[F64]) ! dev
+= do
+  a = dev_f32((0..n * n).map(i => (i % 17).to_f64 * 0.125 - 1.0))
+  b = dev_f32((0..n * n).map(i => (i % 13).to_f64 * 0.25 - 1.5))
+  c1 = dev_f32((0..n * n).map(i => 0.0))
+  c2 = dev_f32((0..n * n).map(i => 0.0))
+  tiled(&a, &b, &mut c1, n)
+  naive(&a, &b, &mut c2, n)
+  (c1.to_list, c2.to_list)
+
+fn grid_coords() -> List[Int] ! dev
+= do
+  out = dev_i32((0..8 * 6).map(i => 0))
+  coords(8, &mut out)
+  out.to_list
+
+fn odd_coords() -> List[Int] ! dev
+= do
+  var out = (0..5 * 3).map(i => 0)
+  coords(5, &mut out)
+  out
+
+fn tr() -> List[F64] ! dev
+= do
+  y = dev_f32((0..16 * 8).map(i => 0.0))
+  transpose(&dev_f32((0..16 * 8).map(i => i.to_f64)), &mut y, 16, 8)
+  y.to_list
+
+fn bad_tile() -> Int ! dev
+= do
+  c = dev_f32((0..24 * 24).map(i => 0.0))
+  tiled(&dev_f32((0..24 * 24).map(i => 1.0)), &dev_f32((0..24 * 24).map(i => 1.0)), &mut c, 24)
+  c.len
+
+test tiled_matches_naive = do
+  (x, y) = mats(64)
+  x == y
+test coords_ok = grid_coords()[9] == 1010 + 1 + 4
+test odd_ok = odd_coords().len == 15
+test bad_tile_trap = bad_tile() == 576
+
+fn main() ! dev, log
+= do
+  (x, y) = mats(128)
+  log("{x.sum} {x[0]} {x[128 * 128 - 1]} {x == y}")
+  log("{grid_coords()}")
+  log("{odd_coords()}")
+  log("{tr().take(20)}")

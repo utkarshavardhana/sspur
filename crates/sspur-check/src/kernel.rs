@@ -74,6 +74,28 @@ pub enum KIntr {
     GroupId,
     GroupSize,
     GridSize,
+    GidY,
+    LidY,
+    GroupIdY,
+    GroupSizeY,
+    GridSizeY,
+}
+
+impl KIntr {
+    pub fn y(self) -> KIntr {
+        match self {
+            KIntr::Gid => KIntr::GidY,
+            KIntr::Lid => KIntr::LidY,
+            KIntr::GroupId => KIntr::GroupIdY,
+            KIntr::GroupSize => KIntr::GroupSizeY,
+            KIntr::GridSize => KIntr::GridSizeY,
+            other => other,
+        }
+    }
+
+    pub fn varies(self) -> bool {
+        matches!(self, KIntr::Gid | KIntr::Lid | KIntr::GidY | KIntr::LidY)
+    }
 }
 
 pub const INTRINSICS: &[(&str, KIntr)] = &[("gid", KIntr::Gid), ("lid", KIntr::Lid), ("group_id", KIntr::GroupId), ("group_size", KIntr::GroupSize), ("grid_size", KIntr::GridSize)];
@@ -138,6 +160,8 @@ pub struct Kernel {
     pub params: Vec<KParam>,
     pub grid: KExpr,
     pub group: u32,
+    pub grid_y: Option<KExpr>,
+    pub group_y: u32,
     pub pres: Vec<KExpr>,
     pub body: Vec<KStmt>,
     pub locals: Vec<KTy>,
@@ -152,7 +176,11 @@ impl Kernel {
     }
 
     pub fn uses_group(&self) -> bool {
-        self.body.iter().any(|s| stmt_has(s, &|e| matches!(e, KExpr::Intr(KIntr::Lid | KIntr::GroupId | KIntr::GroupSize))))
+        self.body.iter().any(|s| stmt_has(s, &|e| matches!(e, KExpr::Intr(KIntr::Lid | KIntr::GroupId | KIntr::GroupSize | KIntr::LidY | KIntr::GroupIdY | KIntr::GroupSizeY))))
+    }
+
+    pub fn group_threads(&self) -> u32 {
+        self.group * self.group_y
     }
 }
 
@@ -243,6 +271,9 @@ struct Lower<'a> {
     errs: Vec<KErr>,
     float: KTy,
     group: u32,
+    group_y: u32,
+    two: bool,
+    grid_key: Option<String>,
     shared: Vec<(String, KTy, u32)>,
     cf: Vec<bool>,
     guards: Vec<KExpr>,
@@ -350,6 +381,13 @@ pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
         ExprKind::Int(g) if (1..=1024).contains(&g) => g as u32,
         _ => return Err(vec![KErr { code: "E_KERNEL_GRID", span: spec.group.span, msg: format!("the group size of {} must be an Int literal from 1 to 1024", f.name), hint: None }]),
     };
+    let group_y = match &spec.y {
+        None => 1,
+        Some((_, gy)) => match gy.kind {
+            ExprKind::Int(g) if (1..=1024).contains(&g) && g as u32 * group <= 1024 => g as u32,
+            _ => return Err(vec![KErr { code: "E_KERNEL_GRID", span: gy.span, msg: format!("the group height of {} must be an Int literal, with width times height from 1 to 1024", f.name), hint: None }]),
+        },
+    };
     let float = if params.iter().any(|p| p.ty == KTy::F64) && !params.iter().any(|p| p.ty == KTy::F32) { KTy::F64 } else { KTy::F32 };
     let mut lw = Lower {
         f,
@@ -362,6 +400,9 @@ pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
         errs: vec![],
         float,
         group,
+        group_y,
+        two: spec.y.is_some(),
+        grid_key: None,
         shared: vec![],
         cf: vec![],
         guards: vec![],
@@ -374,7 +415,11 @@ pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
         nest: 0,
     };
     let grid = match lw.expr(&spec.grid, Some(KTy::Int)) {
-        Ok((g, KTy::Int)) => Some(g),
+        Ok((g, KTy::Int)) => {
+            lw.grid_key = lw.uniform(&g);
+            Some(g)
+        }
+
         Ok((_, t)) => {
             lw.errs.push(KErr { code: "E_KERNEL_TYPE", span: spec.grid.span, msg: format!("the thread count of {} must be Int, got {}", f.name, t.name()), hint: None });
             None
@@ -383,6 +428,20 @@ pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
             lw.errs.push(e);
             None
         }
+    };
+    let grid_y = match &spec.y {
+        None => None,
+        Some((h, _)) => match lw.expr(h, Some(KTy::Int)) {
+            Ok((g, KTy::Int)) => Some(g),
+            Ok((_, t)) => {
+                lw.errs.push(KErr { code: "E_KERNEL_TYPE", span: h.span, msg: format!("the grid height of {} must be Int, got {}", f.name, t.name()), hint: None });
+                None
+            }
+            Err(e) => {
+                lw.errs.push(e);
+                None
+            }
+        },
     };
     let mut pres = Vec::new();
     for p in &f.pres {
@@ -412,7 +471,7 @@ pub fn lower(f: &FnDef) -> Result<Kernel, Vec<KErr>> {
         }
     }
     let grouped = lw.barriers > 0 || !lw.shared.is_empty();
-    Ok(Kernel { name: f.name.clone(), params: lw.params, grid: grid.unwrap(), group, pres, body, locals: lw.locals, writes, shared: lw.shared, grouped })
+    Ok(Kernel { name: f.name.clone(), params: lw.params, grid: grid.unwrap(), group, grid_y, group_y, pres, body, locals: lw.locals, writes, shared: lw.shared, grouped })
 }
 
 fn atomic_op(n: &str) -> Option<AOp> {
@@ -773,6 +832,9 @@ impl Lower<'_> {
                     return Ok((KExpr::Param(p), self.params[p].ty));
                 }
                 if let Some((_, k)) = INTRINSICS.iter().find(|(i, _)| i == n) {
+                    if self.two {
+                        return err("E_KERNEL", e.span, format!("{} has a 2D grid; use {n}.x and {n}.y", self.f.name));
+                    }
                     if !self.body && *k != KIntr::GroupSize {
                         return err("E_KERNEL", e.span, format!("'{n}' is only defined inside the kernel body"));
                     }
@@ -792,6 +854,22 @@ impl Lower<'_> {
                     return err("E_KERNEL", e.span, "len takes no arguments");
                 }
                 Ok((KExpr::Len(self.param(n).unwrap()), KTy::Int))
+            }
+            ExprKind::Field(r, m) if (m == "x" || m == "y") && matches!(&r.kind, ExprKind::Name(n) if INTRINSICS.iter().any(|(i, _)| i == n) && self.lookup(n).is_none()) => {
+                let ExprKind::Name(n) = &r.kind else { unreachable!() };
+                let k = INTRINSICS.iter().find(|(i, _)| i == n).unwrap().1;
+                if !self.two {
+                    return err("E_KERNEL", e.span, format!("{} has a 1D grid; use {n} (declare '@grid2(w, h, gw, gh)' for {n}.x and {n}.y)", self.f.name));
+                }
+                let k = if m == "y" { k.y() } else { k };
+                if !self.body {
+                    return match k {
+                        KIntr::GroupSize => Ok((KExpr::Lit(KTy::Int, self.group as u64), KTy::Int)),
+                        KIntr::GroupSizeY => Ok((KExpr::Lit(KTy::Int, self.group_y as u64), KTy::Int)),
+                        _ => err("E_KERNEL", e.span, format!("'{n}.{m}' is only defined inside the kernel body")),
+                    };
+                }
+                Ok((KExpr::Intr(k), KTy::Int))
             }
             ExprKind::Field(r, m) | ExprKind::Method { recv: r, name: m, .. } if m == "len" && matches!(&r.kind, ExprKind::Name(n) if self.shared_of(n).is_some()) => {
                 let ExprKind::Name(n) = &r.kind else { unreachable!() };
@@ -1058,6 +1136,8 @@ impl Lower<'_> {
             KExpr::Len(p) => format!("len{p}"),
             KExpr::Intr(KIntr::GroupSize) => "group_size".into(),
             KExpr::Intr(KIntr::GridSize) => "grid_size".into(),
+            KExpr::Intr(KIntr::GroupSizeY) => "group_size.y".into(),
+            KExpr::Intr(KIntr::GridSizeY) => "grid_size.y".into(),
             KExpr::Bin(op, _, a, b) => format!("({} {} {})", self.uniform(a)?, op.symbol(), self.uniform(b)?),
             KExpr::Neg(_, a) => format!("(-{})", self.uniform(a)?),
             KExpr::Cast(t, _, a) => format!("{}({})", t.name(), self.uniform(a)?),
@@ -1066,7 +1146,11 @@ impl Lower<'_> {
     }
 
     fn is_gid(&self, e: &KExpr) -> bool {
-        matches!(self.deref(e), KExpr::Intr(KIntr::Gid))
+        let e = self.deref(e);
+        if !self.two {
+            return matches!(e, KExpr::Intr(KIntr::Gid));
+        }
+        self.linear(e, KIntr::Gid, &|m| self.grid_key.is_some() && self.uniform(m) == self.grid_key)
     }
 
     fn shape(&self, e: &KExpr) -> Option<(bool, String)> {
@@ -1151,6 +1235,7 @@ impl Lower<'_> {
         match self.deref(e) {
             KExpr::Lit(KTy::Int, b) => Some(*b as i64),
             KExpr::Intr(KIntr::GroupSize) => Some(self.group as i64),
+            KExpr::Intr(KIntr::GroupSizeY) => Some(self.group_y as i64),
             KExpr::Bin(op, KTy::Int, a, b) => {
                 let (a, b) = (self.konst(a)?, self.konst(b)?);
                 match op {
@@ -1168,7 +1253,7 @@ impl Lower<'_> {
     fn guniform(&self, e: &KExpr) -> bool {
         match self.deref(e) {
             KExpr::Lit(..) | KExpr::Param(_) | KExpr::Len(_) => true,
-            KExpr::Intr(i) => !matches!(i, KIntr::Gid | KIntr::Lid),
+            KExpr::Intr(i) => !i.varies(),
             KExpr::Local(s) => match &self.defs[*s] {
                 Def::Loop(lo, hi) => self.guniform(lo) && self.guniform(hi),
                 Def::Value(x) => self.guniform(x),
@@ -1216,7 +1301,7 @@ impl Lower<'_> {
             KExpr::Lit(t, b) => format!("{}:{b}", t.name()),
             KExpr::Param(p) => format!("p{p}"),
             KExpr::Len(p) => format!("len{p}"),
-            KExpr::Intr(i) if !matches!(i, KIntr::Gid | KIntr::Lid) => format!("{i:?}"),
+            KExpr::Intr(i) if !i.varies() => format!("{i:?}"),
             KExpr::Local(s) => match &self.defs[*s] {
                 Def::Loop(lo, hi) if self.guniform(lo) && self.guniform(hi) => {
                     let v = ver.get(s).copied().unwrap_or(0);
@@ -1249,7 +1334,21 @@ impl Lower<'_> {
     }
 
     fn is_lid(&self, e: &KExpr) -> bool {
-        matches!(self.deref(e), KExpr::Intr(KIntr::Lid))
+        let e = self.deref(e);
+        if !self.two {
+            return matches!(e, KExpr::Intr(KIntr::Lid));
+        }
+        self.linear(e, KIntr::Lid, &|w| matches!(self.deref(w), KExpr::Lit(KTy::Int, g) if *g == self.group as u64))
+    }
+
+    fn linear(&self, e: &KExpr, x: KIntr, width: &dyn Fn(&KExpr) -> bool) -> bool {
+        let KExpr::Bin(BinOp::Add, KTy::Int, a, b) = self.deref(e) else { return false };
+        let is = |e: &KExpr, k: KIntr| matches!(self.deref(e), KExpr::Intr(i) if *i == k);
+        let row = |m: &KExpr| match self.deref(m) {
+            KExpr::Bin(BinOp::Mul, KTy::Int, p, q) => (is(p, x.y()) && width(q)) || (is(q, x.y()) && width(p)),
+            _ => false,
+        };
+        (row(a) && is(b, x)) || (row(b) && is(a, x))
     }
 
     fn stid(&self, e: &KExpr, side: char, ver: &HashMap<usize, u32>) -> Option<Lin> {
@@ -1276,7 +1375,7 @@ impl Lower<'_> {
     }
 
     fn span_of(&self, a: &SAcc, side: char) -> Option<(Lin, Lin)> {
-        let cnt = a.guards.iter().find_map(|g| self.guard_cnt(g, side, &a.ver)).unwrap_or((Default::default(), self.group as i128));
+        let cnt = a.guards.iter().find_map(|g| self.guard_cnt(g, side, &a.ver)).unwrap_or((Default::default(), (self.group * self.group_y) as i128));
         if let Some(o) = self.stid(&a.idx, side, &a.ver) {
             return Some((o, cnt));
         }

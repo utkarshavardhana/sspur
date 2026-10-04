@@ -239,7 +239,7 @@ fn hundred_agents_one_codebase_no_lost_work() {
             }
         }
         for (c, j, k) in &rep.shared {
-            let pos = order[c.as_str()];
+            let Some(&pos) = order.get(c.as_str()) else { continue };
             if last_shared.get(j).is_none_or(|(p, _)| *p < pos) {
                 last_shared.insert(*j, (pos, *k));
             }

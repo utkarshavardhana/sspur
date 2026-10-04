@@ -421,7 +421,7 @@ impl Store {
         let Some(head) = self.head_root() else { return Ok(Index::default()) };
         if let Some(c) = &head.commit {
             let anc = self.ancestors(std::slice::from_ref(c));
-            let mut ix = Index { heads: vec![c.clone()], root: head.hash.clone(), seq: anc.len() as u64, defs: BTreeMap::new() };
+            let mut ix = Index { heads: vec![c.clone()], root: head.hash.clone(), seq: anc.len() as u64, defs: BTreeMap::new(), dead: BTreeSet::new() };
             for id in crdt::topo(&self.commits_of(&anc), &anc.iter().cloned().collect()) {
                 ix.apply(&self.commit(&id).ok_or("missing commit")?);
             }
@@ -441,7 +441,7 @@ impl Store {
         }
         let c = Commit { id: String::new(), parents: vec![], agent: "import".into(), reason: "index existing codebase".into(), at: now(), writes }.seal();
         self.put_commit(&c).map_err(|e| e.to_string())?;
-        let mut ix = Index { heads: vec![c.id.clone()], root: head.hash.clone(), seq: 1, defs: BTreeMap::new() };
+        let mut ix = Index { heads: vec![c.id.clone()], root: head.hash.clone(), seq: 1, defs: BTreeMap::new(), dead: BTreeSet::new() };
         ix.apply(&c);
         let mut root = head.clone();
         root.ids = ids_of(&ix);
@@ -985,7 +985,6 @@ impl Store {
             Err(r) => r,
         };
         let (_, clashes) = crdt::view(&next);
-        if std::env::var_os("SSPUR_DEBUG").is_some() { for c in &clashes { for d in &c.dots { let cm = self.commit(crdt::dot_commit(d)).unwrap(); let i: usize = d.split(".").nth(1).unwrap().parse().unwrap(); eprintln!("DBG {} {} {} {:?} mine={}", c.path, d, cm.agent, cm.writes[i], mine.contains(&cm.id)); } } }
         let mut out = r;
         out.conflicts = clashes.iter().map(|c| self.clash_conflict(&ix, &next, c)).collect();
         if keep {

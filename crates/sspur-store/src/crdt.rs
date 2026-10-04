@@ -77,23 +77,34 @@ pub struct Index {
     #[serde(default)]
     pub seq: u64,
     pub defs: BTreeMap<String, Regs>,
+    #[serde(default)]
+    pub dead: BTreeSet<Dot>,
 }
 
 impl Index {
     pub fn apply(&mut self, c: &Commit) {
         for (i, w) in c.writes.iter().enumerate() {
-            let r = self.defs.entry(w.def.clone()).or_default();
             let dot = c.dot(i);
-            if r.name.iter().any(|x| x.0 == dot) || r.body.iter().any(|x| x.0 == dot) {
-                continue;
+            for (reg, on) in [("n", w.name.is_some()), ("b", w.body.is_some())] {
+                if on {
+                    self.dead.extend(w.sup.iter().map(|d| format!("{d}/{reg}")));
+                }
             }
-            if let Some(n) = &w.name {
+            let (dead_n, dead_b) = (self.dead.contains(&format!("{dot}/n")), self.dead.contains(&format!("{dot}/b")));
+            let r = self.defs.entry(w.def.clone()).or_default();
+            if w.name.is_some() {
                 r.name.retain(|(d, _)| !w.sup.contains(d));
+            }
+            if w.body.is_some() {
+                r.body.retain(|(d, _)| !w.sup.contains(d));
+            }
+            if let Some(n) = &w.name
+                && !dead_n && !r.name.iter().any(|x| x.0 == dot) {
                 r.name.push((c.dot(i), n.clone()));
                 r.name.sort_by(|a, b| a.0.cmp(&b.0));
             }
-            if let Some(b) = &w.body {
-                r.body.retain(|(d, _)| !w.sup.contains(d));
+            if let Some(b) = &w.body
+                && !dead_b && !r.body.iter().any(|x| x.0 == dot) {
                 r.body.push((c.dot(i), b.clone()));
                 r.body.sort_by(|a, b| a.0.cmp(&b.0));
             }

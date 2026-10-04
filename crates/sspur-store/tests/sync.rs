@@ -34,12 +34,15 @@ fn pull(to: &Store, from: &Store, pick: &str) -> bool {
     }
     let paths: Vec<String> = rep.result["conflicts"].as_array().unwrap().iter().map(|c| c["path"].as_str().unwrap().to_string()).collect();
     assert!(!paths.is_empty(), "a merge without conflicts failed: {}", rep.result);
-    for c in rep.result["conflicts"].as_array().unwrap().iter().filter(|c| c["path"] != "shared") { eprintln!("CONFLICT {c}"); }
+    assert!(paths.iter().all(|p| p == "shared"), "only the shared definition is ever written by two replicas: {paths:?}");
+    RESOLVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let ops: Vec<Json> = paths.iter().map(|p| json!({"op": "resolve", "path": p, "pick": pick})).collect();
     let r = to.apply(Tx { merge: true, ..Tx::new("resolver", ops) });
     assert!(r.ok, "{:?}", r.diags);
     true
 }
+
+static RESOLVED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 fn hub_name(s: &Store, hub_id: &str) -> String {
     s.head_root().unwrap().ids.iter().find(|(_, i)| i.id == hub_id).map(|(n, _)| n.clone()).unwrap()
@@ -75,9 +78,7 @@ fn random_run(seed: u64) -> usize {
             0..=3 => {
                 let j = rng.below(n as u64) as usize;
                 if j != i {
-                    let before = s.pending().len();
                     pull(s, &rs[j], if rng.below(2) == 0 { "ours" } else { "theirs" });
-                    conflicts += usize::from(before == 0 && s.index().unwrap().heads.len() == 1 && false);
                 }
             }
             4 if i == 0 => {
@@ -156,6 +157,7 @@ fn replicas_converge_under_random_op_and_sync_orders() {
     for seed in 1..=4 {
         random_run(seed);
     }
+    eprintln!("sync: 4 runs x 4 replicas x 120 random steps converged; {} conflicting pulls resolved", RESOLVED.load(std::sync::atomic::Ordering::Relaxed));
 }
 
 #[test]

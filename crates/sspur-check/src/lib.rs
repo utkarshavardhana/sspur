@@ -52,6 +52,7 @@ pub struct CheckOutput {
     pub stores: BTreeMap<String, (Type, Type)>,
     pub json_types: HashMap<(u32, u32), Type>,
     pub kernels: BTreeMap<String, kernel::Kernel>,
+    pub body_diags: BTreeMap<String, Vec<Diag>>,
 }
 
 pub type ExprKey = (u32, u32, u8);
@@ -231,6 +232,11 @@ const BUILTIN_TYPES: &[(&str, usize)] = &[
 ];
 
 pub fn check(m: &Module) -> CheckOutput {
+    check_skipping(m, &HashSet::new())
+}
+
+/// Skips the bodies of the fns and tests in `skip`: the output only serves validation.
+pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
     let mut c = Checker {
         types: HashMap::new(),
         ctors: HashMap::new(),
@@ -297,16 +303,24 @@ pub fn check(m: &Module) -> CheckOutput {
     c.collect(m);
     c.collect_refined(m);
     let mut sigs = BTreeMap::new();
+    let mut body_diags = BTreeMap::new();
     for d in &m.defs {
+        let before = c.diags.len();
         match d {
             Def::Fn(f) => {
-                c.check_fn(f);
+                if !skip.contains(&f.name) {
+                    c.check_fn(f);
+                }
                 sigs.insert(f.name.clone(), printer::print_sig(f));
             }
+            Def::Test(t) if skip.contains(&t.name) => {}
             Def::Test(t) => c.check_test(t),
             Def::Type(t) => c.check_type_refines(t),
             Def::Effect(_) | Def::Store(_) => {}
             Def::Svc(sv) => c.check_svc(sv, m),
+        }
+        if matches!(d, Def::Fn(_) | Def::Test(_)) && !skip.contains(d.name()) {
+            body_diags.insert(d.name().to_string(), c.diags[before..].to_vec());
         }
         for (k, t) in std::mem::take(&mut c.pending_types) {
             let r = c.resolve(&t);
@@ -335,9 +349,14 @@ pub fn check(m: &Module) -> CheckOutput {
     let json_types = c.finish_json(m);
     let own = own::analyze(m, &c.record_types, &c.user_methods, &c.expr_types);
     for d in own.diags {
-        c.diags.push(d);
+        if !d.def.as_ref().is_some_and(|n| skip.contains(n)) {
+            c.diags.push(d);
+        }
     }
     for (fname, uses) in &own.drop_effects {
+        if skip.contains(fname) {
+            continue;
+        }
         let Some(Def::Fn(f)) = m.defs.iter().find(|d| d.name() == fname) else { continue };
         let mut declared: BTreeSet<String> = f.effects.iter().map(printer::effect).collect();
         if f.trusted.is_some() {
@@ -369,7 +388,7 @@ pub fn check(m: &Module) -> CheckOutput {
         let found = bare::check(m, &tables);
         c.diags.extend(found);
     }
-    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info, stores: c.stores, json_types, kernels: c.kernels }
+    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info, stores: c.stores, json_types, kernels: c.kernels, body_diags }
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {

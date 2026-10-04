@@ -191,7 +191,7 @@ fn init(file: Option<&String>, json: bool) -> ExitCode {
     };
     let ops: Vec<Json> = module.defs.iter().map(|d| json!({"op": "add", "path": d.name(), "src": sspur_syntax::printer::print_def(d)})).collect();
     let n = ops.len();
-    let r = store.apply(Tx { base: None, agent: Some("import".into()), reason: Some(format!("import {path}")), gate: None, ops });
+    let r = store.apply(Tx { base: None, agent: Some("import".into()), reason: Some(format!("import {path}")), gate: None, merge: false, ops });
     if json {
         println!("{}", serde_json::to_string(&r).unwrap());
     } else if r.ok {

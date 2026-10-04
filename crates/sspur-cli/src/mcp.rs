@@ -50,6 +50,7 @@ fn call(store: &Store, name: &str, a: &Json) -> (String, bool) {
             agent: Some(a.get("agent").and_then(Json::as_str).unwrap_or("mcp").to_string()),
             reason: a.get("reason").and_then(Json::as_str).map(String::from),
             gate: a.get("gate").and_then(Json::as_str).map(String::from),
+            merge: a.get("merge").and_then(Json::as_bool).unwrap_or(false),
             ops: a.get("ops").and_then(Json::as_array).cloned().unwrap_or_default(),
         };
         let r = store.apply(tx);

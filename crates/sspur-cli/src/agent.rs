@@ -55,6 +55,16 @@ fn tx_text_for(r: &TxResult, named: Option<&BTreeSet<String>>) -> String {
         let mut lines = vec!["rejected, nothing changed".to_string()];
         let errors: Vec<Diag> = r.diags.iter().filter(|d| d.is_error()).cloned().collect();
         lines.extend(diag_lines(src, &errors, None));
+        for c in &r.conflicts {
+            if let Some(t) = &c.theirs {
+                lines.push(format!("theirs {}:", c.theirs_name.as_deref().unwrap_or(&c.path)));
+                lines.extend(t.lines().map(|l| format!("  {l}")));
+            }
+        }
+        if !r.conflicts.is_empty()
+            && let Some(b) = r.rebase.as_ref().and_then(|b| b["base"].as_str()) {
+                lines.push(format!("HEAD is now {b}"));
+            }
         return lines.join("\n");
     }
     let shown: Vec<&Change> = r.changes.iter().filter(|c| named.is_none_or(|n| c.old.is_none() || c.new.is_none() || c.renamed_from.is_some() || n.contains(&c.path))).collect();
@@ -125,7 +135,7 @@ pub fn edit_ops(store: &Store, input: &str) -> Result<Vec<Json>, String> {
 
 pub fn run_edit(store: &Store, ops: Vec<Json>, agent: &str, test: Option<&dyn Fn(&sspur_store::Loaded) -> Interp>) -> (String, bool) {
     let named: BTreeSet<String> = ops.iter().flat_map(|o| ["path", "target", "to"].map(|k| o.get(k).and_then(Json::as_str).map(String::from))).flatten().collect();
-    let r = store.apply(Tx { base: None, agent: Some(agent.into()), reason: None, gate: None, ops });
+    let r = store.apply(Tx { base: None, agent: Some(agent.into()), reason: None, gate: None, merge: false, ops });
     let mut text = tx_text_for(&r, Some(&named));
     if !r.ok {
         return (text, false);

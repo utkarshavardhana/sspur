@@ -428,6 +428,10 @@ impl Cx<'_> {
         let v = |i: usize| vals[i].clone();
         let c = self.cty(t)?;
         let res = |ok: &str, err: &str| format!("{c} r_; memset(&r_, 0, sizeof r_); if ({ok}) r_.ok = 1; else r_.e = {err}; r_; ");
+        if n == "gpu_sync" {
+            self.cty(&Type::Con("#DevBuf".into(), vec![]))?;
+            return Ok(Some("({ ss_q_sync(st); 0LL; })".into()));
+        }
         if n.starts_with("dev_") {
             return self.dev_new(n, &vals[0], t).map(Some);
         }

@@ -87,15 +87,18 @@ struct Run<'a> {
     n: i64,
 }
 
-pub fn run(f: &FnDef, k: &Kernel, args: &mut [Arg]) -> R<()> {
+pub fn prepare(f: &FnDef, k: &Kernel, args: &mut [Arg]) -> R<i64> {
     let mut r = Run { k, args, locals: vec![KV::I(0); k.locals.len()], gid: 0, n: 0 };
     for (i, p) in k.pres.iter().enumerate() {
         if !r.expr(p)?.b() {
             return trap(format!("contract violated: pre {} in {}", printer::expr(&f.pres[i], 0), f.name));
         }
     }
-    let n = r.expr(&k.grid)?.i();
-    r.n = n.max(0);
+    Ok(r.expr(&k.grid)?.i())
+}
+
+pub fn run(k: &Kernel, args: &mut [Arg], n: i64) -> R<()> {
+    let mut r = Run { k, args, locals: vec![KV::I(0); k.locals.len()], gid: 0, n: n.max(0) };
     for gid in 0..n {
         r.gid = gid;
         r.block(&k.body)?;
@@ -313,6 +316,27 @@ pub struct DevCell {
 
 thread_local! {
     static DEV_IDS: Cell<u64> = const { Cell::new(0) };
+    static PENDING: RefCell<Option<crate::Ctrl>> = const { RefCell::new(None) };
+}
+
+pub fn pending() -> bool {
+    PENDING.with(|p| p.borrow().is_some())
+}
+
+pub fn defer(c: crate::Ctrl) {
+    PENDING.with(|p| {
+        let mut p = p.borrow_mut();
+        if p.is_none() {
+            *p = Some(c);
+        }
+    });
+}
+
+pub fn sync() -> R<()> {
+    match PENDING.with(|p| p.borrow_mut().take()) {
+        Some(c) => Err(c),
+        None => Ok(()),
+    }
 }
 
 pub fn dev_new(name: &str, xs: &Value) -> R<Value> {
@@ -338,7 +362,7 @@ pub fn dev_new(name: &str, xs: &Value) -> R<Value> {
 pub fn dev_method(name: &str, d: &DevCell, a: &[Value]) -> R<Value> {
     match (name, a) {
         ("len", []) => Ok(Value::Int(d.data.borrow().len() as i64)),
-        ("to_list", []) => Ok(Value::list(d.data.borrow().iter().map(|x| from_kv(*x)).collect())),
+        ("to_list", []) => sync().map(|_| Value::list(d.data.borrow().iter().map(|x| from_kv(*x)).collect())),
         _ => trap(format!("no method '{name}' on DevBuf")),
     }
 }

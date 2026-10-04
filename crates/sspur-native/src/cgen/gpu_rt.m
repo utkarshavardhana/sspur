@@ -152,6 +152,94 @@ int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg
     pthread_mutex_unlock(&g_mu);
     return r;
 }
+#define SS_QMAX 256
+static id<MTLCommandBuffer> g_cb;
+static id<MTLComputeCommandEncoder> g_en;
+static NSMutableArray* g_cbs;
+static int g_inflight;
+static id<MTLBuffer> g_flags;
+static id<MTLBuffer> g_masks[SS_QMAX];
+static int g_mdirty[SS_QMAX];
+static void close_locked(void) {
+    if (g_en) { [g_en endEncoding]; g_en = nil; }
+    if (g_cb) { [g_cb commit]; [g_cbs addObject:g_cb]; g_cb = nil; }
+    g_inflight = 0;
+}
+int ss_gpu_enqueue(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t opts, int32_t slot) {
+    pthread_mutex_lock(&g_mu);
+    int r = 2;
+    int64_t n = nx * ny;
+    if (!ready_locked() || slot < 0 || slot >= SS_QMAX || nx <= 0 || ny <= 0 || n > 0x7fffffff) goto out;
+    @autoreleasepool {
+        id<MTLComputePipelineState> ps = pipe_for(src, entry);
+        if (!ps) goto out;
+        if ((opts & 2) && (int64_t)ps.maxTotalThreadsPerThreadgroup < gx * gy) goto out;
+        if (!g_flags) g_flags = [g_dev newBufferWithLength:SS_QMAX * 4 options:MTLResourceStorageModeShared];
+        if (!g_cbs) g_cbs = [NSMutableArray new];
+        if (!g_flags) goto out;
+        NSUInteger words = (NSUInteger)((n + 31) / 32);
+        if (opts & 1) {
+            id<MTLBuffer> m = g_masks[slot];
+            if (!m || m.length < words * 4) {
+                m = [g_dev newBufferWithLength:words * 4 + 4096 options:MTLResourceStorageModeShared];
+                if (!m) goto out;
+                g_masks[slot] = m;
+                g_mdirty[slot] = 1;
+            }
+            if (g_mdirty[slot]) { memset([m contents], 0, m.length); g_mdirty[slot] = 0; }
+        }
+        ((uint32_t*)[g_flags contents])[slot] = 0;
+        if (!g_cb) { g_cb = [g_queue commandBuffer]; if (!g_cb) goto out; }
+        if (!g_en) { g_en = [g_cb computeCommandEncoder]; if (!g_en) goto out; }
+        [g_en setComputePipelineState:ps];
+        for (int32_t i = 0; i < nargs; i++) {
+            const SsGpuArg* a = &args[i];
+            if (a->kind == 0) [g_en setBytes:a->ptr length:(NSUInteger)a->bytes atIndex:(NSUInteger)i];
+            else [g_en setBuffer:(__bridge id<MTLBuffer>)a->dev offset:0 atIndex:(NSUInteger)i];
+        }
+        [g_en setBuffer:g_flags offset:(NSUInteger)slot * 4 atIndex:(NSUInteger)nargs];
+        if (opts & 1) [g_en setBuffer:g_masks[slot] offset:0 atIndex:(NSUInteger)nargs + 1];
+        NSUInteger tx = (NSUInteger)gx, ty = (NSUInteger)gy;
+        if (!(opts & 2)) {
+            NSUInteger lim = ps.maxTotalThreadsPerThreadgroup;
+            while (tx * ty > lim) { if (ty > 1) ty = (ty + 1) / 2; else tx = (tx + 1) / 2; }
+            if ((int64_t)tx > nx) tx = (NSUInteger)nx;
+            if ((int64_t)ty > ny) ty = (NSUInteger)ny;
+        }
+        [g_en dispatchThreads:MTLSizeMake((NSUInteger)nx, (NSUInteger)ny, 1) threadsPerThreadgroup:MTLSizeMake(tx, ty, 1)];
+        if (++g_inflight >= 64) close_locked();
+        r = 0;
+    }
+out:
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+int ss_gpu_wait(void) {
+    pthread_mutex_lock(&g_mu);
+    int r = 0;
+    @autoreleasepool {
+        close_locked();
+        for (id<MTLCommandBuffer> cb in g_cbs) {
+            [cb waitUntilCompleted];
+            if (cb.status != MTLCommandBufferStatusCompleted) {
+                if (trace_on()) fprintf(stderr, "gpu: launch failed: %s\n", cb.error ? [[cb.error description] UTF8String] : "unknown error");
+                r = 3;
+            }
+        }
+        [g_cbs removeAllObjects];
+    }
+    pthread_mutex_unlock(&g_mu);
+    return r;
+}
+uint32_t ss_gpu_flag(int32_t slot) {
+    if (!g_flags || slot < 0 || slot >= SS_QMAX) return 1;
+    return ((uint32_t*)[g_flags contents])[slot];
+}
+const uint32_t* ss_gpu_mask(int32_t slot) {
+    if (slot < 0 || slot >= SS_QMAX || !g_masks[slot]) return 0;
+    g_mdirty[slot] = 1;
+    return (const uint32_t*)[g_masks[slot] contents];
+}
 void* ss_gpu_alloc(int64_t bytes, void** host) {
     if (!ss_gpu_ready()) return 0;
     id<MTLBuffer> b = [g_dev newBufferWithLength:(NSUInteger)(bytes > 16 ? bytes : 16) options:MTLResourceStorageModeShared];
@@ -164,6 +252,10 @@ void ss_gpu_free(void* dev) {
 }
 #else
 int ss_gpu_ready(void) { return 0; }
+int ss_gpu_enqueue(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t opts, int32_t slot) { (void)src; (void)entry; (void)nargs; (void)args; (void)nx; (void)ny; (void)gx; (void)gy; (void)opts; (void)slot; return 2; }
+int ss_gpu_wait(void) { return 0; }
+uint32_t ss_gpu_flag(int32_t slot) { (void)slot; return 1; }
+const uint32_t* ss_gpu_mask(int32_t slot) { (void)slot; return 0; }
 int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask_out) { (void)src; (void)entry; (void)nargs; (void)args; (void)n; (void)group; (void)masked; (void)mask_out; return 2; }
 void* ss_gpu_alloc(int64_t bytes, void** host) { (void)bytes; (void)host; return 0; }
 void ss_gpu_free(void* dev) { (void)dev; }

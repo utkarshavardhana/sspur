@@ -1,0 +1,84 @@
+kernel fn scale(y: &mut [F32], s: F32) @grid(y.len, 32)
+= y[gid] := y[gid] * s
+
+kernel fn addto(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := y[gid] + x[gid]
+
+kernel fn twice(y: &mut [F64]) @grid(y.len, 64)
+= y[gid] := y[gid] * 2.0
+
+kernel fn pick(src: &[I32], m: &mut [I32], k: Int) @grid(m.len, 64)
+= m[gid] := src[gid + k]
+
+kernel fn inc(m: &mut [I32]) @grid(m.len, 64)
+= m[gid] := m[gid] + 1
+
+fn chain() -> List[F64] ! dev
+= do
+  y = dev_f32((0..200).map(i => if i % 9 == 0 then 1.0e-30 else i.to_f64))
+  x = dev_f32((0..200).map(i => 1.0))
+  scale(&mut y, 1.0e-10)
+  addto(&y, &mut x)
+  scale(&mut x, 2.0)
+  scale(&mut y, 4.0)
+  x.to_list + y.to_list
+
+fn mixed() -> List[F64] ! dev
+= do
+  a = dev_f64((0..50).map(i => i.to_f64))
+  b = dev_f32((0..50).map(i => 0.5))
+  scale(&mut b, 3.0)
+  twice(&mut a)
+  c = dev_f32(b.to_list)
+  addto(&b, &mut c)
+  twice(&mut a)
+  scale(&mut c, 0.25)
+  a.to_list + c.to_list
+
+fn many(n: Int) -> List[Int] ! dev
+= do
+  m = dev_i32((0..n).map(i => i))
+  for r in 0..300
+    inc(&mut m)
+  m.to_list
+
+fn deferred() -> List[Int] ! dev
+= do
+  src = dev_i32([1, 2, 3])
+  m = dev_i32([0, 0, 0])
+  pick(&src, &mut m, 0)
+  pick(&src, &mut m, 1)
+  inc(&mut m)
+  m.to_list
+
+fn late_pre() -> Int ! dev
+= do
+  src = dev_i32([1, 2, 3])
+  m = dev_i32([0, 0, 0])
+  alias = src
+  pick(&src, &mut m, 2)
+  pick(&src, &mut alias, 0)
+  m.len
+
+fn synced() -> Int ! dev
+= do
+  src = dev_i32([1, 2, 3])
+  m = dev_i32([0, 0, 0])
+  pick(&src, &mut m, 0)
+  gpu_sync()
+  inc(&mut m)
+  gpu_sync()
+  m.to_list.sum
+
+test chain_ok = chain()[0] == 2.0
+test many_ok = many(100) == (0..100).map(i => i + 300)
+test deferred_trap = deferred().len == 3
+test late_pre_trap = late_pre() == 3
+test synced_ok = synced() == 9
+
+fn main() ! dev, log
+= do
+  log("{chain().sum}")
+  log("{mixed()}")
+  log("{many(1000).sum}")
+  log("{synced()}")

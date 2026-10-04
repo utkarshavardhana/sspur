@@ -234,7 +234,7 @@ impl Interp {
         if !main.params.is_empty() {
             return Err("'main' must take no parameters".into());
         }
-        match self.call_fn(&main, vec![]) {
+        match self.call_fn(&main, vec![]).and_then(|_| kernel::sync()) {
             Ok(_) => Ok(()),
             Err(c) => Err(describe(c)),
         }
@@ -254,7 +254,7 @@ impl Interp {
         for (name, body) in &cases {
             let t = TestDef { name: name.clone(), body: body.clone(), span: Span::default() };
             *self.output.borrow_mut() = Some(vec![]);
-            let r = match self.eval(&t.body, &Env::child(&self.globals)) {
+            let r = match self.eval(&t.body, &Env::child(&self.globals)).and_then(|v| kernel::sync().map(|_| v)) {
                 Ok(Value::Bool(true)) => Ok(()),
                 Ok(Value::Bool(false)) => Err("evaluated to false".to_string()),
                 Ok(v) => Err(format!("expected Bool, got {v}")),
@@ -471,6 +471,42 @@ impl Interp {
             }
             vals.push(v);
         }
+        let all_dev = vals.iter().zip(&k.params).all(|(v, p)| p.slice.is_none() || matches!(v, Value::Dev(_)));
+        if !all_dev {
+            kernel::sync()?;
+        }
+        let (mut kargs, devs, n) = match self.launch_args(f, &k, &vals) {
+            Ok(x) => x,
+            Err(e) => {
+                kernel::sync()?;
+                return Err(e);
+            }
+        };
+        if all_dev && kernel::pending() {
+            return Ok(Value::Unit);
+        }
+        if let Err(e) = kernel::run(&k, &mut kargs, n) {
+            if all_dev {
+                kernel::defer(e);
+                return Ok(Value::Unit);
+            }
+            return Err(e);
+        }
+        for (i, d) in devs {
+            if let kernel::Arg::Slice(xs) = &mut kargs[i] {
+                *d.data.borrow_mut() = std::mem::take(xs);
+            }
+        }
+        for (i, c) in cells {
+            if let kernel::Arg::Slice(xs) = &kargs[i] {
+                *c.borrow_mut() = Value::list(xs.iter().map(|x| kernel::from_kv(*x)).collect());
+            }
+        }
+        Ok(Value::Unit)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn launch_args(&self, f: &FnDef, k: &sspur_check::kernel::Kernel, vals: &[Value]) -> R<(Vec<kernel::Arg>, Vec<(usize, Rc<kernel::DevCell>)>, i64)> {
         for (i, (v, p)) in vals.iter().zip(&k.params).enumerate() {
             for (w, q) in vals.iter().zip(&k.params).take(i) {
                 if let (Value::Dev(a), Value::Dev(b)) = (v, w)
@@ -502,18 +538,8 @@ impl Interp {
                 (Some(_), v) => return trap(format!("dev: {} expects a list, got {v}", p.name)),
             });
         }
-        kernel::run(f, &k, &mut kargs)?;
-        for (i, d) in devs {
-            if let kernel::Arg::Slice(xs) = &mut kargs[i] {
-                *d.data.borrow_mut() = std::mem::take(xs);
-            }
-        }
-        for (i, c) in cells {
-            if let kernel::Arg::Slice(xs) = &kargs[i] {
-                *c.borrow_mut() = Value::list(xs.iter().map(|x| kernel::from_kv(*x)).collect());
-            }
-        }
-        Ok(Value::Unit)
+        let n = kernel::prepare(f, k, &mut kargs)?;
+        Ok((kargs, devs, n))
     }
 
     fn call_fn_in(&self, f: &FnDef, args: Vec<Value>, parent: &Rc<Env>) -> R {

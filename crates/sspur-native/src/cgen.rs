@@ -391,6 +391,7 @@ static inline __attribute__((always_inline)) void* gc_alloc(size_t n, int atomic
     return gc_alloc_slow(n ? n : 1, atomic);
 }
 static void (*ss_reset_hook)(void);
+static void (*ss_sync_hook)(Status*);
 static void gc_reset(void) {
     if (ss_reset_hook) ss_reset_hook();
     if (gc_stats) fprintf(stderr, "sspur gc: %lld collections, %zu active pages, high water %zu MB\n", (long long)gc_collections, gc_active_n, (gc_next << GC_SHIFT) >> 20);
@@ -2030,7 +2031,7 @@ impl<'a> Cx<'a> {
         if scalar_abi {
             let sig: String = (0..params.len()).map(|i| format!("int64_t a{i}, ")).collect();
             let rr = self.rr(ret)?;
-            writeln!(s, "int64_t sspur_entry_{name}({sig}Status* st) {{ jmp_buf jb; jmp_buf* saved = sspur_jb; gc_enter(__builtin_frame_address(0), st, sizeof(Status)); sspur_jb = &jb; if (setjmp(jb)) {{ sspur_jb = saved; gc_leave(); return 0; }} {rr} r = f_{name}({args}st, -st->limit); sspur_jb = saved; gc_leave(); return r.v; }}").unwrap();
+            writeln!(s, "int64_t sspur_entry_{name}({sig}Status* st) {{ jmp_buf jb; jmp_buf* saved = sspur_jb; gc_enter(__builtin_frame_address(0), st, sizeof(Status)); sspur_jb = &jb; if (setjmp(jb)) {{ sspur_jb = saved; gc_leave(); return 0; }} {rr} r = f_{name}({args}st, -st->limit); if (ss_sync_hook && gc_depth == 1) ss_sync_hook(st); sspur_jb = saved; gc_leave(); return r.v; }}").unwrap();
         }
         let mut decs = String::new();
         for (i, t) in params.iter().enumerate() {
@@ -2040,7 +2041,7 @@ impl<'a> Cx<'a> {
         }
         let enc = self.helper_enc(ret)?;
         let rr = self.rr(ret)?;
-        writeln!(s, "int64_t sspur_wentry_{name}(const int64_t* in, Status* st, int64_t** out, int64_t* out_len) {{ jmp_buf jb; jmp_buf* saved = sspur_jb; gc_enter(__builtin_frame_address(0), st, sizeof(Status)); sspur_jb = &jb; if (setjmp(jb)) {{ sspur_jb = saved; gc_leave(); return st->code; }} const int64_t* p = in; {decs}{rr} r = f_{name}({args}st, -st->limit); sspur_jb = saved; if (r.code) {{ if (r.code == {T_RAISE}) enc_err(st); gc_leave(); return r.code; }} Buf b = {{0}}; {enc}(&b, r.v); *out = b.data; *out_len = b.len; gc_leave(); return 0; }}").unwrap();
+        writeln!(s, "int64_t sspur_wentry_{name}(const int64_t* in, Status* st, int64_t** out, int64_t* out_len) {{ jmp_buf jb; jmp_buf* saved = sspur_jb; gc_enter(__builtin_frame_address(0), st, sizeof(Status)); sspur_jb = &jb; if (setjmp(jb)) {{ sspur_jb = saved; gc_leave(); return st->code; }} const int64_t* p = in; {decs}{rr} r = f_{name}({args}st, -st->limit); if (ss_sync_hook && gc_depth == 1 && !r.code) ss_sync_hook(st); sspur_jb = saved; if (r.code) {{ if (r.code == {T_RAISE}) enc_err(st); gc_leave(); return r.code; }} Buf b = {{0}}; {enc}(&b, r.v); *out = b.data; *out_len = b.len; gc_leave(); return 0; }}").unwrap();
         Ok(s)
     }
 

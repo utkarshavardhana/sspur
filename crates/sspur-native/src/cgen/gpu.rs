@@ -16,6 +16,7 @@ pub(super) struct Em<'a> {
     ind: usize,
     mask: bool,
     narrow: bool,
+    sync: bool,
 }
 
 const FLT_TINY: &str = "2.3509887e-38f";
@@ -70,7 +71,7 @@ pub fn elem_c(t: KTy, tgt: Tgt) -> &'static str {
 
 impl<'a> Em<'a> {
     pub(super) fn new(k: &'a Kernel, t: Tgt, ind: usize) -> Self {
-        Em { k, t, out: String::new(), n: 0, ind, mask: false, narrow: false }
+        Em { k, t, out: String::new(), n: 0, ind, mask: false, narrow: false, sync: false }
     }
 
     pub(super) fn take(&mut self) -> String {
@@ -112,6 +113,7 @@ impl<'a> Em<'a> {
 
     fn fail(&mut self, cond: &str, code: i64, clause: &str, value: &str) {
         match self.t {
+            Tgt::C if self.sync => self.line(&format!("if (UNLIKELY({cond})) {{ ss_q_sync(st); TRAPV({code}, {clause}, {value}); }}")),
             Tgt::C => self.line(&format!("if (UNLIKELY({cond})) TRAPV({code}, {clause}, {value});")),
             _ => self.line(&format!("bad |= ({cond});")),
         }
@@ -850,7 +852,15 @@ int ss_gpu_ready(void);
 int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask);
 void* ss_gpu_alloc(int64_t bytes, void** host);
 void ss_gpu_free(void* dev);
+int ss_gpu_enqueue(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t opts, int32_t slot);
+int ss_gpu_wait(void);
+uint32_t ss_gpu_flag(int32_t slot);
+const uint32_t* ss_gpu_mask(int32_t slot);
 #else
+static int ss_gpu_enqueue(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t opts, int32_t slot) { (void)src; (void)entry; (void)nargs; (void)args; (void)nx; (void)ny; (void)gx; (void)gy; (void)opts; (void)slot; return 2; }
+static int ss_gpu_wait(void) { return 0; }
+static uint32_t ss_gpu_flag(int32_t slot) { (void)slot; return 1; }
+static const uint32_t* ss_gpu_mask(int32_t slot) { (void)slot; return 0; }
 static int ss_gpu_ready(void) { return 0; }
 static int ss_gpu_run(const char* src, const char* entry, int32_t nargs, const SsGpuArg* args, int64_t n, int64_t group, int32_t masked, const uint32_t** mask) { (void)src; (void)entry; (void)nargs; (void)args; (void)n; (void)group; (void)masked; (void)mask; return 2; }
 static void* ss_gpu_alloc(int64_t bytes, void** host) { (void)bytes; (void)host; return 0; }
@@ -877,10 +887,93 @@ static inline __int128 iv_div_hi(__int128 al, __int128 ah, __int128 bl, __int128
 static inline __int128 iv_rem_m(__int128 al, __int128 ah, __int128 bl, __int128 bh) { __int128 m = iv_mag(bl, bh) - 1, a = iv_mag(al, ah); if (m < 0) m = 0; return m < a ? m : a; }
 static inline __int128 iv_rem_lo(__int128 al, __int128 ah, __int128 bl, __int128 bh) { return al >= 0 ? 0 : -iv_rem_m(al, ah, bl, bh); }
 static inline __int128 iv_rem_hi(__int128 al, __int128 ah, __int128 bl, __int128 bh) { return ah <= 0 ? 0 : iv_rem_m(al, ah, bl, bh); }
-struct SsDev { int64_t len, es; void* host; void* dev; struct SsDev* next; };
+struct SsDev { int64_t len, es; void* host; void* dev; struct SsDev* next; void* bk; uint64_t qb; int64_t qf; };
 static struct SsDev* ss_devs;
+#define SS_QMAX 256
+typedef struct SsLaunch { void (*cpu)(void*, const uint32_t*, Status*); void* rec; const char* name; const char* why; int64_t n; int32_t gpu, masked, narrow, nw, nr; struct SsDev* w[16]; struct SsDev* r[16]; } SsLaunch;
+static SsLaunch ss_q[SS_QMAX];
+static int ss_qn, ss_q_tail, ss_q_gpus;
+static uint64_t ss_qbatch = 1;
+static pthread_mutex_t ss_q_mu = PTHREAD_MUTEX_INITIALIZER;
+static void ss_q_drop(void) {
+    for (int i = 0; i < ss_qn; i++) free(ss_q[i].rec);
+    ss_qn = 0; ss_q_tail = 0; ss_q_gpus = 0; ss_qbatch++;
+}
+static void ss_q_cpu(SsLaunch* L, const uint32_t* m, Status* st) {
+    jmp_buf jb; jmp_buf* saved = sspur_jb; sspur_jb = &jb;
+    if (setjmp(jb)) { sspur_jb = saved; ss_q_drop(); pthread_mutex_unlock(&ss_q_mu); longjmp(*saved, 1); }
+    L->cpu(L->rec, m, st);
+    sspur_jb = saved;
+}
+static int ss_q_has(struct SsDev* const* xs, int n, const struct SsDev* d) {
+    for (int i = 0; i < n; i++) if (xs[i] == d) return 1;
+    return 0;
+}
+static int ss_q_alone(int i) {
+    SsLaunch* L = &ss_q[i];
+    for (int j = i + 1; j < ss_qn; j++) {
+        SsLaunch* M = &ss_q[j];
+        for (int k = 0; k < M->nw; k++) if (ss_q_has(L->w, L->nw, M->w[k]) || ss_q_has(L->r, L->nr, M->w[k])) return 0;
+        for (int k = 0; k < M->nr; k++) if (ss_q_has(L->w, L->nw, M->r[k])) return 0;
+    }
+    return 1;
+}
+static void ss_q_sync_locked(Status* st) {
+    int n = ss_qn;
+    if (!n) return;
+    int ok = !ss_q_gpus || ss_gpu_wait() == 0;
+    for (int i = 0; i < n; i++) {
+        SsLaunch* L = &ss_q[i];
+        if (!L->gpu) { ss_trace(L->name, L->why, L->n); ss_q_cpu(L, 0, st); continue; }
+        if (ok && !ss_gpu_flag(i)) { ss_trace(L->name, L->narrow ? "metal, 32-bit indices" : "metal", L->n); continue; }
+        if (ok && L->masked && ss_q_alone(i)) { ss_trace(L->name, "cpu rerun of flagged threads", L->n); ss_q_cpu(L, ss_gpu_mask(i), st); continue; }
+        int s = i;
+        for (;;) {
+            int s2 = s;
+            for (int j = s; j < n; j++) for (int k = 0; k < ss_q[j].nw; k++) if (ss_q[j].w[k]->qf < s2) s2 = (int)ss_q[j].w[k]->qf;
+            if (s2 == s) break;
+            s = s2;
+        }
+        for (int j = s; j < n; j++) for (int k = 0; k < ss_q[j].nw; k++) { struct SsDev* d = ss_q[j].w[k]; if (d->len) memcpy(d->host, d->bk, (size_t)(d->len * d->es)); }
+        for (int j = s; j < n; j++) {
+            ss_trace(ss_q[j].name, !ss_q[j].gpu ? ss_q[j].why : !ok ? "cpu rerun (GPU failure)" : j < i ? "cpu rerun (before a flagged launch)" : j > i ? "cpu rerun (after a flagged launch)" : "cpu rerun (trap or subnormal)", ss_q[j].n);
+            ss_q_cpu(&ss_q[j], 0, st);
+        }
+        break;
+    }
+    ss_q_drop();
+}
+static void ss_q_sync(Status* st) {
+    if (!ss_qn) return;
+    pthread_mutex_lock(&ss_q_mu);
+    ss_q_sync_locked(st);
+    pthread_mutex_unlock(&ss_q_mu);
+}
+static void ss_q_push(Status* st, SsLaunch* L, const char* src, const char* entry, int32_t nargs, const SsGpuArg* g, int64_t nx, int64_t ny, int64_t gx, int64_t gy, int32_t opts) {
+    pthread_mutex_lock(&ss_q_mu);
+    ss_sync_hook = ss_q_sync;
+    if (ss_qn == SS_QMAX || (entry && ss_q_tail)) ss_q_sync_locked(st);
+    int i = ss_qn;
+    for (int k = 0; k < L->nw; k++) {
+        struct SsDev* d = L->w[k];
+        if (d->qb == ss_qbatch) continue;
+        d->qb = ss_qbatch; d->qf = i;
+        if (!entry && !ss_q_gpus) continue;
+        if (!d->bk) d->bk = malloc((size_t)(d->len ? d->len : 1) * (size_t)d->es);
+        if (d->len) memcpy(d->bk, d->host, (size_t)(d->len * d->es));
+    }
+    L->gpu = entry && ss_gpu_enqueue(src, entry, nargs, g, nx, ny, gx, gy, opts, i) == 0;
+    if (L->gpu) ss_q_gpus++; else ss_q_tail = 1;
+    ss_q[i] = *L;
+    ss_qn++;
+    pthread_mutex_unlock(&ss_q_mu);
+}
 static void ss_dev_reset(void) {
-    while (ss_devs) { struct SsDev* d = ss_devs; ss_devs = d->next; if (d->dev) ss_gpu_free(d->dev); else free(d->host); free(d); }
+    pthread_mutex_lock(&ss_q_mu);
+    if (ss_q_gpus) ss_gpu_wait();
+    ss_q_drop();
+    pthread_mutex_unlock(&ss_q_mu);
+    while (ss_devs) { struct SsDev* d = ss_devs; ss_devs = d->next; if (d->dev) ss_gpu_free(d->dev); else free(d->host); free(d->bk); free(d); }
 }
 static pthread_mutex_t ss_dev_mu = PTHREAD_MUTEX_INITIALIZER;
 static struct SsDev* ss_dev_alloc(int64_t n, int64_t es) {
@@ -915,6 +1008,7 @@ impl Cx<'_> {
     pub(super) fn kernel_fn(&mut self, f: &FnDef, params: &[Type], ret: &Type, fidx: usize, k: &Kernel, devs: &[bool], cname: &str) -> G {
         let rr = self.rr(ret)?;
         let dev = |i: usize| devs.get(i).copied().unwrap_or(false);
+        let all_dev = k.params.iter().enumerate().all(|(i, p)| p.slice.is_none() || dev(i));
         let mut sig = Vec::new();
         for (i, (t, p)) in params.iter().zip(&f.params).enumerate() {
             if dev(i) {
@@ -928,11 +1022,14 @@ impl Cx<'_> {
         sig.push("int64_t depth".into());
         let name = &f.name;
         let mut s = format!("#define FIDX {fidx}\nstatic {rr} f_{cname}({}) {{\n  (void)depth;\n", sig.join(", "));
+        if !all_dev {
+            s.push_str("  ss_q_sync(st);\n");
+        }
         for (j, q) in k.params.iter().enumerate() {
             for (i, p) in k.params.iter().enumerate().take(j) {
                 if dev(i) && dev(j) && (p.slice == Some(true) || q.slice == Some(true)) {
                     let m = c_lit(&format!("dev: arguments {} and {} of {name} are the same buffer", p.name, q.name));
-                    writeln!(s, "  if (UNLIKELY(a{i} == a{j})) dev_fail(st, FIDX, {m}, -1, 0, 0);").unwrap();
+                    writeln!(s, "  if (UNLIKELY(a{i} == a{j})) {{ ss_q_sync(st); dev_fail(st, FIDX, {m}, -1, 0, 0); }}").unwrap();
                 }
             }
         }
@@ -941,27 +1038,43 @@ impl Cx<'_> {
         let mut back = String::new();
         let mut save = String::new();
         let mut restore = String::new();
+        let mut rec = Vec::new();
+        let mut qargs = Vec::new();
+        let mut fill = String::new();
         for (i, (p, t)) in k.params.iter().zip(params).enumerate() {
             let src = if is_mut_borrow(&f.params[i].ty) { format!("(*a{i})") } else { format!("a{i}") };
             let Some(m) = p.slice else {
                 let c = scalar_c(p.ty);
                 if let Some((lo, hi)) = matches!(p.ty, KTy::I32 | KTy::U32).then(|| p.ty.range()) {
-                    writeln!(s, "  if (UNLIKELY({src} < {lo}LL || {src} > {hi}LL)) dev_fail(st, FIDX, \"dev: argument {} of {name} is out of range for {} (value = \", -1, \"\", {src});", p.name, p.ty.name()).unwrap();
+                    writeln!(s, "  if (UNLIKELY({src} < {lo}LL || {src} > {hi}LL)) {{ ss_q_sync(st); dev_fail(st, FIDX, \"dev: argument {} of {name} is out of range for {} (value = \", -1, \"\", {src}); }}", p.name, p.ty.name()).unwrap();
                 }
                 writeln!(s, "  {c} p{i} = ({c}){src};").unwrap();
                 let bytes = if p.ty == KTy::F32 { 4 } else { 8 };
                 gargs.push(format!("{{0, 0, &p{i}, {bytes}, 0}}"));
                 cargs.push(format!("p{i}"));
+                rec.push(format!("{c} p{i};"));
+                qargs.push(format!("q_->p{i}"));
+                writeln!(fill, "    q_->p{i} = p{i};").unwrap();
                 continue;
             };
             let e = elem_c(p.ty, Tgt::C);
             let es = es(p.ty);
             if dev(i) {
                 writeln!(s, "  int64_t l{i} = a{i}->len; {e}* p{i} = ({e}*)a{i}->host;").unwrap();
-                gargs.push(format!("a{i}->dev ? (SsGpuArg){{3, 0, p{i}, l{i} * {es}, a{i}->dev}} : (SsGpuArg){{{}, 0, p{i}, l{i} * {es}, 0}}", if m { 2 } else { 1 }));
+                if all_dev {
+                    gargs.push(format!("{{3, 0, p{i}, l{i} * {es}, a{i}->dev}}"));
+                } else {
+                    gargs.push(format!("a{i}->dev ? (SsGpuArg){{3, 0, p{i}, l{i} * {es}, a{i}->dev}} : (SsGpuArg){{{}, 0, p{i}, l{i} * {es}, 0}}", if m { 2 } else { 1 }));
+                }
+                rec.push(format!("struct SsDev* d{i};"));
+                qargs.push(format!("({}{e}*)q_->d{i}->host, q_->d{i}->len", if m { "" } else { "const " }));
+                writeln!(fill, "    q_->d{i} = a{i};").unwrap();
                 if m {
                     writeln!(save, "      void* bk{i} = 0; if (a{i}->dev) {{ bk{i} = sspur_alloc_atomic((size_t)(l{i} ? l{i} : 1) * {es}); memcpy(bk{i}, p{i}, (size_t)l{i} * {es}); }}").unwrap();
                     writeln!(restore, "      if (r_ && bk{i}) memcpy(p{i}, bk{i}, (size_t)l{i} * {es});").unwrap();
+                    writeln!(fill, "    L_.w[L_.nw++] = a{i};").unwrap();
+                } else {
+                    writeln!(fill, "    L_.r[L_.nr++] = a{i};").unwrap();
                 }
             } else {
                 writeln!(s, "  int64_t l{i} = {src}.len;").unwrap();
@@ -987,9 +1100,10 @@ impl Cx<'_> {
             cargs.push(format!("l{i}"));
         }
         let mut em = Em::new(k, Tgt::C, 1);
+        em.sync = all_dev;
         for (i, pre) in k.pres.iter().enumerate() {
             let c = em.expr(pre);
-            em.line(&format!("if (UNLIKELY(!({c}))) TRAPV({T_PRE}, {i}, 0);"));
+            em.fail(&format!("!({c})"), T_PRE, &i.to_string(), "0");
         }
         let n = em.expr(&k.grid);
         s.push_str(&em.take());
@@ -997,45 +1111,68 @@ impl Cx<'_> {
         let sub: Vec<String> = k.params.iter().enumerate().filter(|(_, p)| p.slice.is_none() && p.ty == KTy::F32).map(|(i, _)| format!(" && !ss_sub32(p{i})")).collect();
         gargs.push("{0, 0, &ss_n, 8, 0}".into());
         let commit = commit_split(k).is_some();
-        let masked = commit && !k.params.iter().enumerate().any(|(i, p)| p.slice == Some(true) && !dev(i));
+        let narrow = narrow_pred(k);
+        let entry = |s: &mut String| match &narrow {
+            Some(code) => {
+                let lens: String = k.params.iter().enumerate().filter(|(_, p)| p.slice.is_some()).map(|(i, _)| format!(" && l{i} <= 2147483647LL")).collect();
+                writeln!(s, "      nar_ = ss_n <= 2147483647LL{lens};\n      if (nar_) {{\n{code}      }}").unwrap();
+                format!("nar_ ? \"k_{name}_n\" : \"k_{name}\"")
+            }
+            None => format!("\"k_{name}\""),
+        };
         writeln!(s, "  if (ss_n > 0) {{").unwrap();
-        if k.uses_f64() {
-            writeln!(s, "    ss_trace(\"{name}\", \"cpu (F64 is not available on the GPU)\", ss_n);").unwrap();
-            writeln!(s, "    kc_{name}({}, ss_n, 0, st);", cargs.join(", ")).unwrap();
+        if all_dev {
+            writeln!(self.protos, "typedef struct {{ {} int64_t ss_n; }} KQ_{cname};\nstatic void kq_{cname}(void* r_, const uint32_t* m_, Status* st);", rec.join(" ")).unwrap();
+            writeln!(s, "    KQ_{cname}* q_ = (KQ_{cname}*)malloc(sizeof(KQ_{cname}));\n    q_->ss_n = ss_n;").unwrap();
+            writeln!(s, "    SsLaunch L_ = {{0}}; L_.cpu = kq_{cname}; L_.rec = q_; L_.name = \"{name}\"; L_.n = ss_n; L_.masked = {};", i32::from(commit)).unwrap();
+            s.push_str(&fill);
+            let why = if k.uses_f64() { "cpu (F64 is not available on the GPU)" } else { "cpu" };
+            writeln!(s, "    L_.why = \"{why}\";\n    const char* e_ = 0; int nar_ = 0; (void)nar_;").unwrap();
+            let devs_ok: String = k.params.iter().enumerate().filter(|(_, p)| p.slice.is_some()).map(|(i, _)| format!(" && a{i}->dev")).collect();
+            if !k.uses_f64() {
+                writeln!(s, "    if (ss_gpu_ready(){}{devs_ok}) {{", sub.concat()).unwrap();
+                let e = entry(&mut s);
+                writeln!(s, "      e_ = {e};\n    }}\n    L_.narrow = nar_;").unwrap();
+            }
+            writeln!(s, "    SsGpuArg g_[] = {{{}}};", gargs.join(", ")).unwrap();
+            writeln!(s, "    ss_q_push(st, &L_, ss_msl, e_, {}, g_, ss_n, 1, {}, 1, {});", gargs.len(), k.group, i32::from(commit)).unwrap();
         } else {
-            writeln!(s, "    int r_ = 2, nar_ = 0; const uint32_t* m_ = 0; (void)m_; (void)nar_;").unwrap();
-            writeln!(s, "    if (ss_gpu_ready(){}) {{", sub.concat()).unwrap();
-            let entry = match narrow_pred(k) {
-                Some(code) => {
-                    let lens: String = k.params.iter().enumerate().filter(|(_, p)| p.slice.is_some()).map(|(i, _)| format!(" && l{i} <= 2147483647LL")).collect();
-                    writeln!(s, "      nar_ = ss_n <= 2147483647LL{lens};\n      if (nar_) {{\n{code}      }}").unwrap();
-                    format!("nar_ ? \"k_{name}_n\" : \"k_{name}\"")
-                }
-                None => format!("\"k_{name}\""),
-            };
-            if !masked {
-                s.push_str(&save);
-            }
-            writeln!(s, "      SsGpuArg g_[] = {{{}}};", gargs.join(", ")).unwrap();
-            writeln!(s, "      r_ = ss_gpu_run(ss_msl, {entry}, {}, g_, ss_n, {}, {}, &m_);", gargs.len(), k.group, i32::from(masked) + i32::from(commit)).unwrap();
-            if !masked {
-                s.push_str(&restore);
-            }
-            writeln!(s, "    }}").unwrap();
-            let rerun = if masked { "cpu rerun of flagged threads" } else { "cpu rerun (trap or subnormal)" };
-            writeln!(s, "    ss_trace(\"{name}\", r_ == 0 ? (nar_ ? \"metal, 32-bit indices\" : \"metal\") : r_ == 1 ? \"{rerun}\" : \"cpu\", ss_n);").unwrap();
-            if masked {
-                let m = c_lit(&format!("dev: the GPU failed while running {name}"));
-                writeln!(s, "    if (r_ == 3) dev_fail(st, FIDX, {m}, -1, 0, 0);").unwrap();
-                writeln!(s, "    if (r_) kc_{name}({}, ss_n, r_ == 1 ? m_ : 0, st);", cargs.join(", ")).unwrap();
-                writeln!(s, "    if (m_) free((void*)m_);").unwrap();
+            let masked = commit && !k.params.iter().enumerate().any(|(i, p)| p.slice == Some(true) && !dev(i));
+            if k.uses_f64() {
+                writeln!(s, "    ss_trace(\"{name}\", \"cpu (F64 is not available on the GPU)\", ss_n);").unwrap();
+                writeln!(s, "    kc_{name}({}, ss_n, 0, st);", cargs.join(", ")).unwrap();
             } else {
-                writeln!(s, "    if (r_) kc_{name}({}, ss_n, 0, st);", cargs.join(", ")).unwrap();
+                writeln!(s, "    int r_ = 2, nar_ = 0; const uint32_t* m_ = 0; (void)m_; (void)nar_;").unwrap();
+                writeln!(s, "    if (ss_gpu_ready(){}) {{", sub.concat()).unwrap();
+                let e = entry(&mut s);
+                if !masked {
+                    s.push_str(&save);
+                }
+                writeln!(s, "      SsGpuArg g_[] = {{{}}};", gargs.join(", ")).unwrap();
+                writeln!(s, "      r_ = ss_gpu_run(ss_msl, {e}, {}, g_, ss_n, {}, {}, &m_);", gargs.len(), k.group, i32::from(masked) + i32::from(commit)).unwrap();
+                if !masked {
+                    s.push_str(&restore);
+                }
+                writeln!(s, "    }}").unwrap();
+                let rerun = if masked { "cpu rerun of flagged threads" } else { "cpu rerun (trap or subnormal)" };
+                writeln!(s, "    ss_trace(\"{name}\", r_ == 0 ? (nar_ ? \"metal, 32-bit indices\" : \"metal\") : r_ == 1 ? \"{rerun}\" : \"cpu\", ss_n);").unwrap();
+                if masked {
+                    let m = c_lit(&format!("dev: the GPU failed while running {name}"));
+                    writeln!(s, "    if (r_ == 3) dev_fail(st, FIDX, {m}, -1, 0, 0);").unwrap();
+                    writeln!(s, "    if (r_) kc_{name}({}, ss_n, r_ == 1 ? m_ : 0, st);", cargs.join(", ")).unwrap();
+                    writeln!(s, "    if (m_) free((void*)m_);").unwrap();
+                } else {
+                    writeln!(s, "    if (r_) kc_{name}({}, ss_n, 0, st);", cargs.join(", ")).unwrap();
+                }
             }
         }
         writeln!(s, "  }}").unwrap();
         s.push_str(&back);
         writeln!(s, "  return ({rr}){{0, 0}};\n}}\n#undef FIDX").unwrap();
+        if all_dev {
+            let call: String = qargs.iter().map(|a| format!("{a}, ")).collect();
+            writeln!(s, "static void kq_{cname}(void* r_, const uint32_t* m_, Status* st) {{\n  KQ_{cname}* q_ = (KQ_{cname}*)r_;\n  kc_{name}({call}q_->ss_n, m_, st);\n}}").unwrap();
+        }
         Ok(s)
     }
 
@@ -1098,7 +1235,7 @@ impl Cx<'_> {
                 let lc = self.cty(t)?;
                 let e = elem_c(kt, Tgt::C);
                 let (oc, conv) = if kt.is_float() { ("double", "ss_canon((double)h_[j_])") } else { ("int64_t", "(int64_t)h_[j_]") };
-                Ok(format!("({{ SsDev* d_ = {r}; {e}* h_ = ({e}*)d_->host; RawL r_ = raw_alloc_a(d_->len, 8, 1); {oc}* o_ = ({oc}*)r_.data; for (int64_t j_ = 0; j_ < d_->len; j_++) o_[j_] = {conv}; r_.hdr[1] = d_->len; ({lc}){{d_->len, o_, r_.hdr}}; }})"))
+                Ok(format!("({{ SsDev* d_ = {r}; ss_q_sync(st); {e}* h_ = ({e}*)d_->host; RawL r_ = raw_alloc_a(d_->len, 8, 1); {oc}* o_ = ({oc}*)r_.data; for (int64_t j_ = 0; j_ < d_->len; j_++) o_[j_] = {conv}; r_.hdr[1] = d_->len; ({lc}){{d_->len, o_, r_.hdr}}; }})"))
             }
             _ => Err(format!("uses DevBuf.{name}")),
         }

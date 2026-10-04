@@ -1,0 +1,36 @@
+type Priority = Low | Med | High
+
+type Task = {id: Int where _ > 0, title: Str, done: Bool, pri: Priority}
+
+fn add_task(ts: List[Task], title: Str, pri: Priority) -> List[Task]
+= ts.push(Task{id: next_id(ts), title: title, done: false, pri: pri})
+
+fn box(t: Task) -> Str
+= if t.done then "[x]" else "[ ]"
+
+fn complete(ts: List[Task], id: Int) -> List[Task]
+= ts.map(t => if t.id == id then t with done := true else t)
+
+fn demo() -> List[Task]
+= add_task(add_task(add_task(add_task([], "buy milk", Low), "write report", High), "call bob", Med), "fix sink", High)
+
+fn main() -> Unit ! log
+= log(render_all(complete(demo(), 1)))
+
+fn next_id(ts: List[Task]) -> Int
+= ts.map(_.id).max.or(0) + 1
+
+fn pending(ts: List[Task]) -> List[Task]
+= ts.filter(t => not t.done)
+
+fn render(t: Task) -> Str
+= "{box(t)} #{t.id} {t.title}"
+
+fn render_all(ts: List[Task]) -> Str
+= ts.map(render).join("\n")
+
+test complete_one = pending(complete(demo(), 2)).map(_.id) == [1, 3, 4]
+
+test ids = demo().map(_.id) == [1, 2, 3, 4]
+
+test render_one = render(Task{id: 5, title: "nap", done: true, pri: Low}) == "[x] #5 nap"

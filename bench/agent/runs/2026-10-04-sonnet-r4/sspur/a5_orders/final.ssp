@@ -1,0 +1,38 @@
+type Line = {sku: Str, qty: Int where _ > 0, unit: Int where _ >= 0}
+
+type Order = {id: Int, lines: List[Line], coupon: Str}
+
+fn invoice(o: Order) -> Str
+= "order {o.id}: subtotal {money(subtotal(o))}, shipping {money(shipping(o))}, tax {money(tax(o))}, total {money(total(o))}"
+
+fn main() -> Unit ! log
+= log(invoice(sample_order()))
+
+fn money(cents: Int where _ >= 0) -> Str
+= "{cents / 100}.{pad2(cents % 100)}"
+
+fn pad2(n: Int) -> Str
+= if n < 10 then "0{n}" else n.str
+
+fn sample_order() -> Order
+= Order{id: 7, lines: [Line{sku: "pen", qty: 3, unit: 250}, Line{sku: "pad", qty: 2, unit: 1200}], coupon: ""}
+
+fn shipping(o: Order) -> Int
+= if subtotal(o) >= 5000 then 0 else 499
+
+fn subtotal(o: Order) -> Int
+= o.lines.map(_.qty * _.unit).sum
+
+fn tax(o: Order) -> Int
+= subtotal(o) * 8 / 100
+
+fn total(o: Order) -> Int
+= subtotal(o) + shipping(o) + tax(o)
+
+test invoice_sample = invoice(sample_order()) == "order 7: subtotal 31.50, shipping 4.99, tax 2.52, total 39.01"
+
+test money_pad = money(1205) == "12.05"
+
+test subtotal_sample = subtotal(sample_order()) == 3150
+
+test total_sample = total(sample_order()) == 3150 + 499 + 252

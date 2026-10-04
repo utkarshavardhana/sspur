@@ -1,0 +1,28 @@
+type Student = {name: Str, scores: List[Int]}
+
+fn average(s: Student) -> Int
+= s.scores.sum / s.scores.len
+
+fn grade(s: Student) -> Str
+= letter(average(s))
+
+fn letter(avg: Int) -> Str
+= if avg > 90 then "A" else if avg > 80 then "B" else if avg > 70 then "C" else if avg > 60 then "D" else "F"
+
+fn main() -> Unit ! log
+= log(roster().map(report_card).join("\n"))
+
+fn ranking(ss: List[Student]) -> List[Str]
+= ss.sort_by(s => -average(s)).map(_.name)
+
+fn report_card(s: Student) -> Str
+= "{s.name}: {average(s)} ({grade(s)})"
+
+fn roster() -> List[Student]
+= [Student{name: "mia", scores: [88, 92, 95]}, Student{name: "ali", scores: [70, 65, 80]}, Student{name: "zed", scores: [95, 90, 50]}, Student{name: "bo", scores: [100, 92, 89]}]
+
+test card = report_card(Student{name: "x", scores: [50, 60]}) == "x: 55 (F)"
+
+test letter_b = letter(85) == "B"
+
+test rank_order = ranking(roster()).take(2) == ["bo", "mia"]

@@ -1,0 +1,130 @@
+[
+ {
+  "lang": "sspur",
+  "task": "a1_inventory",
+  "passed": 12,
+  "total": 12,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a2_wordstats",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a3_bank",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a4_calc",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a5_orders",
+  "passed": 0,
+  "total": 11,
+  "ok": false,
+  "msg": "compile: E_UNKNOWN_NAME: unknown name 'gross'"
+ },
+ {
+  "lang": "sspur",
+  "task": "a6_todo",
+  "passed": 0,
+  "total": 11,
+  "ok": false,
+  "msg": "compile: E_CATCH_TYPE: cannot tell which error type this catch handles; match on its constructors"
+ },
+ {
+  "lang": "sspur",
+  "task": "a7_grades",
+  "passed": 0,
+  "total": 11,
+  "ok": false,
+  "msg": "compile: E_UNKNOWN_NAME: unknown name 'drop_lowest'"
+ },
+ {
+  "lang": "sspur",
+  "task": "a8_config",
+  "passed": 0,
+  "total": 13,
+  "ok": false,
+  "msg": "compile: E_UNKNOWN_NAME: unknown name 'get_int'"
+ },
+ {
+  "lang": "python",
+  "task": "a1_inventory",
+  "passed": 12,
+  "total": 12,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a2_wordstats",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a3_bank",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a4_calc",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a5_orders",
+  "passed": 3,
+  "total": 11,
+  "ok": false,
+  "msg": "FAILED h_suite.py::test_hidden_gross - NameError: name 'gross' is not defined"
+ },
+ {
+  "lang": "python",
+  "task": "a6_todo",
+  "passed": 1,
+  "total": 11,
+  "ok": false,
+  "msg": "FAILED h_suite.py::test_hidden_complete_missing - NameError: name 'NotFound' ..."
+ },
+ {
+  "lang": "python",
+  "task": "a7_grades",
+  "passed": 1,
+  "total": 11,
+  "ok": false,
+  "msg": "FAILED h_suite.py::test_hidden_empty - ZeroDivisionError: integer division or..."
+ },
+ {
+  "lang": "python",
+  "task": "a8_config",
+  "passed": 1,
+  "total": 13,
+  "ok": false,
+  "msg": "FAILED h_suite.py::test_hidden_len - AssertionError: assert 10 == 9"
+ }
+]

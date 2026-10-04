@@ -49,3 +49,20 @@ fn apply_accepts_inline_ops_and_keeps_json() {
     assert!(ok && out.starts_with(r#"{"ok":true,"root":""#), "{out}");
     assert_eq!(sspur(&d, &["q", "list"], "").0, "fn one() -> Int\nfn two() -> Int\ntests: two_t");
 }
+
+#[test]
+fn explain_opt_lists_proven_rewrites() {
+    let d = fresh("explain");
+    let prog = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/rewrites.ssp");
+    let (out, ok) = sspur(&d, &["explain-opt", prog.to_str().unwrap()], "");
+    assert!(ok, "{out}");
+    for want in ["proof: intervals: condition 'n < 0' is always false", "spread  map-map", "total  loop-fusion", "sum_sq  inline", "scaled  fold"] {
+        assert!(out.contains(want), "missing {want}:\n{out}");
+    }
+    if out.contains("width  dead-branch") {
+        assert!(out.contains("proof: z3: condition 'lo > hi' is always false"), "{out}");
+    }
+    assert!(!out.contains("shaky  map-map"), "{out}");
+    let (all, _) = sspur(&d, &["explain-opt", prog.to_str().unwrap(), "--all"], "");
+    assert!(all.contains("note  shaky: not fusing maps: trap order could change"), "{all}");
+}

@@ -7,7 +7,7 @@ B=$3
 N=${N:-5}
 now() { perl -MTime::HiRes=time -e 'printf "%.4f", time'; }
 for b in ${BENCHES:-compute_big typical strings_big app churn parallel simd}; do
-  f="$here/bench/native/$b.ssp"
+  case $b in */*) f=$b ;; *) f="$here/bench/native/$b.ssp" ;; esac
   env $A ~/code/sspur-tools/tmo 300 "$bin" run "$f" > /dev/null 2>&1
   env $B ~/code/sspur-tools/tmo 300 "$bin" run "$f" > /dev/null 2>&1
   ba=999; bb=999; i=0

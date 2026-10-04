@@ -155,7 +155,7 @@ fn real_main() -> ExitCode {
         }
         "deploy" => deploy::run(&args.pos[1..], &args.flags),
         "sync" => sync::run(&args.pos[1..], args.val("--port").map(String::as_str), args.val("--max").and_then(|m| m.parse().ok()), args.val("--agent").map_or("sync", String::as_str), args.has("--json")),
-        "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" | "build" | "gpu" => program_cmd(&cmd, &args),
+        "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" | "build" | "gpu" | "explain-opt" => program_cmd(&cmd, &args),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -355,6 +355,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        "explain-opt" => explain_opt(&loaded, args.has("--all")),
         "run" => match native_interp(&loaded, args).run_main() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -535,6 +536,25 @@ fn export_c(l: &Loaded, label: &str, args: &Args) -> ExitCode {
         link.push_str(" -lpthread -lm");
     }
     println!("wrote {lib} and {header}; link with {link}");
+    ExitCode::SUCCESS
+}
+
+fn explain_opt(l: &Loaded, all: bool) -> ExitCode {
+    let (rewrites, notes) = sspur_native::cgen::opt::explain(&l.module, &l.check);
+    let mut by_rule: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    let mut by_proof: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for r in &rewrites {
+        println!("{}  {}\n    {}\n => {}\n    proof: {}\n    cost: {}", r.func, r.rule, r.before, r.after, r.proof, r.cost);
+        *by_rule.entry(r.rule).or_default() += 1;
+        *by_proof.entry(r.proof.split(':').next().unwrap_or("")).or_default() += 1;
+    }
+    if all {
+        for n in &notes {
+            println!("note  {n}");
+        }
+    }
+    let fmt = |m: &std::collections::BTreeMap<&str, usize>| m.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", ");
+    println!("{} rewrites ({}); proofs: {}", rewrites.len(), fmt(&by_rule), fmt(&by_proof));
     ExitCode::SUCCESS
 }
 

@@ -13,6 +13,7 @@ mod ffi;
 mod fuse;
 pub mod gpu;
 mod lower;
+pub mod opt;
 mod own;
 mod prove;
 mod simd;
@@ -791,6 +792,11 @@ static OptS_ str_last(Str s) {
 "#;
 
 pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Compiled, String> {
+    let opted = self::opt::optimize(m, check);
+    let (m, check) = match &opted {
+        Some(o) => (&o.module, &o.check),
+        None => (m, check),
+    };
     let lowered = lower::lower(m, check);
     let (m, check) = match &lowered {
         Some((lm, lc, _)) => (lm, lc),

@@ -3,7 +3,7 @@ use super::simd::{VBody, VLoop};
 use super::*;
 use std::collections::BTreeSet;
 
-fn traps(e: &Expr, out: &mut BTreeSet<i64>) -> bool {
+pub(super) fn traps(e: &Expr, out: &mut BTreeSet<i64>) -> bool {
     match &e.kind {
         ExprKind::Int(_) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Unit | ExprKind::Name(_) | ExprKind::Placeholder => true,
         ExprKind::Field(x, _) => traps(x, out),

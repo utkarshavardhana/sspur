@@ -217,3 +217,40 @@ fn bit_and_byte_builtins_match_across_tiers() {
     assert!(out.contains("native  bits") && out.contains("native  byte_at"), "{out}");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn inline_asm_reads_cycle_counters_on_both_targets() {
+    for target in ["riscv64-qemu", "aarch64-qemu"] {
+        boots(target, "cycles", "mix 63534 counter advanced\n");
+    }
+}
+
+#[test]
+fn inline_asm_runs_natively_in_sys_code_on_the_host() {
+    if cfg!(target_arch = "aarch64") {
+        let (out, err, ok) = sspur(&["run", "tests/asm/host_aarch64.ssp"]);
+        assert!(ok, "{err}");
+        assert_eq!(out, "sum 399995 divmod 9 2 zero true false counter advanced true\n");
+    }
+    let (_, err, ok) = sspur(&["run", "--interp", "tests/asm/host_aarch64.ssp"]);
+    assert!(!ok && err.contains("inline asm needs native code"), "{err}");
+    let (out, _, ok) = sspur(&["fmt", "tests/asm/host_aarch64.ssp"]);
+    assert!(ok && out.contains("= asm \"sdiv {q}, {x}, {y}\\n msub {m}, {q}, {y}, {x}\" in(x: a, y: b) out(q: Int, m: Int)\n"), "{out}");
+    assert!(out.contains("out(z: Bool) clobber(\"cc\")"), "{out}");
+    let d = scratch("asm-reject");
+    let cases = [
+        ("profile sys\n\nfn f() -> Int\n= asm \"mov {r}, #1\" out(r: Int)", "E_UNSAFE"),
+        ("fn f() -> Int ! unsafe\n= asm \"mov {r}, #1\" out(r: Int)", "E_PROFILE"),
+        ("profile sys\n\nfn f(s: Str) -> Int ! unsafe\n= asm \"mov {r}, {s}\" in(s: s) out(r: Int)", "E_ASM_OPERAND"),
+        ("profile sys\n\nfn f() -> Int ! unsafe\n= asm \"mov {r}, {q}\" out(r: Int)", "E_ASM_OPERAND"),
+        ("profile bare\n\nfn f() -> Str ! unsafe\n= asm \"nop\" out(r: Str)", "E_ASM_OPERAND"),
+        ("profile sys\n\nfn f(a: Int) -> Int ! unsafe\n= asm \"mov {r}, {a}\" in(a: a) out(a: Int)", "E_ASM_OPERAND"),
+    ];
+    for (i, (src, code)) in cases.iter().enumerate() {
+        let f = d.join(format!("a{i}.ssp"));
+        std::fs::write(&f, format!("{src}\n")).unwrap();
+        let (out, err, ok) = sspur(&["check", f.to_str().unwrap()]);
+        assert!(!ok && format!("{out}{err}").contains(code), "case {i}: expected {code}, got {out}{err}");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}

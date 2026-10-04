@@ -1361,6 +1361,60 @@ impl Parser {
         }
     }
 
+    fn asm(&mut self, start: Span) -> PResult<Expr> {
+        let tspan = self.span();
+        let Tok::Str(raw) = self.bump().tok else { unreachable!() };
+        let mut tmpl = String::new();
+        for part in self.interp(&raw, tspan)? {
+            match part {
+                StrPart::Lit(s) => tmpl.push_str(&s),
+                StrPart::Expr(Expr { kind: ExprKind::Name(n), .. }) => tmpl.push_str(&format!("{{{n}}}")),
+                StrPart::Expr(_) => return self.err("E_PARSE_ASM", "asm templates refer to operands by name, as {name}"),
+            }
+        }
+        let mut groups: [Vec<(String, Expr)>; 3] = Default::default();
+        let mut outs = Vec::new();
+        loop {
+            let g = match self.peek() {
+                Tok::Kw("in") => 0,
+                Tok::Ident(s) if s == "out" => 1,
+                Tok::Ident(s) if s == "clobber" => 2,
+                _ => break,
+            };
+            if !matches!(self.peek_at(1), Tok::Sym("(")) {
+                break;
+            }
+            self.bump();
+            self.bump();
+            while !self.is_sym(")") {
+                let sp = self.span();
+                match (g, self.bump().tok) {
+                    (2, Tok::Str(c)) => groups[2].push((c, Expr::new(ExprKind::Unit, sp))),
+                    (0 | 1, Tok::Ident(n)) => {
+                        self.expect_sym(":")?;
+                        if g == 0 {
+                            let e = self.expr()?;
+                            groups[0].push((n, e));
+                        } else {
+                            outs.push(self.ty()?);
+                            groups[1].push((n, Expr::new(ExprKind::Unit, sp)));
+                        }
+                    }
+                    _ => return self.err("E_PARSE_ASM", "expected in(name: expr), out(name: Type) or clobber(\"reg\")"),
+                }
+                if !self.eat_sym(",") {
+                    break;
+                }
+            }
+            self.expect_sym(")")?;
+        }
+        let span = start.to(self.prev_span());
+        let [ins, outn, clob] = groups;
+        let rec = |c: &str, fields| Expr::new(ExprKind::Record { ctor: Some(c.into()), fields }, span);
+        let args = vec![rec("in", ins), rec("out", outn), rec("clobber", clob)];
+        Ok(Expr::new(ExprKind::Method { recv: Box::new(Expr::new(ExprKind::Str(vec![StrPart::Lit(tmpl)]), tspan)), name: "asm".into(), targs: outs, args }, span))
+    }
+
     fn primary(&mut self) -> PResult<Expr> {
         let start = self.span();
         let tok = self.peek().clone();
@@ -1405,6 +1459,10 @@ impl Parser {
                 ExprKind::Par(self.args()?)
             }
             Tok::Kw("if" | "match" | "catch" | "handle" | "do" | "raise" | "return") => return self.expr(),
+            Tok::Ident(name) if name == "asm" && matches!(self.peek_at(1), Tok::Str(_)) => {
+                self.bump();
+                return self.asm(start);
+            }
             Tok::Ident(name) => {
                 self.bump();
                 if is_upper(&name) && self.is_sym("{") {

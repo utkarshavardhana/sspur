@@ -1402,6 +1402,58 @@ impl Checker {
         Type::Con("Mmio".into(), vec![Type::con(&w)])
     }
 
+    fn infer_asm(&mut self, recv: &Expr, outs: &[Ty], args: &[Expr], span: Span) -> Type {
+        if !self.sys {
+            self.push_diag("E_PROFILE", "error", span, "inline asm needs 'profile sys' or 'profile bare'".into(), Some("add 'profile sys' as the first line".into()), vec![]);
+        }
+        self.add_effect("unsafe".into(), span, None);
+        let fields = |a: &Expr| match &a.kind {
+            ExprKind::Record { fields, .. } => fields.clone(),
+            _ => vec![],
+        };
+        let mut names = HashSet::new();
+        for (n, x) in fields(&args[0]) {
+            let t = self.infer(&x, None);
+            let t = self.resolve(&t);
+            if !matches!(&t, Type::Con(c, _) if matches!(c.as_str(), "Int" | "Bool" | "Ptr")) {
+                self.push_diag("E_ASM_OPERAND", "error", x.span, format!("asm input '{n}' must be Int, Bool or Ptr, not {t}"), None, vec![]);
+            }
+            if !names.insert(n.clone()) {
+                self.push_diag("E_ASM_OPERAND", "error", x.span, format!("asm operand '{n}' is declared twice"), None, vec![]);
+            }
+        }
+        let mut ts = Vec::new();
+        for ((n, x), ty) in fields(&args[1]).into_iter().zip(outs) {
+            let t = self.conv_ty(ty);
+            if !matches!(&t, Type::Con(c, a) if a.is_empty() && matches!(c.as_str(), "Int" | "Bool")) {
+                self.push_diag("E_ASM_OPERAND", "error", x.span, format!("asm output '{n}' must be Int or Bool, not {t}"), None, vec![]);
+            }
+            if !names.insert(n.clone()) {
+                self.push_diag("E_ASM_OPERAND", "error", x.span, format!("asm operand '{n}' is declared twice"), None, vec![]);
+            }
+            ts.push(t);
+        }
+        let tmpl = match &recv.kind {
+            ExprKind::Str(p) => p.iter().map(|x| if let StrPart::Lit(s) = x { s.as_str() } else { "" }).collect::<String>(),
+            _ => String::new(),
+        };
+        let mut rest = tmpl.as_str();
+        while let Some(i) = rest.find('{') {
+            rest = &rest[i + 1..];
+            if let Some(j) = rest.find('}') {
+                let n = &rest[..j];
+                if !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !names.contains(n) {
+                    self.push_diag("E_ASM_OPERAND", "error", recv.span, format!("the asm template uses {{{n}}}, which is not an operand"), Some("declare it in in(...) or out(...)".into()), vec![]);
+                }
+            }
+        }
+        match ts.len() {
+            0 => Type::unit(),
+            1 => ts.remove(0),
+            _ => Type::Tuple(ts),
+        }
+    }
+
     fn recv_fits(&mut self, s: &Scheme, rt: &Type) -> bool {
         let snapshot = (self.subst.clone(), self.rsubst.clone());
         let (params, ..) = self.instantiate(s);
@@ -1498,6 +1550,7 @@ impl Checker {
             ExprKind::Method { recv, name, targs, args } if self.is_json_recv(recv) => self.infer_json(name, targs, args, e.span),
             ExprKind::Method { recv, name, args, .. } if self.is_db_recv(recv) => self.infer_db(name, args, e.span),
             ExprKind::Method { recv, name, targs, args } if name == "mmio" && targs.len() == 1 => self.infer_mmio(recv, &targs[0], args, e.span),
+            ExprKind::Method { recv, name, targs, args } if name == "asm" && args.len() == 3 && matches!(recv.kind, ExprKind::Str(_)) => self.infer_asm(recv, targs, args, e.span),
             ExprKind::Method { recv, name, targs, args } => {
                 if !targs.is_empty() {
                     self.err("E_UNSUPPORTED", e.span, "explicit type arguments on methods are not supported yet".into());

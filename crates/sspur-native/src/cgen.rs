@@ -2618,6 +2618,7 @@ impl<'a> Cx<'a> {
                 }
                 Ok(format!("((int64_t)({}))", self.expr(recv)?))
             }
+            ExprKind::Method { recv, name, args, .. } if name == "asm" && args.len() == 3 && matches!(recv.kind, ExprKind::Str(_)) => self.inline_asm(recv, args, &t),
             ExprKind::Method { recv, name, args, .. } => self.method(e, recv, name, args, &t),
             ExprKind::Call(f, args) => {
                 let is_local = matches!(&f.kind, ExprKind::Name(n) if self.lookup(n).is_some());
@@ -2702,6 +2703,10 @@ impl<'a> Cx<'a> {
                 let and = *op == BinOp::And;
                 let y = self.under(a, and, |cx| cx.expr(b))?;
                 Ok(format!("((int64_t)(({x}) {} ({y})))", if and { "&&" } else { "||" }))
+            }
+            ExprKind::Binary(op @ (BinOp::Eq | BinOp::Ne), a, b) if self.arch_is(a, b).is_some() => {
+                let same = self.arch_is(a, b).unwrap();
+                Ok(if same == (*op == BinOp::Eq) { "(1LL)".into() } else { "(0LL)".into() })
             }
             ExprKind::Binary(op, a, b) => {
                 let at = self.ty(a)?;
@@ -3453,6 +3458,64 @@ impl<'a> Cx<'a> {
             write!(s, "const int64_t* dp_ = ob_; __auto_type dr_ = {dec}(&dp_); free(ob_); dr_; }})").unwrap();
         }
         Ok(s)
+    }
+
+    fn arch_is(&self, a: &Expr, b: &Expr) -> Option<bool> {
+        let is_arch = |x: &Expr| matches!(&x.kind, ExprKind::Call(f, args) if args.is_empty() && matches!(&f.kind, ExprKind::Name(n) if n == "arch")) && !self.check.fn_types.contains_key("arch");
+        let lit = |x: &Expr| match &x.kind {
+            ExprKind::Str(p) if p.iter().all(|s| matches!(s, StrPart::Lit(_))) => Some(p.iter().map(|s| if let StrPart::Lit(l) = s { l.as_str() } else { "" }).collect::<String>()),
+            _ => None,
+        };
+        let s = if is_arch(a) { lit(b)? } else if is_arch(b) { lit(a)? } else { return None };
+        Some(s == self.target.as_deref().unwrap_or("host"))
+    }
+
+    fn inline_asm(&mut self, recv: &Expr, args: &[Expr], t: &Type) -> G {
+        let ExprKind::Str(parts) = &recv.kind else { unreachable!() };
+        let tmpl: String = parts.iter().map(|p| if let StrPart::Lit(s) = p { s.as_str() } else { "" }).collect();
+        let fields = |a: &Expr| match &a.kind {
+            ExprKind::Record { fields, .. } => fields.clone(),
+            _ => vec![],
+        };
+        let (ins, outs, clob) = (fields(&args[0]), fields(&args[1]), fields(&args[2]));
+        let mut code = String::from("({ ");
+        let mut inl = Vec::new();
+        for (i, (n, x)) in ins.iter().enumerate() {
+            let v = self.expr(x)?;
+            let _ = write!(code, "int64_t ai{i}_ = (int64_t)({v}); ");
+            inl.push(format!("[{n}] \"r\"(ai{i}_)"));
+        }
+        let mut outl = Vec::new();
+        for (i, (n, _)) in outs.iter().enumerate() {
+            let _ = write!(code, "int64_t ao{i}_ = 0; ");
+            outl.push(format!("[{n}] \"=r\"(ao{i}_)"));
+        }
+        let mut gcc = String::new();
+        let mut rest = tmpl.as_str();
+        while let Some(c) = rest.chars().next() {
+            let close = rest.find('}');
+            match c {
+                '%' => gcc.push_str("%%"),
+                '{' if close.is_some_and(|j| ins.iter().chain(&outs).any(|(n, _)| *n == rest[1..j])) => {
+                    let j = close.unwrap();
+                    let _ = write!(gcc, "%[{}]", &rest[1..j]);
+                    rest = &rest[j + 1..];
+                    continue;
+                }
+                c => gcc.push(c),
+            }
+            rest = &rest[c.len_utf8()..];
+        }
+        let clobbers: Vec<String> = clob.iter().map(|(c, _)| c_lit(c)).collect();
+        let _ = write!(code, "__asm__ volatile({} : {} : {} : {}); ", c_lit(&gcc), outl.join(", "), inl.join(", "), clobbers.join(", "));
+        let val = |i: usize, ty: &Type| if is(ty, "Bool") { format!("(int64_t)(ao{i}_ != 0)") } else { format!("ao{i}_") };
+        let res = match t {
+            Type::Tuple(ts) if outs.len() > 1 => format!("({}){{{}}}", self.cty(t)?, ts.iter().enumerate().map(|(i, ty)| val(i, ty)).collect::<Vec<_>>().join(", ")),
+            _ if outs.len() == 1 => val(0, t),
+            _ => "0LL".into(),
+        };
+        let _ = write!(code, "{res}; }})");
+        Ok(code)
     }
 
     fn method(&mut self, e: &Expr, recv: &Expr, name: &str, args: &[Expr], t: &Type) -> G {

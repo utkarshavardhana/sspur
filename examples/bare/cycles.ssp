@@ -1,0 +1,42 @@
+profile bare
+
+fn putc(c: Int) ! mmio, div
+= if arch() == "riscv64" then do
+    lsr = mmio[U8](0x10000005)
+    while lsr.read.band(0x20) == 0
+      ()
+    mmio[U8](0x10000000).write(c)
+  else do
+    fr = mmio[U32](0x09000018)
+    while fr.read.band(0x20) != 0
+      ()
+    mmio[U32](0x09000000).write(c)
+
+fn puts(s: Str) ! mmio, div
+= do
+  for i in 0..s.byte_len
+    putc(s.byte(i))
+
+fn put_int(n: Int) ! mmio, div
+= do
+  if n >= 10 then put_int(n / 10)
+  putc(48 + n % 10)
+
+fn cycles() -> Int
+  unsafe "reads a free-running counter register"
+= if arch() == "riscv64" then asm "csrr {c}, mcycle" out(c: Int) else asm "isb\n mrs {c}, cntvct_el0" out(c: Int)
+
+fn mix(a: Int, b: Int) -> Int
+  unsafe "register arithmetic only"
+= if arch() == "riscv64" then asm "add {r}, {x}, {y}\n slli {r}, {r}, 1" in(x: a, y: b) out(r: Int) else asm "add {r}, {x}, {y}\n lsl {r}, {r}, #1" in(x: a, y: b) out(r: Int)
+
+fn main() ! mmio, div
+= do
+  t0 = cycles()
+  var s = 0
+  for i in 0..1000
+    s := mix(s, i).band(0xffff)
+  t1 = cycles()
+  puts("mix ")
+  put_int(s)
+  puts(if t1 > t0 then " counter advanced\n" else " counter stuck\n")

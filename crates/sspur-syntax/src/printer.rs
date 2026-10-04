@@ -300,6 +300,39 @@ pub fn expr(e: &Expr, ind: usize) -> String {
             let rest: String = args.iter().map(|a| format!(", {}", expr(a, ind))).collect();
             format!("mmio[{}]({}{rest})", ty(&targs[0]), expr(recv, ind))
         }
+        ExprKind::Method { recv, name, targs, args } if name == "asm" && args.len() == 3 => {
+            let tmpl = match &recv.kind {
+                ExprKind::Str(p) => p.iter().map(|x| if let StrPart::Lit(s) = x { s.as_str() } else { "" }).collect::<String>(),
+                _ => String::new(),
+            };
+            let named = |rest: &str| rest.find('}').is_some_and(|j| j > 0 && rest[..j].chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !rest.as_bytes()[0].is_ascii_digit());
+            let esc: String = tmpl
+                .char_indices()
+                .map(|(i, c)| match c {
+                    '"' => "\\\"".to_string(),
+                    '\\' => "\\\\".to_string(),
+                    '\n' => "\\n".to_string(),
+                    '\t' => "\\t".to_string(),
+                    '{' if !named(&tmpl[i + 1..]) => "\\{".to_string(),
+                    c => c.to_string(),
+                })
+                .collect();
+            let mut s = format!("asm \"{esc}\"");
+            let fields = |a: &Expr| if let ExprKind::Record { fields, .. } = &a.kind { fields.clone() } else { vec![] };
+            let ins = fields(&args[0]);
+            if !ins.is_empty() {
+                s.push_str(&format!(" in({})", ins.iter().map(|(n, e)| format!("{n}: {}", expr(e, ind))).collect::<Vec<_>>().join(", ")));
+            }
+            let outs = fields(&args[1]);
+            if !outs.is_empty() {
+                s.push_str(&format!(" out({})", outs.iter().zip(targs).map(|((n, _), t)| format!("{n}: {}", ty(t))).collect::<Vec<_>>().join(", ")));
+            }
+            let cl = fields(&args[2]);
+            if !cl.is_empty() {
+                s.push_str(&format!(" clobber({})", cl.iter().map(|(c, _)| format!("\"{c}\"")).collect::<Vec<_>>().join(", ")));
+            }
+            s
+        }
         ExprKind::Method { recv, name, targs, args } => {
             let mut s = format!("{}.{}", operand(recv, 10, ind), name);
             if !targs.is_empty() {

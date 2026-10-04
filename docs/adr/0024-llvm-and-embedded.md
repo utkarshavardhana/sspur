@@ -62,4 +62,35 @@ LTO is now an explicit setting: `--lto off|thin|full` on `run`, `test` and `buil
 | Whole program (`--O3`, `SSPUR_SPLIT=0`, PGO) | one translation unit | adds `-flto=thin` at compile and link | adds `-flto=full` |
 | `profile bare` kernels | one translation unit plus `start.S`; LTO has nothing to merge | | |
 
-Measured (best of 5): compute_big 1.056 s thin, 1.056 s full; simd 0.224 s, 0.221 s; app 0.148 s, 0.149 s, all equal to `off`; typical 0.163 s thin and 0.171 s full against 0.143 s, slower because cross-unit inlining of large runtime functions grows the hot loops. The C generator already places everything a function inlines into its unit, so LTO only adds link time.
+Measured (best of 5): compute_big 1.056 s thin, 1.056 s full; simd 0.224 s, 0.221 s; app 0.148 s, 0.149 s, all equal to `off`; typical 0.163 s thin and 0.171 s full against 0.143 s, slower. The C generator already places everything a function inlines into its unit, so LTO has little left to do, and it adds link time.
+
+## 4. Inline asm
+
+```
+profile sys
+
+fn counter() -> Int
+  unsafe "reads the virtual counter register; no memory is touched"
+= asm "isb\n mrs {t}, cntvct_el0" out(t: Int)
+
+fn divmod(a: Int, b: Int) -> (Int, Int)
+  pre b > 0
+  unsafe "b is positive, so sdiv cannot trap"
+= asm "sdiv {q}, {x}, {y}\n msub {m}, {q}, {y}, {x}" in(x: a, y: b) out(q: Int, m: Int)
+
+fn fence()
+  unsafe "a full barrier"
+= asm "dmb ish" clobber("memory")
+```
+
+| # | Decision | Reason |
+|---|---|---|
+| 1 | `asm "template" [in(name: expr, ...)] [out(name: Type, ...)] [clobber("reg", ...)]` is an expression. Its value is `Unit` with no outputs, the output with one, and a tuple in declaration order with several | Doc 05 section 7 sketched `out(rax: U64) clobber(rdx)`. Named operands keep templates readable and portable across register allocators |
+| 2 | The template refers to operands as `{name}`, which reads like interpolation; `\{` is a literal brace. It lowers to GCC extended asm, `{name}` to `%[name]`, `%` to `%%`, always `volatile`, every operand in a general register (`"r"`, `"=r"`) | Clang and GCC accept the same form on every target; volatility keeps asm with no outputs (barriers, `wfi`) from being deleted |
+| 3 | Inputs are `Int`, `Bool` or `Ptr`; outputs `Int` or `Bool` (`E_ASM_OPERAND`, also for an unknown `{name}` or a duplicate name). All are 64-bit registers | The values that fit a register in every profile; wider types go through `Ptr` and memory |
+| 4 | `asm` performs `unsafe` (discharged by an `unsafe "reason"` clause or declared) and needs `profile sys` or `profile bare` (`E_PROFILE`) | The compiler can't see what the instructions do, so the justification is recorded and audited (`A_UNSAFE`), like raw memory |
+| 5 | The interpreter traps with "inline asm needs native code"; sys functions with asm run natively on the host, bare ones on the target | There is no portable meaning to interpret. Tests can't perform `unsafe`, so they never reach it |
+| 6 | `arch() == "riscv64"` (and `!=`) against a literal is folded to a C constant in native code, so the other target's asm is never emitted | Lets one source carry per-architecture asm, as the bare examples do |
+| 7 | The parser stores `asm` as a method node named `asm` on the template with records `in`, `out`, `clobber` as arguments and the output types as type arguments; the printer prints it back in source form | Same approach as `mmio[W](a)` in ADR 0017: no new AST variant, so hashing, renaming and every traversal keep working |
+
+Verified: `tests/asm/host_aarch64.ssp` (counter reads, a two-instruction add, `sdiv`/`msub` with two outputs, `cset` into `Bool`, a `dmb` barrier) runs natively on the aarch64 host; `examples/bare/cycles.ssp` reads `mcycle` (riscv64) or `cntvct_el0` (aarch64), runs an asm arithmetic loop and prints `mix 63534 counter advanced` on both QEMU machines; the rejection codes and `sspur fmt` round trip are checked in `crates/sspur-cli/tests/bare.rs`.

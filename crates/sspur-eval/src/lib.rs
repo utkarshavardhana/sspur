@@ -907,6 +907,7 @@ impl Interp {
             }
             ExprKind::Method { recv, name, args, .. } if matches!(&recv.kind, ExprKind::Name(n) if n == "json") && env.cell("json").is_none() && !self.fns.contains_key("json") => self.json_op(e.span, name, args, env),
             ExprKind::Method { name, targs, .. } if name == "mmio" && !targs.is_empty() => trap("mmio needs a bare target: build with 'sspur build --target riscv64-qemu|aarch64-qemu'"),
+            ExprKind::Method { recv, name, args, .. } if name == "asm" && args.len() == 3 && matches!(recv.kind, ExprKind::Str(_)) => trap("inline asm needs native code: it runs in compiled sys functions and on bare targets, not in the interpreter"),
             ExprKind::Method { recv, name, args, .. } => {
                 let r = self.eval(recv, env)?;
                 let a = self.eval_args(args, env)?;

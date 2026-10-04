@@ -1,0 +1,33 @@
+profile sys
+
+fn counter() -> Int
+  unsafe "reads the virtual counter register; no memory is touched"
+= asm "isb\n mrs {t}, cntvct_el0" out(t: Int)
+
+fn add_one(a: Int, b: Int) -> Int
+  unsafe "register arithmetic only"
+= asm "add {r}, {x}, {y}\n add {r}, {r}, #1" in(x: a, y: b) out(r: Int)
+
+fn divmod(a: Int, b: Int) -> (Int, Int)
+  pre b > 0
+  unsafe "b is positive, so sdiv cannot trap"
+= asm "sdiv {q}, {x}, {y}\n msub {m}, {q}, {y}, {x}" in(x: a, y: b) out(q: Int, m: Int)
+
+fn is_zero(a: Int) -> Bool
+  unsafe "compare and set"
+= asm "cmp {x}, #0\n cset {z}, eq" in(x: a) out(z: Bool) clobber("cc")
+
+fn fence()
+  unsafe "a full barrier"
+= asm "dmb ish" clobber("memory")
+
+fn main() -> Unit ! log, div
+= do
+  t0 = counter()
+  var s = 0
+  for i in 0..100000
+    s := add_one(s, i % 7)
+  fence()
+  t1 = counter()
+  (q, m) = divmod(47, 5)
+  log("sum {s} divmod {q} {m} zero {is_zero(0)} {is_zero(5)} counter advanced {t1 > t0}")

@@ -289,6 +289,11 @@ impl Interp {
                 let xs: Vec<Value> = (0..n).filter(|_| rng.chance(40)).map(Value::Int).collect();
                 crate::stdx::bits_from(&xs, n).ok()?
             }
+            "Rng" if !self.types.contains_key(name) => {
+                let int_ty = Ty::Named { name: "Int".into(), args: vec![], span: Span::default() };
+                let (Value::Int(a), Value::Int(b)) = (self.generate(&int_ty, rng, opts, depth)?, self.generate(&int_ty, rng, opts, depth)?) else { return None };
+                crate::stdrng::rng_value(sspur_native::rnd::Rng { s: a as u64, g: b as u64 | 1 })
+            }
             "StrBuf" if !self.types.contains_key(name) => return self.generate(&Ty::Named { name: "Str".into(), args: vec![], span: Span::default() }, rng, opts, depth),
             _ => return self.gen_user(name, args, rng, opts, depth),
         })

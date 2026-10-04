@@ -441,6 +441,16 @@ impl Checker {
     }
 
     fn load_builtins(&mut self) {
+        for (internal, src) in builtins::STD_RECORDS {
+            let m = parse(src).expect("std record must parse");
+            let Def::Type(t) = &m.defs[0] else { unreachable!() };
+            let TypeBody::Record(fs) = &t.body else { unreachable!() };
+            let params: Vec<String> = t.params.iter().map(|p| p.name.clone()).collect();
+            self.tparams = params.clone();
+            let fields = fs.iter().map(|f| (f.name.clone(), self.conv_ty(&f.ty))).collect();
+            self.tparams.clear();
+            self.types.insert(internal.to_string(), TypeInfo { params, kind: TypeKind::Record(fields) });
+        }
         for src in builtins::GLOBALS {
             let (name, s) = self.builtin_scheme(src);
             self.globals.insert(name, s);
@@ -1443,7 +1453,7 @@ impl Checker {
                     let owners: Vec<(String, Vec<String>)> = self
                         .types
                         .iter()
-                        .filter(|(_, i)| matches!(&i.kind, TypeKind::Record(fs) if fs.iter().any(|(n, _)| n == f)))
+                        .filter(|(n, i)| !n.starts_with('#') && matches!(&i.kind, TypeKind::Record(fs) if fs.iter().any(|(n, _)| n == f)))
                         .map(|(n, i)| (n.clone(), i.params.clone()))
                         .collect();
                     if let [(owner, params)] = owners.as_slice() {

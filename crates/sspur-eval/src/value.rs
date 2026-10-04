@@ -248,7 +248,7 @@ impl fmt::Display for Value {
             Value::List(xs) => write_seq(f, "[", "]", xs),
             Value::Tuple(xs) => write_seq(f, "(", ")", xs),
             Value::Record(n, fs) => {
-                write!(f, "{n}")?;
+                write!(f, "{}", n.trim_start_matches('#'))?;
                 write_fields(f, fs)
             }
             Value::Variant(n, None) => write!(f, "{n}"),

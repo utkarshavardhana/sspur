@@ -311,7 +311,7 @@ impl fmt::Display for NVal {
             NVal::Float(x) => write!(f, "{x:?}"),
             NVal::Str(s) => write!(f, "{s:?}"),
             NVal::Rec(n, fs) => {
-                write!(f, "{n}")?;
+                write!(f, "{}", n.trim_start_matches('#'))?;
                 fields(f, fs)
             }
             NVal::Variant(n, None) => write!(f, "{n}"),

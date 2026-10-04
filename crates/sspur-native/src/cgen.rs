@@ -17,6 +17,7 @@ mod own;
 mod prove;
 mod simd;
 mod stdlib;
+mod stdrng;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
 type G<T = String> = Result<T, String>;
@@ -1380,7 +1381,7 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n) => format!("N_{n}"),
             Type::Con(n, a) if self.layouts.records.contains_key(n) || self.layouts.sums.contains_key(n) => {
                 let kind = if self.layouts.records.contains_key(n) { "R" } else { "S" };
-                let mut s = format!("{kind}_{n}");
+                let mut s = format!("{kind}_{}", n.replace('#', "_"));
                 for x in a {
                     s.push('_');
                     s.push_str(&self.mangle(x)?);
@@ -2791,7 +2792,7 @@ impl<'a> Cx<'a> {
                 s
             }
             Type::Con(n, a) if self.layouts.records.contains_key(n) => {
-                let mut s = lit(&format!("{n}{{"));
+                let mut s = lit(&format!("{}{{", n.trim_start_matches('#')));
                 for (i, (f, ft)) in self.layouts.record_fields(n, a).unwrap().iter().enumerate() {
                     let e = self.helper_show(ft)?;
                     s.push_str(&lit(&format!("{}{f}: ", if i > 0 { ", " } else { "" })));
@@ -3292,6 +3293,9 @@ impl<'a> Cx<'a> {
         let r = self.expr(recv)?;
         if name == "str" {
             return self.show_str(&r, &rt);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "#Rng") {
+            return self.rng_method(&r, name, args, t);
         }
         if matches!(&rt, Type::Con(n, _) if n == "Atomic" || n == "Chan") {
             return self.conc_method(&r, &rt, name, args, t);

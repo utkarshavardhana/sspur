@@ -431,3 +431,36 @@ fn exit_sets_the_status_in_both_tiers() {
     }
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn std_round3_traps_are_identical_in_both_tiers() {
+    if std::process::Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let src = "fn gam(k: F64) -> F64
+= rand_gamma(1, k, 1.0).0
+fn bin(n: Int) -> Int
+= rng(1).binomial(n, 0.5).0
+fn poi(m: F64) -> Int
+= rand_poisson(1, m).0
+fn geo(p: F64) -> Int
+= rand_geometric(1, p).0
+fn wpick(ws: List[F64]) -> Int
+= rng(2).weighted(ws).0
+test t_gam = gam(0.0) == 0.0
+test t_bin = bin(-1) == 0
+test t_poi = poi(-1.0) == 0
+test t_geo = geo(0.0) == 0
+test t_wpick = wpick([0.0, 0.0]) == 0
+test t_ok = gam(2.0) > 0.0 and bin(10) <= 10 and wpick([0.0, 1.0]) == 1
+";
+    let expected = [
+        "FAIL  t_gam: rand_gamma needs a finite shape > 0 and scale > 0",
+        "FAIL  t_bin: rand_binomial needs n >= 0 and 0 <= p <= 1",
+        "FAIL  t_poi: rand_poisson needs 0 <= mean <= 4e15",
+        "FAIL  t_geo: rand_geometric needs 0 < p <= 1",
+        "FAIL  t_wpick: rand_weighted needs finite weights >= 0 with a positive sum",
+        "1 passed, 5 failed",
+    ];
+    assert_trap_parity("std_round3", src, &expected);
+}

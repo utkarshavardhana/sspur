@@ -7,6 +7,7 @@ mod sched;
 mod stdlib;
 mod stdbig;
 mod stdre;
+mod stdrng;
 mod stdtime;
 mod stdx;
 pub mod value;

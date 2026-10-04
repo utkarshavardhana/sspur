@@ -1340,3 +1340,77 @@ static RawL ss_re_caps(SsRe* re, Str t, int* ok) {
     if (*ok) { for (int64_t g = 0; g <= re->groups; g++) ((Str*)r.data)[g] = ss_re_group(t, m, g); r.len = re->groups + 1; r.hdr[1] = r.len; }
     return r;
 }
+//@ rng2 fail
+typedef struct { uint64_t s, g; } SsR;
+static inline uint64_t ss_r_mix(uint64_t m) { m = (m ^ (m >> 30)) * 0xBF58476D1CE4E5B9ULL; m = (m ^ (m >> 27)) * 0x94D049BB133111EBULL; return m ^ (m >> 31); }
+static inline uint64_t ss_r_mixg(uint64_t z) { z = (z ^ (z >> 33)) * 0xFF51AFD7ED558CCDULL; z = (z ^ (z >> 33)) * 0xC4CEB9FE1A85EC53ULL; z = (z ^ (z >> 33)) | 1; return __builtin_popcountll(z ^ (z >> 1)) < 24 ? z ^ 0xAAAAAAAAAAAAAAAAULL : z; }
+static inline uint64_t ss_r_next(SsR* r) { r->s += r->g; return ss_r_mix(r->s); }
+static inline double ss_r_f64(SsR* r) { return (double)(ss_r_next(r) >> 11) * (1.0 / 9007199254740992.0); }
+static int64_t ss_r_int(SsR* r, int64_t lo, int64_t hi, Status* st) { if (lo >= hi) ss_fail(st, "rand_int needs lo < hi"); uint64_t m = ss_r_next(r); return (int64_t)((__int128)lo + (__int128)(((unsigned __int128)m * (unsigned __int128)((__int128)hi - lo)) >> 64)); }
+static double ss_r_normal(SsR* r, double mean, double sd) {
+#pragma clang fp contract(off)
+    double u1 = ss_r_f64(r); double u2 = ss_r_f64(r); double q = sqrt(-2.0 * log(1.0 - u1)); double c = cos(6.283185307179586 * u2); double z = q * c; double t = sd * z; return mean + t;
+}
+static SsR ss_r_split(SsR* r) { SsR o; o.s = ss_r_mix(ss_r_next(r)); o.g = ss_r_mixg(ss_r_next(r)); return o; }
+static SsR ss_r_stream(SsR r, int64_t k) { SsR o; o.g = ss_r_mixg((uint64_t)k * 0x9E3779B97F4A7C15ULL + r.s); o.s = ss_r_mix(r.s + o.g); return o; }
+static double ss_r_gamma1(SsR* r, double k) {
+#pragma clang fp contract(off)
+    if (k < 1.0) { double g = ss_r_gamma1(r, k + 1.0); double u = ss_r_f64(r); return g * pow(u, 1.0 / k); }
+    double d = k - 1.0 / 3.0; double c = 1.0 / sqrt(9.0 * d);
+    for (;;) {
+        double x, v;
+        for (;;) { x = ss_r_normal(r, 0.0, 1.0); double cx = c * x; v = 1.0 + cx; if (v > 0.0) break; }
+        v = v * v * v;
+        double u = ss_r_f64(r); double x2 = x * x; double x4 = x2 * x2; double t = 0.0331 * x4;
+        if (u < 1.0 - t) return d * v;
+        double h = 0.5 * x2; double w = 1.0 - v + log(v); double dw = d * w;
+        if (log(u) < h + dw) return d * v;
+    }
+}
+static double ss_r_beta1(SsR* r, double a, double b) { double x = ss_r_gamma1(r, a); double y = ss_r_gamma1(r, b); return x / (x + y); }
+static double ss_r_gamma(SsR* r, double k, double th, Status* st) { if (!(k > 0.0 && isfinite(k) && th > 0.0 && isfinite(th))) ss_fail(st, "rand_gamma needs a finite shape > 0 and scale > 0"); return ss_r_gamma1(r, k) * th; }
+static double ss_r_beta(SsR* r, double a, double b, Status* st) { if (!(a > 0.0 && isfinite(a) && b > 0.0 && isfinite(b))) ss_fail(st, "rand_beta needs finite a > 0 and b > 0"); return ss_r_beta1(r, a, b); }
+static int64_t ss_r_binom1(SsR* r, int64_t n, double p) {
+#pragma clang fp contract(off)
+    int64_t k = 0;
+    while (n > 16) {
+        if (p <= 0.0) return k;
+        if (p >= 1.0) return k + n;
+        int64_t a = 1 + n / 2; int64_t b = n - a + 1;
+        double x = ss_r_beta1(r, (double)a, (double)b);
+        if (x >= p) { n = a - 1; p = p / x; } else { k += a; n = b - 1; p = (p - x) / (1.0 - x); }
+    }
+    for (int64_t i = 0; i < n; i++) if (ss_r_f64(r) < p) k++;
+    return k;
+}
+static int64_t ss_r_binom(SsR* r, int64_t n, double p, Status* st) { if (n < 0 || !(p >= 0.0 && p <= 1.0)) ss_fail(st, "rand_binomial needs n >= 0 and 0 <= p <= 1"); return ss_r_binom1(r, n, p); }
+static int64_t ss_r_poisson(SsR* r, double mean, Status* st) {
+#pragma clang fp contract(off)
+    if (!(mean >= 0.0 && mean <= 4.0e15)) ss_fail(st, "rand_poisson needs 0 <= mean <= 4e15");
+    double mu = mean; int64_t k = 0;
+    while (mu > 16.0) {
+        int64_t m = (int64_t)floor(mu * 0.875); double x = ss_r_gamma1(r, (double)m);
+        if (x >= mu) return k + ss_r_binom1(r, m - 1, mu / x);
+        k += m; mu -= x;
+    }
+    double l = exp(-mu); double q = ss_r_f64(r);
+    while (q > l) { k++; q *= ss_r_f64(r); }
+    return k;
+}
+static int64_t ss_r_geom(SsR* r, double p, Status* st) {
+    if (!(p > 0.0 && p <= 1.0)) ss_fail(st, "rand_geometric needs 0 < p <= 1");
+    double u = ss_r_f64(r);
+    if (p == 1.0) return 0;
+    double x = floor(log1p(-u) / log1p(-p));
+    if (x >= 9.223372036854775807e18) ss_fail(st, "integer overflow");
+    return (int64_t)x;
+}
+static int64_t ss_r_weighted(SsR* r, const double* w, int64_t n, Status* st) {
+#pragma clang fp contract(off)
+    double total = 0.0;
+    for (int64_t i = 0; i < n; i++) { if (!(w[i] >= 0.0 && isfinite(w[i]))) ss_fail(st, "rand_weighted needs finite weights >= 0 with a positive sum"); total += w[i]; }
+    if (!(total > 0.0 && isfinite(total))) ss_fail(st, "rand_weighted needs finite weights >= 0 with a positive sum");
+    double u = ss_r_f64(r) * total; double c = 0.0; int64_t last = 0;
+    for (int64_t i = 0; i < n; i++) { if (w[i] > 0.0) last = i; c += w[i]; if (u < c) return i; }
+    return last;
+}

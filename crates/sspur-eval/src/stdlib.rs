@@ -251,6 +251,9 @@ fn pad(x: &str, n: i64, fill: &str, left: bool) -> R {
 
 impl Interp {
     pub(crate) fn std_global(&self, n: &str, a: Vec<Value>) -> R {
+        if let Some(v) = crate::stdrng::global(n, &a)? {
+            return Ok(v);
+        }
         Ok(match n {
             "empty_set" => Value::Set(Rc::new(BTreeSet::new())),
             "empty_heap" => Value::Heap(Rc::new(Vec::new())),

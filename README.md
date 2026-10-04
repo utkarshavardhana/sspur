@@ -59,7 +59,9 @@ Most languages are designed around a human at a keyboard. SSPUR starts from a di
 - An MCP server and a compact query API so agents can pull exactly the context they need
 - C interop in both directions: `extern fn`, `sspur bind` for C headers, and `sspur export-c` to ship SSPUR as a C library
 - `kernel fn` GPU kernels: Metal with exact `F32` and identical traps, plus OpenCL C, SPIR-V and PTX through `sspur gpu`
-- `sspur deploy` to generate infrastructure and least-privilege IAM policies from a service's effects, and to run the service locally
+- `sspur deploy` to generate infrastructure and least-privilege IAM policies from a service's effects, run the service locally, migrate data, hot swap versions, and replay recorded traffic
+- `kernel fn` GPU kernels (Metal, with OpenCL, SPIR-V and PTX output)
+- Concurrent editing by many agents with typechecked merges, replica sync, and a shared build cache
 
 ## Performance
 
@@ -177,8 +179,8 @@ SSPUR is at version 0.1 and under active development. The language and tools are
 | 3. Agent loop: codebase, transactions, queries, MCP, effect handlers | Done |
 | 4. Native compiler, `sys` profile, ownership, concurrency, SMT contracts | Done |
 | 5. Bare-metal profile, SIMD, C interop | Done; an LLVM backend and embedded targets beyond QEMU remain |
-| 6. Deployment and standard library | In progress: 16 of 23 C++ library areas covered, migrations and hot swap pending |
-| 7. Multi-agent sync and distributed store | Planned |
+| 6. Deployment, migrations, hot swap, replay, GPU kernels, standard library | Mostly done: 16 of 23 C++ library areas covered, 6 partial; a first real AWS deploy is pending |
+| 7. Multi-agent sync, replica sync, global build cache | Exit criterion met: 100 concurrent agents, no lost work; proven rewrites and cost-driven optimization remain |
 
 See the [roadmap](docs/roadmap.md) for details and exit criteria.
 

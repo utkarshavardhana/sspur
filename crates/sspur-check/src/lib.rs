@@ -834,12 +834,24 @@ impl Checker {
                 }
             };
             let lt = Type::list(host.clone());
-            let t = self.infer(inner, Some(&lt));
+            let t = self.infer(inner, None);
             self.pending_types.push((expr_key(a), t.clone()));
-            self.expect(&lt, &t, inner.span);
+            let dev = match self.resolve(&t) {
+                Type::Con(n, args) if n == "#DevBuf" => Some(args.first().map(|e| self.resolve(e))),
+                _ => None,
+            };
+            match &dev {
+                Some(Some(Type::Con(e, _))) if e == p.ty.name() => {}
+                Some(e) => {
+                    let got = e.as_ref().map_or("?".to_string(), |t| t.to_string());
+                    self.push_diag("E_KERNEL_ARG", "error", inner.span, format!("'{}' of {name} is a [{}] slice, got DevBuf[{got}]", p.name, p.ty.name()), None, vec![]);
+                }
+                None => self.expect(&lt, &t, inner.span),
+            }
+            let dev = dev.is_some();
             match &inner.kind {
                 ExprKind::Name(n) => {
-                    if mutable && !self.lookup(n).is_some_and(|l| l.mutable) {
+                    if mutable && !dev && !self.lookup(n).is_some_and(|l| l.mutable) {
                         self.push_diag("E_BORROW_IMMUTABLE", "error", inner.span, format!("'{n}' is written by {name}, so it must be a var"), Some(format!("declare it with 'var {n} = ...'")), vec![]);
                     }
                     if let Some((_, m, _)) = borrowed.iter().find(|(b, _, _)| b == n)
@@ -848,7 +860,7 @@ impl Checker {
                         }
                     borrowed.push((n.clone(), mutable, inner.span));
                 }
-                _ if mutable => {
+                _ if mutable && !dev => {
                     self.push_diag("E_KERNEL_ARG", "error", inner.span, format!("&mut needs a var holding the list for '{}' of {name}", p.name), None, vec![]);
                 }
                 _ => {}
@@ -1289,6 +1301,20 @@ impl Checker {
                 Some(r) => self.push_diag("A_DECLASSIFY", "audit", span, format!("{con} value declassified with .{name}: {r}"), None, vec![]),
                 None => self.push_diag("E_REASON_REQUIRED", "error", span, format!(".{name} on {con} needs a non-empty string literal reason"), Some(format!(".{name}(\"why this is safe\")")), vec![]),
             }
+        }
+        if con == "#DevBuf" && name == "to_list" {
+            for a in args {
+                self.infer(a, None);
+            }
+            if !args.is_empty() {
+                self.err("E_ARITY", span, "to_list takes no arguments".into());
+            }
+            self.add_effect("dev".into(), span, None);
+            let host = match &rr {
+                Type::Con(_, a) if a.first().is_some_and(|t| matches!(t, Type::Con(n, _) if n == "F32" || n == "F64")) => "F64",
+                _ => "Int",
+            };
+            return Type::list(Type::con(host));
         }
         let found = self.methods.get(&(con.clone(), name.to_string())).or_else(|| self.methods.get(&("*".to_string(), name.to_string()))).cloned();
         match found {

@@ -37,7 +37,7 @@ fn kernel_violations_are_rejected_with_their_codes() {
 
 #[test]
 fn accepted_kernels_check_cleanly_and_round_trip() {
-    for name in ["basic.ssp", "traps.ssp", "exact.ssp"] {
+    for name in ["basic.ssp", "traps.ssp", "exact.ssp", "devbuf.ssp"] {
         let src = std::fs::read_to_string(suite().join(name)).unwrap();
         let module = parse(&src).unwrap();
         let out = check(&module);
@@ -83,7 +83,7 @@ fn native_kernels_match_the_interpreter_on_gpu_and_cpu() {
         return;
     }
     let metal = metal_available();
-    for name in ["basic.ssp", "exact.ssp"] {
+    for name in ["basic.ssp", "exact.ssp", "devbuf.ssp"] {
         let path = suite().join(name);
         let interp = run(&["run", "--interp"], &path, &[]);
         assert!(interp.0, "{name}: {}", interp.2);
@@ -115,6 +115,15 @@ fn kernel_traps_are_identical_in_every_tier() {
     assert!(interp.1.contains("FAIL  oob_read: index 3 out of bounds for list of length 3"), "{}", interp.1);
     assert!(interp.1.contains("dev: element 2 of m is out of range for I32 (value = 3000000000)"), "{}", interp.1);
     assert!(interp.1.contains("5 passed, 8 failed"), "{}", interp.1);
+    for env in [vec![], vec![("SSPUR_GPU", "0")]] {
+        let native = run(&["test"], &path, &env);
+        assert_eq!(interp.1, native.1, "{env:?}");
+    }
+    let path = suite().join("devbuf.ssp");
+    let interp = run(&["test", "--interp"], &path, &[]);
+    assert!(interp.1.contains("FAIL  alias_trap: dev: arguments x and y of half are the same buffer"), "{}", interp.1);
+    assert!(interp.1.contains("FAIL  wrap_trap: integer overflow"), "{}", interp.1);
+    assert!(interp.1.contains("3 passed, 3 failed"), "{}", interp.1);
     for env in [vec![], vec![("SSPUR_GPU", "0")]] {
         let native = run(&["test"], &path, &env);
         assert_eq!(interp.1, native.1, "{env:?}");

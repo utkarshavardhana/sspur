@@ -40,6 +40,7 @@ pub enum Value {
     Big(Rc<sspur_native::bigint::Big>),
     Dec(Rc<sspur_native::bigint::Big>, i64),
     Regex(Rc<crate::stdre::Re>),
+    Dev(Rc<crate::kernel::DevCell>),
 }
 
 pub struct AtomCell {
@@ -118,6 +119,7 @@ impl Value {
             Value::Big(_) => 24,
             Value::Dec(..) => 25,
             Value::Regex(_) => 26,
+            Value::Dev(_) => 27,
         }
     }
 
@@ -178,6 +180,7 @@ impl Ord for Value {
             (Bits(n, a), Bits(m, b)) => n.cmp(m).then_with(|| a.cmp(b)),
             (Big(a), Big(b)) => a.compare(b),
             (Regex(a), Regex(b)) => a.src.cmp(&b.src),
+            (Dev(a), Dev(b)) => a.id.cmp(&b.id),
             (Dec(a, sa), Dec(b, sb)) => crate::stdbig::dec_order(a, *sa, b, *sb),
             _ => self.rank().cmp(&other.rank()),
         }
@@ -294,6 +297,7 @@ impl fmt::Display for Value {
             Value::Dur(d) => write!(f, "{}", sspur_native::chrono::dur_str(*d)),
             Value::Big(b) => write!(f, "{b}"),
             Value::Regex(r) => write!(f, "/{}/", r.src),
+            Value::Dev(d) => write!(f, "<devbuf {} x{}>", d.ty.name(), d.data.borrow().len()),
             Value::Dec(m, s) => write!(f, "{}", sspur_native::bigint::dec_str(m, *s)),
             Value::Bits(n, w) => {
                 let items: Vec<String> = crate::stdx::bits_items(*n, w).iter().map(|i| i.to_string()).collect();

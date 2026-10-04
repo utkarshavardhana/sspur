@@ -382,7 +382,9 @@ static inline __attribute__((always_inline)) void* gc_alloc(size_t n, int atomic
     }
     return gc_alloc_slow(n ? n : 1, atomic);
 }
+static void (*ss_reset_hook)(void);
 static void gc_reset(void) {
+    if (ss_reset_hook) ss_reset_hook();
     if (gc_stats) fprintf(stderr, "sspur gc: %lld collections, %zu active pages, high water %zu MB\n", (long long)gc_collections, gc_active_n, (gc_next << GC_SHIFT) >> 20);
     for (size_t k = 0; k < gc_active_n; k++) gc_release_page(gc_active[k]);
     gc_active_n = 0; gc_since = 0;
@@ -955,7 +957,7 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
                 cx.extern_fn(f, &params, &ret, index[&f.name])
             } else if f.kernel.is_some() {
                 match check.kernels.get(&f.name) {
-                    Some(k) => cx.kernel_fn(f, &params, &ret, index[&f.name], k),
+                    Some(k) => cx.kernel_fn(f, &params, &ret, index[&f.name], k, &[], &f.name),
                     None => Err("is a kernel that did not check".into()),
                 }
             } else {
@@ -1055,7 +1057,7 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
             src.push_str(&cx.defs);
             src.push_str(&cx.protos);
             let kernels: Vec<&sspur_check::kernel::Kernel> = defs.iter().filter(|f| f.kernel.is_some() && ok.contains(&f.name)).filter_map(|f| check.kernels.get(&f.name)).collect();
-            if !kernels.is_empty() {
+            if !kernels.is_empty() || cx.helpers_done.contains("devbuf") {
                 if export.is_some() {
                     return Err("kernel fns can't be exported to C yet".into());
                 }
@@ -1374,6 +1376,7 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if n == "Mmio" => format!("M{}", a[0]),
             Type::Con(n, a) if n == "Atomic" => format!("AT_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Chan" => format!("CH_{}", self.mangle(&a[0])?),
+            Type::Con(n, a) if n == "#DevBuf" => format!("DV_{}", a.first().map_or("X".to_string(), |e| e.to_string())),
             Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n) => format!("N_{n}"),
             Type::Con(n, a) if self.layouts.records.contains_key(n) || self.layouts.sums.contains_key(n) => {
                 let kind = if self.layouts.records.contains_key(n) { "R" } else { "S" };
@@ -1480,6 +1483,12 @@ impl<'a> Cx<'a> {
             Type::Con(n, _) if n == "Ptr" || n == "Mmio" => Ok("int64_t".into()),
             Type::Con(n, _) if n == "Atomic" => Ok("SsAtom*".into()),
             Type::Con(n, _) if n == "Chan" => Ok("SsChan*".into()),
+            Type::Con(n, _) if n == "#DevBuf" => {
+                if self.helpers_done.insert("devbuf".into()) {
+                    writeln!(self.fwd, "typedef struct SsDev SsDev;").unwrap();
+                }
+                Ok("SsDev*".into())
+            }
             Type::Con(n, a) if n == "List" => {
                 self.fwd_decl(&m);
                 if self.complete.insert(m.clone()) {
@@ -2466,6 +2475,7 @@ impl<'a> Cx<'a> {
                     }
                     "drop" | "leak" | "alloc" | "free" | "null" if self.sys && self.lookup(n).is_none() && !self.check.fn_types.contains_key(n) => self.sys_builtin(n, args, &t),
                     _ if self.bare && sspur_check::BARE_NAMES.contains(&n.as_str()) && self.lookup(n).is_none() && !self.check.fn_types.contains_key(n) => self.bare_builtin(n, args),
+                    _ if self.lookup(n).is_none() && self.check.kernels.contains_key(n) && self.fn_def(n).is_some_and(|f| f.kernel.is_some()) => self.kernel_call(n, args),
                     _ => {
                         let mut vals = Vec::new();
                         for (i, a) in args.iter().enumerate() {
@@ -3285,6 +3295,9 @@ impl<'a> Cx<'a> {
         }
         if matches!(&rt, Type::Con(n, _) if n == "Atomic" || n == "Chan") {
             return self.conc_method(&r, &rt, name, args, t);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "#DevBuf") {
+            return self.dev_method(&r, &rt, name, t);
         }
         if is(&rt, "Str") {
             return self.str_method(&r, name, args, t);

@@ -1,4 +1,6 @@
 use crate::{trap, value::Value, R};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use sspur_check::kernel::{KExpr, KFn, KIntr, KStmt, KTy, Kernel};
 use sspur_syntax::{printer, BinOp, FnDef};
 
@@ -301,4 +303,42 @@ pub fn call(f: KFn, t: KTy, a: KV, b: Option<KV>) -> R<KV> {
         (KFn::Round, KV::D(x)) => KV::D(x.round()),
         (_, v) => v,
     })
+}
+
+pub struct DevCell {
+    pub id: u64,
+    pub ty: KTy,
+    pub data: RefCell<Vec<KV>>,
+}
+
+thread_local! {
+    static DEV_IDS: Cell<u64> = const { Cell::new(0) };
+}
+
+pub fn dev_new(name: &str, xs: &Value) -> R<Value> {
+    let ty = match name {
+        "dev_f32" => KTy::F32,
+        "dev_f64" => KTy::F64,
+        "dev_i32" => KTy::I32,
+        "dev_u32" => KTy::U32,
+        _ => KTy::Int,
+    };
+    let Value::List(xs) = xs else { return trap(format!("{name} expects a list")) };
+    let mut data = Vec::with_capacity(xs.len());
+    for (j, x) in xs.iter().enumerate() {
+        data.push(to_kv(ty, x, &|| format!("element {j} of {name}"))?);
+    }
+    let id = DEV_IDS.with(|c| {
+        c.set(c.get() + 1);
+        c.get()
+    });
+    Ok(Value::Dev(Rc::new(DevCell { id, ty, data: RefCell::new(data) })))
+}
+
+pub fn dev_method(name: &str, d: &DevCell, a: &[Value]) -> R<Value> {
+    match (name, a) {
+        ("len", []) => Ok(Value::Int(d.data.borrow().len() as i64)),
+        ("to_list", []) => Ok(Value::list(d.data.borrow().iter().map(|x| from_kv(*x)).collect())),
+        _ => trap(format!("no method '{name}' on DevBuf")),
+    }
 }

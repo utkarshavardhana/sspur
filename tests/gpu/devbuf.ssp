@@ -1,0 +1,65 @@
+kernel fn saxpy(a: F32, x: &[F32], y: &mut [F32]) @grid(y.len, 256)
+= y[gid] := a * x[gid] + y[gid]
+
+kernel fn bump(m: &mut [I32]) @grid(m.len, 64)
+= m[gid] := m[gid] + 1
+
+kernel fn half(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := x[gid] * 0.5
+
+fn steps(n: Int, k: Int) -> List[F64] ! dev
+= do
+  x = dev_f32((0..n).map(i => i.to_f64))
+  y = dev_f32((0..n).map(i => 1.0))
+  for r in 0..k
+    saxpy(0.5, &x, &mut y)
+  y.to_list
+
+fn mixed(n: Int) -> List[F64] ! dev
+= do
+  x = dev_f32((0..n).map(i => i.to_f64 * 3.0))
+  var ys = (0..n).map(i => 0.0)
+  half(&x, &mut ys)
+  y = dev_f32(ys)
+  half(&x, &mut y)
+  ys + y.to_list
+
+fn aliased() -> Int ! dev
+= do
+  b = dev_f32([1.0, 2.0])
+  c = b
+  half(&b, &mut c)
+  c.len
+
+fn shared(n: Int) -> List[Int] ! dev
+= do
+  m = dev_i32((0..n).map(i => i * 2))
+  alias = m
+  bump(&mut m)
+  bump(&mut alias)
+  m.to_list
+
+fn badbuf() -> Int ! dev
+= do
+  b = dev_i32([1, 5000000000])
+  b.len
+
+fn wrap(n: Int) -> List[Int] ! dev
+= do
+  m = dev_i32((0..n).map(i => 2147483646 + i % 2))
+  bump(&mut m)
+  bump(&mut m)
+  m.to_list
+
+test steps_ok = steps(1000, 4)[999] == 1.0 + 4.0 * 0.5 * 999.0
+test mixed_ok = mixed(4) == [0.0, 1.5, 3.0, 4.5, 0.0, 1.5, 3.0, 4.5]
+test shared_ok = shared(3) == [2, 4, 6]
+test alias_trap = aliased() == 2
+test badbuf_trap = badbuf() == 2
+test wrap_trap = wrap(4).len == 4
+
+fn main() ! dev, log
+= do
+  log("{steps(100000, 10).sum}")
+  log("{mixed(5)}")
+  log("{shared(4)}")

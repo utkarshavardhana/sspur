@@ -255,6 +255,7 @@ impl Interp {
             "empty_set" => Value::Set(Rc::new(BTreeSet::new())),
             "empty_heap" => Value::Heap(Rc::new(Vec::new())),
             "str_buf" => Value::str(""),
+            "dev_f32" | "dev_f64" | "dev_i32" | "dev_u32" | "dev_int" => crate::kernel::dev_new(n, &a[0])?,
             "range" => {
                 let (st, en, step) = (int(&a[0])? as i128, int(&a[1])? as i128, int(&a[2])? as i128);
                 if step == 0 {

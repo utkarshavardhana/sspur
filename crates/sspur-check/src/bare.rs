@@ -65,6 +65,7 @@ impl Cx<'_> {
                 "Map" => Some("maps need the GC heap; bare code has none".into()),
                 "Res" | "Guess" => Some(format!("{n} values need the app runtime")),
                 "Atomic" | "Chan" => Some(format!("{n} needs the thread runtime")),
+                "#DevBuf" => Some("device buffers need the GPU runtime".into()),
                 "#Time" | "#Duration" => Some(format!("{} values need the app runtime", &n[1..])),
                 "#Set" | "#Heap" | "#StrBuf" | "#Bits" | "#HashMap" | "#HashSet" | "#BigInt" | "#Dec" | "#Regex" => Some(format!("{} values need the GC heap; bare code has none", &n[1..])),
                 "Opt" | "Secret" | "Pii" | "Untrusted" => a.iter().find_map(|x| self.type_why(x, depth + 1)),

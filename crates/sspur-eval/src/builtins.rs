@@ -99,6 +99,7 @@ impl Interp {
             Value::Big(b) => crate::stdbig::big_method(name, &b, &a),
             Value::Regex(r) => crate::stdre::method(name, &r, &a),
             Value::Dec(m, s) => crate::stdbig::dec_method(name, &m, s, &a),
+            Value::Dev(d) => crate::kernel::dev_method(name, &d, &a),
             Value::Atomic(c) => Ok(match name {
                 "load" => Value::Int(c.v.get()),
                 "store" => {

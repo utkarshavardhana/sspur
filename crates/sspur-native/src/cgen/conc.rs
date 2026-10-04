@@ -6,7 +6,7 @@ pub(super) fn opaque(l: &Layouts, t: &Type) -> bool {
     let mut stack = vec![t.clone()];
     while let Some(t) = stack.pop() {
         match t {
-            Type::Con(n, _) if n == "Atomic" || n == "Chan" => return true,
+            Type::Con(n, _) if n == "Atomic" || n == "Chan" || n == "#DevBuf" => return true,
             Type::Con(n, a) => {
                 if seen.insert(format!("{n}{a:?}")) {
                     if let Some(fs) = l.record_fields(&n, &a) {

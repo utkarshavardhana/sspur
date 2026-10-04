@@ -523,71 +523,118 @@ static void ss_trace(const char* k, const char* how, int64_t n) {
     if (ss_trace_on) fprintf(stderr, "gpu %s: %s, %lld threads\n", k, how, (long long)n);
 }
 static void __attribute__((noinline, cold, noreturn)) dev_fail(Status* st, int64_t f, const char* a, int64_t j, const char* b, int64_t v) {
-    char* p = (char*)malloc(strlen(a) + strlen(b) + 64);
-    if (j >= 0) sprintf(p, "%s%lld%s%lld)", a, (long long)j, b, (long long)v); else sprintf(p, "%s%s%lld)", a, b, (long long)v);
+    char* p = (char*)malloc(strlen(a) + (b ? strlen(b) : 0) + 64);
+    if (j >= 0) sprintf(p, "%s%lld%s%lld)", a, (long long)j, b, (long long)v); else if (b) sprintf(p, "%s%s%lld)", a, b, (long long)v); else strcpy(p, a);
     st->rbuf = (int64_t*)p; st->rlen = (int64_t)strlen(p);
     sspur_trap(st, 12, f, 0, 0);
 }
 static inline int ss_sub32(float x) { return x != 0.0f && fabsf(x) < 1.17549435e-38f; }
 static inline double ss_canon(double x) { return x != x ? NAN : x; }
+struct SsDev { int64_t len, es; void* host; void* dev; struct SsDev* next; };
+static struct SsDev* ss_devs;
+static void ss_dev_reset(void) {
+    while (ss_devs) { struct SsDev* d = ss_devs; ss_devs = d->next; if (d->dev) ss_gpu_free(d->dev); else free(d->host); free(d); }
+}
+static struct SsDev* ss_dev_alloc(int64_t n, int64_t es) {
+    struct SsDev* d = (struct SsDev*)calloc(1, sizeof(struct SsDev));
+    d->len = n; d->es = es;
+    if (ss_gpu_ready()) d->dev = ss_gpu_alloc(n * es, &d->host);
+    if (!d->dev) d->host = calloc((size_t)(n ? n : 1), (size_t)es);
+    d->next = ss_devs; ss_devs = d;
+    ss_reset_hook = ss_dev_reset;
+    return d;
+}
 "#;
 
+fn es(t: KTy) -> usize {
+    if matches!(t, KTy::F32 | KTy::I32 | KTy::U32) { 4 } else { 8 }
+}
+
+fn dev_elem(t: &Type) -> KTy {
+    match t {
+        Type::Con(_, a) => match a.first() {
+            Some(Type::Con(e, _)) => KTy::from_name(e).unwrap_or(KTy::Int),
+            _ => KTy::Int,
+        },
+        _ => KTy::Int,
+    }
+}
+
 impl Cx<'_> {
-    pub(super) fn kernel_fn(&mut self, f: &FnDef, params: &[Type], ret: &Type, fidx: usize, k: &Kernel) -> G {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn kernel_fn(&mut self, f: &FnDef, params: &[Type], ret: &Type, fidx: usize, k: &Kernel, devs: &[bool], cname: &str) -> G {
         let rr = self.rr(ret)?;
+        let dev = |i: usize| devs.get(i).copied().unwrap_or(false);
         let mut sig = Vec::new();
         for (i, (t, p)) in params.iter().zip(&f.params).enumerate() {
+            if dev(i) {
+                sig.push(format!("SsDev* a{i}"));
+                continue;
+            }
             let star = if is_mut_borrow(&p.ty) { "*" } else { "" };
             sig.push(format!("{}{star} a{i}", self.cty(t)?));
         }
         sig.push("Status* st".into());
         sig.push("int64_t depth".into());
         let name = &f.name;
-        let mut s = format!("#define FIDX {fidx}\nstatic {rr} f_{name}({}) {{\n  (void)depth;\n", sig.join(", "));
+        let mut s = format!("#define FIDX {fidx}\nstatic {rr} f_{cname}({}) {{\n  (void)depth;\n", sig.join(", "));
+        for (j, q) in k.params.iter().enumerate() {
+            for (i, p) in k.params.iter().enumerate().take(j) {
+                if dev(i) && dev(j) && (p.slice == Some(true) || q.slice == Some(true)) {
+                    let m = c_lit(&format!("dev: arguments {} and {} of {name} are the same buffer", p.name, q.name));
+                    writeln!(s, "  if (UNLIKELY(a{i} == a{j})) dev_fail(st, FIDX, {m}, -1, 0, 0);").unwrap();
+                }
+            }
+        }
         let mut gargs = Vec::new();
         let mut cargs = Vec::new();
         let mut back = String::new();
+        let mut save = String::new();
+        let mut restore = String::new();
         for (i, (p, t)) in k.params.iter().zip(params).enumerate() {
             let src = if is_mut_borrow(&f.params[i].ty) { format!("(*a{i})") } else { format!("a{i}") };
-            match p.slice {
-                None => {
-                    let c = scalar_c(p.ty);
-                    if let Some((lo, hi)) = matches!(p.ty, KTy::I32 | KTy::U32).then(|| p.ty.range()) {
-                        writeln!(s, "  if (UNLIKELY({src} < {lo}LL || {src} > {hi}LL)) dev_fail(st, FIDX, \"dev: argument {} of {name} is out of range for {} (value = \", -1, \"\", {src});", p.name, p.ty.name()).unwrap();
-                    }
-                    writeln!(s, "  {c} p{i} = ({c}){src};").unwrap();
-                    let bytes = if p.ty == KTy::F32 { 4 } else { 8 };
-                    gargs.push(format!("{{0, 0, &p{i}, {bytes}, 0}}"));
-                    cargs.push(format!("p{i}"));
+            let Some(m) = p.slice else {
+                let c = scalar_c(p.ty);
+                if let Some((lo, hi)) = matches!(p.ty, KTy::I32 | KTy::U32).then(|| p.ty.range()) {
+                    writeln!(s, "  if (UNLIKELY({src} < {lo}LL || {src} > {hi}LL)) dev_fail(st, FIDX, \"dev: argument {} of {name} is out of range for {} (value = \", -1, \"\", {src});", p.name, p.ty.name()).unwrap();
                 }
-                Some(m) => {
-                    let e = elem_c(p.ty, Tgt::C);
-                    let es = if matches!(p.ty, KTy::F32 | KTy::I32 | KTy::U32) { 4 } else { 8 };
-                    writeln!(s, "  int64_t l{i} = {src}.len;").unwrap();
-                    match p.ty {
-                        KTy::F64 | KTy::Int if !m => writeln!(s, "  const {e}* p{i} = (const {e}*){src}.data;").unwrap(),
-                        KTy::F64 | KTy::Int => writeln!(s, "  {e}* p{i} = ({e}*)sspur_alloc_atomic((size_t)(l{i} ? l{i} : 1) * 8); if (l{i}) memcpy(p{i}, {src}.data, (size_t)l{i} * 8);").unwrap(),
-                        KTy::F32 => writeln!(s, "  float* p{i} = (float*)sspur_alloc_atomic((size_t)(l{i} ? l{i} : 1) * 4); for (int64_t j_ = 0; j_ < l{i}; j_++) p{i}[j_] = (float){src}.data[j_];").unwrap(),
-                        _ => {
-                            let (lo, hi) = p.ty.range();
-                            writeln!(s, "  {e}* p{i} = ({e}*)sspur_alloc_atomic((size_t)(l{i} ? l{i} : 1) * 4); for (int64_t j_ = 0; j_ < l{i}; j_++) {{ int64_t v_ = {src}.data[j_]; if (UNLIKELY(v_ < {lo}LL || v_ > {hi}LL)) dev_fail(st, FIDX, \"dev: element \", j_, \" of {} is out of range for {} (value = \", v_); p{i}[j_] = ({e})v_; }}", p.name, p.ty.name()).unwrap();
-                        }
+                writeln!(s, "  {c} p{i} = ({c}){src};").unwrap();
+                let bytes = if p.ty == KTy::F32 { 4 } else { 8 };
+                gargs.push(format!("{{0, 0, &p{i}, {bytes}, 0}}"));
+                cargs.push(format!("p{i}"));
+                continue;
+            };
+            let e = elem_c(p.ty, Tgt::C);
+            let es = es(p.ty);
+            if dev(i) {
+                writeln!(s, "  int64_t l{i} = a{i}->len; {e}* p{i} = ({e}*)a{i}->host;").unwrap();
+                gargs.push(format!("a{i}->dev ? (SsGpuArg){{3, 0, p{i}, l{i} * {es}, a{i}->dev}} : (SsGpuArg){{{}, 0, p{i}, l{i} * {es}, 0}}", if m { 2 } else { 1 }));
+                if m {
+                    writeln!(save, "      void* bk{i} = 0; if (a{i}->dev) {{ bk{i} = sspur_alloc_atomic((size_t)(l{i} ? l{i} : 1) * {es}); memcpy(bk{i}, p{i}, (size_t)l{i} * {es}); }}").unwrap();
+                    writeln!(restore, "      if (r_ && bk{i}) memcpy(p{i}, bk{i}, (size_t)l{i} * {es});").unwrap();
+                }
+            } else {
+                writeln!(s, "  int64_t l{i} = {src}.len;").unwrap();
+                match p.ty {
+                    KTy::F64 | KTy::Int if !m => writeln!(s, "  const {e}* p{i} = (const {e}*){src}.data;").unwrap(),
+                    KTy::F64 | KTy::Int => writeln!(s, "  {e}* p{i} = ({e}*)sspur_alloc_atomic((size_t)(l{i} ? l{i} : 1) * 8); if (l{i}) memcpy(p{i}, {src}.data, (size_t)l{i} * 8);").unwrap(),
+                    KTy::F32 => writeln!(s, "  float* p{i} = (float*)sspur_alloc_atomic((size_t)(l{i} ? l{i} : 1) * 4); for (int64_t j_ = 0; j_ < l{i}; j_++) p{i}[j_] = (float){src}.data[j_];").unwrap(),
+                    _ => {
+                        let (lo, hi) = p.ty.range();
+                        writeln!(s, "  {e}* p{i} = ({e}*)sspur_alloc_atomic((size_t)(l{i} ? l{i} : 1) * 4); for (int64_t j_ = 0; j_ < l{i}; j_++) {{ int64_t v_ = {src}.data[j_]; if (UNLIKELY(v_ < {lo}LL || v_ > {hi}LL)) dev_fail(st, FIDX, \"dev: element \", j_, \" of {} is out of range for {} (value = \", v_); p{i}[j_] = ({e})v_; }}", p.name, p.ty.name()).unwrap();
                     }
-                    gargs.push(format!("{{{}, 0, p{i}, l{i} * {es}, 0}}", if m { 2 } else { 1 }));
-                    gargs.push(format!("{{0, 0, &l{i}, 8, 0}}"));
-                    cargs.push(format!("p{i}"));
-                    cargs.push(format!("l{i}"));
-                    if m {
-                        let lc = self.cty(t)?;
-                        let ec = if p.ty.is_float() { "double" } else { "int64_t" };
-                        let conv = match p.ty {
-                            KTy::F32 | KTy::F64 => format!("ss_canon((double)p{i}[j_])"),
-                            _ => format!("(int64_t)p{i}[j_]"),
-                        };
-                        writeln!(back, "  {{ RawL r_ = raw_alloc_a(l{i}, 8, 1); {ec}* d_ = ({ec}*)r_.data; for (int64_t j_ = 0; j_ < l{i}; j_++) d_[j_] = {conv}; r_.hdr[1] = l{i}; *a{i} = ({lc}){{l{i}, d_, r_.hdr}}; }}").unwrap();
-                    }
+                }
+                gargs.push(format!("{{{}, 0, p{i}, l{i} * {es}, 0}}", if m { 2 } else { 1 }));
+                if m {
+                    let lc = self.cty(t)?;
+                    let ec = if p.ty.is_float() { "double" } else { "int64_t" };
+                    let conv = if p.ty.is_float() { format!("ss_canon((double)p{i}[j_])") } else { format!("(int64_t)p{i}[j_]") };
+                    writeln!(back, "  {{ RawL r_ = raw_alloc_a(l{i}, 8, 1); {ec}* d_ = ({ec}*)r_.data; for (int64_t j_ = 0; j_ < l{i}; j_++) d_[j_] = {conv}; r_.hdr[1] = l{i}; *a{i} = ({lc}){{l{i}, d_, r_.hdr}}; }}").unwrap();
                 }
             }
+            gargs.push(format!("{{0, 0, &l{i}, 8, 0}}"));
+            cargs.push(format!("p{i}"));
+            cargs.push(format!("l{i}"));
         }
         let mut em = Em::new(k, Tgt::C, 1);
         for (i, pre) in k.pres.iter().enumerate() {
@@ -605,7 +652,12 @@ impl Cx<'_> {
             writeln!(s, "    kc_{name}({}, ss_n, st);", cargs.join(", ")).unwrap();
         } else {
             writeln!(s, "    int r_ = 2;").unwrap();
-            writeln!(s, "    if (ss_gpu_ready(){}) {{ SsGpuArg g_[] = {{{}}}; r_ = ss_gpu_run(ss_msl, \"k_{name}\", {}, g_, ss_n, {}); }}", sub.concat(), gargs.join(", "), gargs.len(), k.group).unwrap();
+            writeln!(s, "    if (ss_gpu_ready(){}) {{", sub.concat()).unwrap();
+            s.push_str(&save);
+            writeln!(s, "      SsGpuArg g_[] = {{{}}};", gargs.join(", ")).unwrap();
+            writeln!(s, "      r_ = ss_gpu_run(ss_msl, \"k_{name}\", {}, g_, ss_n, {});", gargs.len(), k.group).unwrap();
+            s.push_str(&restore);
+            writeln!(s, "    }}").unwrap();
             writeln!(s, "    ss_trace(\"{name}\", r_ == 0 ? \"metal\" : r_ == 1 ? \"cpu rerun (trap or subnormal)\" : \"cpu\", ss_n);").unwrap();
             writeln!(s, "    if (r_) kc_{name}({}, ss_n, st);", cargs.join(", ")).unwrap();
         }
@@ -613,5 +665,70 @@ impl Cx<'_> {
         s.push_str(&back);
         writeln!(s, "  return ({rr}){{0, 0}};\n}}\n#undef FIDX").unwrap();
         Ok(s)
+    }
+
+    pub(super) fn kernel_call(&mut self, name: &str, args: &[Expr]) -> G {
+        let k = self.check.kernels.get(name).cloned().ok_or("unknown kernel")?;
+        let f = self.fn_def(name).cloned().ok_or("unknown kernel")?;
+        let mut vals = Vec::new();
+        let mut devs = Vec::new();
+        for (a, p) in args.iter().zip(&k.params) {
+            let place = match &a.kind {
+                ExprKind::Unary(UnOp::Ref | UnOp::RefMut, x) if p.slice.is_some() => &**x,
+                _ => a,
+            };
+            let dev = p.slice.is_some() && matches!(self.ty(place)?, Type::Con(n, _) if n == "#DevBuf");
+            devs.push(dev);
+            let v = self.expr(place)?;
+            vals.push(if p.slice == Some(true) && !dev { format!("&({v})") } else { v });
+        }
+        let cname = if devs.contains(&true) { format!("{name}__{}", devs.iter().map(|d| if *d { 'D' } else { 'L' }).collect::<String>()) } else { name.to_string() };
+        if cname != name && self.helpers_done.insert(format!("kernel {cname}")) {
+            let (params, ret) = self.check.fn_types.get(name).cloned().ok_or("kernel has no type")?;
+            let fidx = *self.fn_index.get(name).ok_or("kernel has no index")?;
+            let code = self.kernel_fn(&f, &params, &ret, fidx, &k, &devs, &cname)?;
+            let proto = code.lines().nth(1).ok_or("empty kernel wrapper")?.trim_end_matches(" {").to_string();
+            writeln!(self.protos, "{proto};").unwrap();
+            self.helpers_late.push_str(&code);
+        }
+        let mut s = String::from("({ ");
+        let mut names = Vec::new();
+        for v in vals {
+            let t = self.fresh("ka");
+            write!(s, "__auto_type {t} = {v}; ").unwrap();
+            names.push(t);
+        }
+        let call: String = names.iter().map(|n| format!("{n}, ")).collect();
+        write!(s, "f_{cname}({call}st, depth).v; }})").unwrap();
+        Ok(s)
+    }
+
+    pub(super) fn dev_new(&mut self, n: &str, list: &str, t: &Type) -> G {
+        let kt = dev_elem(t);
+        let e = elem_c(kt, Tgt::C);
+        let es = es(kt);
+        let fill = match kt {
+            KTy::F32 => "h_[j_] = (float)l_.data[j_];".to_string(),
+            KTy::F64 | KTy::Int => format!("h_[j_] = ({e})l_.data[j_];"),
+            _ => {
+                let (lo, hi) = kt.range();
+                format!("int64_t v_ = l_.data[j_]; if (UNLIKELY(v_ < {lo}LL || v_ > {hi}LL)) dev_fail(st, FIDX, \"dev: element \", j_, \" of {n} is out of range for {} (value = \", v_); h_[j_] = ({e})v_;", kt.name())
+            }
+        };
+        Ok(format!("({{ __auto_type l_ = {list}; SsDev* d_ = ss_dev_alloc(l_.len, {es}); {e}* h_ = ({e}*)d_->host; for (int64_t j_ = 0; j_ < l_.len; j_++) {{ {fill} }} d_; }})"))
+    }
+
+    pub(super) fn dev_method(&mut self, r: &str, rt: &Type, name: &str, t: &Type) -> G {
+        match name {
+            "len" => Ok(format!("(({r})->len)")),
+            "to_list" => {
+                let kt = dev_elem(rt);
+                let lc = self.cty(t)?;
+                let e = elem_c(kt, Tgt::C);
+                let (oc, conv) = if kt.is_float() { ("double", "ss_canon((double)h_[j_])") } else { ("int64_t", "(int64_t)h_[j_]") };
+                Ok(format!("({{ SsDev* d_ = {r}; {e}* h_ = ({e}*)d_->host; RawL r_ = raw_alloc_a(d_->len, 8, 1); {oc}* o_ = ({oc}*)r_.data; for (int64_t j_ = 0; j_ < d_->len; j_++) o_[j_] = {conv}; r_.hdr[1] = d_->len; ({lc}){{d_->len, o_, r_.hdr}}; }})"))
+            }
+            _ => Err(format!("uses DevBuf.{name}")),
+        }
     }
 }

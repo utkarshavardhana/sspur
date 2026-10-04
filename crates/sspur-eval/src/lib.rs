@@ -453,17 +453,36 @@ impl Interp {
                 ExprKind::Unary(UnOp::Ref | UnOp::RefMut, x) => &**x,
                 _ => a,
             };
+            let v = self.eval(place, env)?;
             if p.slice == Some(true)
+                && !matches!(v, Value::Dev(_))
                 && let ExprKind::Name(n) = &place.kind
                 && let Some(c) = env.cell(n)
             {
                 cells.push((i, c));
             }
-            vals.push(self.eval(place, env)?);
+            vals.push(v);
         }
+        for (i, (v, p)) in vals.iter().zip(&k.params).enumerate() {
+            for (w, q) in vals.iter().zip(&k.params).take(i) {
+                if let (Value::Dev(a), Value::Dev(b)) = (v, w)
+                    && Rc::ptr_eq(a, b)
+                    && (p.slice == Some(true) || q.slice == Some(true))
+                {
+                    return trap(format!("dev: arguments {} and {} of {} are the same buffer", q.name, p.name, f.name));
+                }
+            }
+        }
+        let mut devs = Vec::new();
         let mut kargs = Vec::with_capacity(vals.len());
-        for (v, p) in vals.iter().zip(&k.params) {
+        for (i, (v, p)) in vals.iter().zip(&k.params).enumerate() {
             kargs.push(match (p.slice, v) {
+                (Some(m), Value::Dev(d)) => {
+                    if m {
+                        devs.push((i, d.clone()));
+                    }
+                    kernel::Arg::Slice(d.data.borrow().clone())
+                }
                 (None, v) => kernel::Arg::Scalar(kernel::to_kv(p.ty, v, &|| format!("argument {} of {}", p.name, f.name))?),
                 (Some(_), Value::List(xs)) => {
                     let mut out = Vec::with_capacity(xs.len());
@@ -476,6 +495,11 @@ impl Interp {
             });
         }
         kernel::run(f, &k, &mut kargs)?;
+        for (i, d) in devs {
+            if let kernel::Arg::Slice(xs) = &mut kargs[i] {
+                *d.data.borrow_mut() = std::mem::take(xs);
+            }
+        }
         for (i, c) in cells {
             if let kernel::Arg::Slice(xs) = &kargs[i] {
                 *c.borrow_mut() = Value::list(xs.iter().map(|x| kernel::from_kv(*x)).collect());

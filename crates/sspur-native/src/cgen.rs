@@ -974,6 +974,13 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
         cx.sys = matches!(m.profile.as_deref(), Some("sys" | "bare"));
         cx.bare = m.profile.as_deref() == Some("bare");
         cx.target = target.map(str::to_string);
+        for d in &m.defs {
+            if let Def::Static(s) = d
+                && let Some(t) = check.expr_types.get(&expr_key(&s.init))
+            {
+                cx.statics.insert(s.name.clone(), t.clone());
+            }
+        }
         cx.generics = generic_defs.iter().filter(|(n, _)| ok.contains(*n)).map(|(n, f)| (n.clone(), f.clone())).collect();
         cx.fn_index = index.clone();
         cx.all_fns = defs.iter().map(|f| (f.name.clone(), (*f).clone())).collect();
@@ -1028,6 +1035,15 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
             src.push_str(&cx.fwd);
             src.push_str(&cx.defs);
             src.push_str(&cx.protos);
+            for d in &m.defs {
+                if let Def::Static(s) = d {
+                    let v = static_init(&s.init);
+                    match cx.statics.get(&s.name).and_then(array_len) {
+                        Some(l) => writeln!(src, "static volatile int64_t st_{}[{}] = {{[0 ... {}] = {v}LL}};", s.name, l.max(1), l.max(1) - 1).unwrap(),
+                        None => writeln!(src, "static volatile int64_t st_{} = {v}LL;", s.name).unwrap(),
+                    }
+                }
+            }
             for f in defs.iter().filter(|f| f.tparams.is_empty()) {
                 let (params, ret, _) = &plan_fns[&f.name];
                 let ps: Vec<String> = params.iter().zip(&f.params).map(|(t, p)| cx.cty(t).map(|c| if is_mut_borrow(&p.ty) { format!("{c}*") } else { c })).collect::<G<_>>()?;
@@ -1148,7 +1164,7 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
 }
 
 fn precheck(f: &FnDef, bare: bool) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe" | "fs" | "io" | "time" | "env" | "proc" | "dev") && !(bare && e.name == "mmio") && !f.tparams.iter().any(|p| p.name == e.name)) {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe" | "fs" | "io" | "time" | "env" | "proc" | "dev") && !(bare && (e.name == "mmio" || e.name == "static")) && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())
@@ -1329,6 +1345,23 @@ fn lit(n: i64) -> String {
     if n == i64::MIN { "INT64_MIN".into() } else { format!("{n}LL") }
 }
 
+fn array_len(t: &Type) -> Option<usize> {
+    match t {
+        Type::Con(n, a) if n == "Array" && a.len() == 2 => a[1].to_string().parse().ok(),
+        _ => None,
+    }
+}
+
+fn static_init(e: &Expr) -> i64 {
+    match &e.kind {
+        ExprKind::Int(n) => *n,
+        ExprKind::Bool(b) => i64::from(*b),
+        ExprKind::Unary(UnOp::Neg, x) => -static_init(x),
+        ExprKind::Method { recv, .. } => static_init(recv),
+        _ => 0,
+    }
+}
+
 fn is(t: &Type, name: &str) -> bool {
     matches!(t, Type::Con(n, a) if n == name && a.is_empty())
 }
@@ -1427,6 +1460,7 @@ struct Cx<'a> {
     err_ids: Vec<i64>,
     refine_used: HashMap<i64, String>,
     err_used: HashMap<i64, String>,
+    statics: HashMap<String, Type>,
 }
 
 impl<'a> Cx<'a> {
@@ -1495,6 +1529,7 @@ impl<'a> Cx<'a> {
             err_ids: Vec::new(),
             refine_used: HashMap::new(),
             err_used: HashMap::new(),
+            statics: HashMap::new(),
         }
     }
 
@@ -1557,6 +1592,7 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if matches!(n.as_str(), "Secret" | "Pii" | "Untrusted") => format!("W{}_{}", &n[..1], self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Guess" => format!("G_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Ptr" => format!("P_{}", self.mangle(&a[0])?),
+            Type::Con(n, a) if n == "Array" => format!("A{}_{}", a[1], self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Mmio" => format!("M{}", a[0]),
             Type::Con(n, a) if n == "Atomic" => format!("AT_{}", self.mangle(&a[0])?),
             Type::Con(n, a) if n == "Chan" => format!("CH_{}", self.mangle(&a[0])?),
@@ -1678,6 +1714,17 @@ impl<'a> Cx<'a> {
                 if self.complete.insert(m.clone()) {
                     let e = self.decl(&a[0])?;
                     writeln!(self.defs, "struct {m} {{ int64_t len; {e}* data; int64_t* hdr; }};").unwrap();
+                }
+                Ok(m)
+            }
+            Type::Con(n, a) if n == "Array" => {
+                self.fwd_decl(&m);
+                if !self.complete.contains(&m) {
+                    let e = self.cty(&a[0])?;
+                    let len: usize = a[1].to_string().parse().unwrap_or(0);
+                    if self.complete.insert(m.clone()) {
+                        writeln!(self.defs, "struct {m} {{ {e} v[{}]; }};", len.max(1)).unwrap();
+                    }
                 }
                 Ok(m)
             }
@@ -2598,6 +2645,26 @@ impl<'a> Cx<'a> {
             ExprKind::Name(n) if matches!(t, Type::Fn(..)) && self.check.fn_types.contains_key(n) => self.fn_value(n, &t),
             ExprKind::Lambda { params, body, .. } => self.closure(params, body, &t),
             ExprKind::Name(n) => self.variant(n, &[], &t),
+            ExprKind::Field(x, f) if self.static_name(x).is_some() => self.static_access(x, f, &[]),
+            ExprKind::Method { recv, name, args, .. } if self.static_name(recv).is_some() => self.static_access(recv, name, args),
+            ExprKind::Method { recv, name, .. } if name == "#array" => {
+                let ct = self.cty(&t)?;
+                let n = array_len(&t).ok_or("array literal without an array type")?;
+                let v = self.expr(recv)?;
+                let (ar, av) = (self.fresh("ar"), self.fresh("av"));
+                Ok(format!("({{ {ct} {ar}; __auto_type {av} = {v}; for (int64_t k_ = 0; k_ < {n}; k_++) {ar}.v[k_] = {av}; {ar}; }})"))
+            }
+            ExprKind::Field(x, f) if f == "len" && self.ty(x).ok().and_then(|xt| array_len(&xt)).is_some() => Ok(format!("{}LL", array_len(&self.ty(x)?).unwrap())),
+            ExprKind::Index(a, i) if self.ty(a).ok().and_then(|xt| array_len(&xt)).is_some() => {
+                let n = array_len(&self.ty(a)?).unwrap();
+                let (av, iv) = (self.expr(a)?, self.expr(i)?);
+                let k = self.fresh("ai");
+                if matches!(a.kind, ExprKind::Name(_)) {
+                    return Ok(format!("({{ int64_t {k} = {iv}; if (UNLIKELY({k} < 0 || {k} >= {n})) TRAPV({T_INDEX}, {n}, {k}); ({av}).v[{k}]; }})"));
+                }
+                let r = self.fresh("ar");
+                Ok(format!("({{ __auto_type {r} = {av}; int64_t {k} = {iv}; if (UNLIKELY({k} < 0 || {k} >= {n})) TRAPV({T_INDEX}, {n}, {k}); {r}.v[{k}]; }})"))
+            }
             ExprKind::Field(x, f) => {
                 let xt = self.ty(x)?;
                 if f == "raw" && matches!(&xt, Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n)) {
@@ -3457,6 +3524,51 @@ impl<'a> Cx<'a> {
             let dec = self.helper_dec(t)?;
             write!(s, "const int64_t* dp_ = ob_; __auto_type dr_ = {dec}(&dp_); free(ob_); dr_; }})").unwrap();
         }
+        Ok(s)
+    }
+
+    fn static_name<'e>(&self, x: &'e Expr) -> Option<&'e str> {
+        match &x.kind {
+            ExprKind::Name(n) if self.statics.contains_key(n) && self.lookup(n).is_none() => Some(n),
+            _ => None,
+        }
+    }
+
+    fn static_access(&mut self, x: &Expr, m: &str, args: &[Expr]) -> G {
+        let n = self.static_name(x).unwrap().to_string();
+        let st = self.statics[&n].clone();
+        let len = array_len(&st);
+        if let (Some(l), "len") = (len, m) {
+            return Ok(format!("{l}LL"));
+        }
+        if self.target.is_none() {
+            return Err("performs 'static'".into());
+        }
+        let mut s = String::from("({ ");
+        let mut vals = Vec::new();
+        for a in args {
+            let v = self.expr(a)?;
+            let k = self.fresh("sa");
+            write!(s, "int64_t {k} = {v}; ").unwrap();
+            vals.push(k);
+        }
+        let (p, rest) = match len {
+            Some(l) => {
+                let i = vals.first().ok_or("static array access without an index")?;
+                write!(s, "if (UNLIKELY({i} < 0 || {i} >= {l})) TRAPV({T_INDEX}, {l}, {i}); ").unwrap();
+                (format!("&st_{n}[{i}]"), &vals[1..])
+            }
+            None => (format!("&st_{n}"), &vals[..]),
+        };
+        let op = match (m, rest) {
+            ("load", []) => format!("ss_sload({p})"),
+            ("store", [v]) => format!("(ss_sstore({p}, {v}), 0LL)"),
+            ("swap", [v]) => format!("ss_sswap({p}, {v})"),
+            ("cas", [o, v]) => format!("ss_scas({p}, {o}, {v})"),
+            ("add", [d]) => format!("({{ if (UNLIKELY(ss_sadd({p}, {d}))) TRAPV({T_OVERFLOW}, 0, 0); 0LL; }})"),
+            _ => return Err(format!("unknown static access {n}.{m}")),
+        };
+        write!(s, "{op}; }})").unwrap();
         Ok(s)
     }
 
@@ -4323,6 +4435,13 @@ impl<'a> Cx<'a> {
                         records.push((n.clone(), lval.clone(), fs.clone()));
                         cur = fs.iter().find(|(x, _)| x == f).map(|(_, t)| t.clone()).ok_or("unknown field")?;
                         lval = format!("{lval}.{f}");
+                    }
+                    (PathSeg::Index(_), Type::Con(n, a)) if n == "Array" => {
+                        let l = array_len(&cur).unwrap_or(0);
+                        let k = key.clone().unwrap();
+                        write!(s, "if (UNLIKELY({k} < 0 || {k} >= {l})) TRAPV({T_INDEX}, {l}, {k}); ").unwrap();
+                        lval = format!("{lval}.v[{k}]");
+                        cur = a[0].clone();
                     }
                     (PathSeg::Index(_), _) => {
                         let et = elem(&cur, "List").ok_or("index into a non-list")?;

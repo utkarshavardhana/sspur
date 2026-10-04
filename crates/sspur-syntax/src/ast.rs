@@ -28,6 +28,7 @@ pub enum Def {
     Effect(EffectDef),
     Store(StoreDef),
     Svc(SvcDef),
+    Static(StaticDef),
 }
 
 impl Def {
@@ -39,6 +40,7 @@ impl Def {
             Def::Effect(e) => &e.name,
             Def::Store(s) => &s.name,
             Def::Svc(s) => &s.name,
+            Def::Static(s) => &s.name,
         }
     }
 
@@ -50,6 +52,7 @@ impl Def {
             Def::Effect(e) => e.span,
             Def::Store(s) => s.span,
             Def::Svc(s) => s.span,
+            Def::Static(s) => s.span,
         }
     }
 }
@@ -167,6 +170,14 @@ pub struct StoreDef {
     pub kind: String,
     pub key: Ty,
     pub val: Ty,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StaticDef {
+    pub name: String,
+    pub ty: Ty,
+    pub init: Expr,
     pub span: Span,
 }
 

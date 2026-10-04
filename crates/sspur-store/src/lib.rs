@@ -187,7 +187,7 @@ fn crash_point(at: &str) {
 
 fn def_rank(d: &Def) -> u8 {
     match d {
-        Def::Type(_) | Def::Effect(_) | Def::Store(_) => 0,
+        Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Static(_) => 0,
         Def::Fn(_) => 1,
         Def::Svc(_) | Def::Test(_) => 2,
     }
@@ -1270,6 +1270,7 @@ fn apply_op(op: &Json, defs: &mut Vec<Def>, reqs: &mut BTreeMap<String, Vec<Stri
                 let mut exprs: Vec<&mut Expr> = match d {
                     Def::Fn(f) => vec![&mut f.body],
                     Def::Test(t) => vec![&mut t.body],
+                    Def::Static(s) => vec![&mut s.init],
                     Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Svc(_) => vec![],
                 };
                 for e in exprs.iter_mut() {

@@ -3,6 +3,7 @@ mod builtins;
 pub mod own;
 mod deploy;
 mod json;
+mod statics;
 pub mod kernel;
 pub mod types;
 
@@ -58,6 +59,10 @@ pub struct CheckOutput {
 pub type ExprKey = (u32, u32, u8);
 pub type RecordTable = HashMap<String, (Vec<String>, Vec<(String, Type)>)>;
 pub type SumTable = HashMap<String, (Vec<String>, Vec<(String, Option<Vec<(String, Type)>>)>)>;
+
+fn static_hint(n: &str) -> String {
+    format!("use {n}.load, {n}.store(v), {n}.swap(v), {n}.add(d) or {n}.cas(old, new); arrays take an index first, as {n}.load(i)")
+}
 
 pub fn expr_key(e: &Expr) -> ExprKey {
     let tag = match &e.kind {
@@ -175,6 +180,7 @@ struct Checker {
     alias_stack: Vec<String>,
     sys: bool,
     bare: bool,
+    statics: HashMap<String, Type>,
     task_bases: Vec<usize>,
     task_depth: u32,
     cur_rparams: Vec<String>,
@@ -273,6 +279,7 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
         alias_stack: vec![],
         sys: matches!(m.profile.as_deref(), Some("sys" | "bare")),
         bare: m.profile.as_deref() == Some("bare"),
+        statics: HashMap::new(),
         task_bases: vec![],
         task_depth: 0,
         cur_rparams: vec![],
@@ -305,6 +312,11 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
         }
     }
     c.collect(m);
+    for d in &m.defs {
+        if let Def::Static(s) = d {
+            c.declare_static(s);
+        }
+    }
     if !c.device_fns.is_empty() || m.defs.iter().any(|d| matches!(d, Def::Fn(f) if f.kernel.is_some())) {
         c.fn_defs = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some((f.name.clone(), f.clone())) } else { None }).collect();
     }
@@ -323,7 +335,7 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
             Def::Test(t) if skip.contains(&t.name) => {}
             Def::Test(t) => c.check_test(t),
             Def::Type(t) => c.check_type_refines(t),
-            Def::Effect(_) | Def::Store(_) => {}
+            Def::Effect(_) | Def::Store(_) | Def::Static(_) => {}
             Def::Svc(sv) => c.check_svc(sv, m),
         }
         if matches!(d, Def::Fn(_) | Def::Test(_)) && !skip.contains(d.name()) {
@@ -389,6 +401,9 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
             hint: Some("the implemented profiles are 'app', 'sys' and 'bare'".into()),
             fix: vec![],
         });
+    }
+    if c.sys {
+        c.diags.extend(statics::check(m));
     }
     if c.bare {
         let tables = bare::Tables { exprs: &c.expr_types, fns: &fn_types, records: &records, sums: &sums, newtypes: &newtypes };
@@ -565,6 +580,18 @@ impl Checker {
                 Type::Fn(ps, Box::new(r), row)
             }
             Ty::Named { name, args, span } => {
+                if name == "Array" && !self.types.contains_key(name) && !self.tparams.contains(name) {
+                    if !self.sys {
+                        self.push_diag("E_PROFILE", "error", *span, "fixed arrays need 'profile sys' or 'profile bare'".into(), Some("add 'profile bare' or 'profile sys' as the first line".into()), vec![]);
+                    }
+                    return match args.as_slice() {
+                        [t, Ty::Named { name: n, args: a, .. }] if a.is_empty() && n.parse::<u32>().is_ok_and(|k| k <= 1 << 20) => Type::Con("Array".into(), vec![self.conv_ty_depth(t, depth), Type::con(n)]),
+                        _ => {
+                            self.err("E_TYPE_ARITY", *span, "Array takes an element type and a literal length, as in Array[Int, 8]".into());
+                            self.fresh()
+                        }
+                    };
+                }
                 let conv: Vec<Type> = args.iter().map(|x| self.conv_ty_depth(x, depth)).collect();
                 if self.tparams.contains(name) {
                     return Type::Param(name.clone());
@@ -1402,6 +1429,84 @@ impl Checker {
         Type::Con("Mmio".into(), vec![Type::con(&w)])
     }
 
+    fn is_static(&self, n: &str) -> bool {
+        self.statics.contains_key(n) && self.lookup(n).is_none()
+    }
+
+    fn declare_static(&mut self, s: &StaticDef) {
+        if !self.sys {
+            self.push_diag("E_PROFILE", "error", s.span, "static state needs 'profile sys' or 'profile bare'".into(), Some("add 'profile bare' as the first line".into()), vec![]);
+        }
+        let t = self.conv_ty(&s.ty);
+        let scalar = |t: &Type| matches!(t, Type::Con(n, a) if a.is_empty() && matches!(n.as_str(), "Int" | "Bool"));
+        let ok = scalar(&t) || matches!(&t, Type::Con(n, a) if n == "Array" && scalar(&a[0]));
+        if !ok {
+            self.push_diag("E_STATIC_TYPE", "error", s.span, format!("static '{}' has type {t}; statics hold Int, Bool or Array[Int|Bool, N]", s.name), None, vec![]);
+        }
+        let lit = |e: &Expr| match &e.kind {
+            ExprKind::Int(_) | ExprKind::Bool(_) => true,
+            ExprKind::Unary(UnOp::Neg, x) => matches!(x.kind, ExprKind::Int(_)),
+            _ => false,
+        };
+        let const_init = match &s.init.kind {
+            ExprKind::Method { recv, name, .. } if name == "#array" => lit(recv),
+            _ => lit(&s.init),
+        };
+        if !const_init {
+            self.push_diag("E_STATIC_INIT", "error", s.init.span, format!("static '{}' needs a constant initializer: a literal or [literal; N]", s.name), None, vec![]);
+        }
+        self.scopes.push(HashMap::new());
+        let it = self.infer(&s.init, Some(&t));
+        self.expect(&t, &it, s.init.span);
+        self.scopes.pop();
+        if self.statics.insert(s.name.clone(), t).is_some() || self.fns.contains_key(&s.name) {
+            self.push_diag("E_DUP_DEF", "error", s.span, format!("'{}' is defined twice", s.name), None, vec![]);
+        }
+    }
+
+    fn infer_static(&mut self, recv: &Expr, m: &str, args: &[Expr], span: Span) -> Type {
+        let ExprKind::Name(n) = &recv.kind else { unreachable!() };
+        let st = self.statics[n].clone();
+        let (elem, array) = match &st {
+            Type::Con(c, a) if c == "Array" => (a[0].clone(), true),
+            t => (t.clone(), false),
+        };
+        self.pending_types.push((expr_key(recv), st.clone()));
+        if array && m == "len" && args.is_empty() {
+            return Type::int();
+        }
+        self.add_effect("static".into(), span, None);
+        let idx = usize::from(array);
+        let shape: Option<(Vec<Type>, Type)> = match m {
+            "load" => Some((vec![], elem.clone())),
+            "store" => Some((vec![elem.clone()], Type::unit())),
+            "swap" => Some((vec![elem.clone()], elem.clone())),
+            "add" if elem == Type::int() => Some((vec![Type::int()], Type::unit())),
+            "cas" => Some((vec![elem.clone(), elem.clone()], Type::bool())),
+            _ => None,
+        };
+        match shape {
+            Some((ps, r)) if args.len() == ps.len() + idx => {
+                if array {
+                    let it = self.infer(&args[0], Some(&Type::int()));
+                    self.expect(&Type::int(), &it, args[0].span);
+                }
+                for (a, p) in args[idx..].iter().zip(&ps) {
+                    let at = self.infer(a, Some(p));
+                    self.expect(p, &at, a.span);
+                }
+                r
+            }
+            _ => {
+                for a in args {
+                    self.infer(a, None);
+                }
+                self.push_diag("E_STATIC_ACCESS", "error", span, format!("'{n}.{m}' is not a static access of {st}"), Some(static_hint(n)), vec![]);
+                self.fresh()
+            }
+        }
+    }
+
     fn infer_asm(&mut self, recv: &Expr, outs: &[Ty], args: &[Expr], span: Span) -> Type {
         if !self.sys {
             self.push_diag("E_PROFILE", "error", span, "inline asm needs 'profile sys' or 'profile bare'".into(), Some("add 'profile sys' as the first line".into()), vec![]);
@@ -1507,7 +1612,24 @@ impl Checker {
                 self.holes.push((e.span, name.clone(), t.clone(), locals));
                 t
             }
+            ExprKind::Name(n) if self.is_static(n) => {
+                self.push_diag("E_STATIC_ACCESS", "error", e.span, format!("static '{n}' can only be used through its access methods"), Some(static_hint(n)), vec![]);
+                self.statics[n].clone()
+            }
             ExprKind::Name(n) => self.infer_name(n, e.span),
+            ExprKind::Field(x, f) if matches!(&x.kind, ExprKind::Name(n) if self.is_static(n)) => self.infer_static(x, f, &[], e.span),
+            ExprKind::Method { recv, name, args, .. } if matches!(&recv.kind, ExprKind::Name(n) if self.is_static(n)) => self.infer_static(recv, name, args, e.span),
+            ExprKind::Method { recv, name, targs, .. } if name == "#array" && targs.len() == 1 => {
+                if !self.sys {
+                    self.push_diag("E_PROFILE", "error", e.span, "fixed arrays need 'profile sys' or 'profile bare'".into(), Some("add 'profile bare' or 'profile sys' as the first line".into()), vec![]);
+                }
+                let t = self.infer(recv, None);
+                let n = match &targs[0] {
+                    Ty::Named { name, .. } => name.clone(),
+                    _ => "0".into(),
+                };
+                Type::Con("Array".into(), vec![t, Type::con(&n)])
+            }
             ExprKind::Field(x, f) => {
                 let xt = self.infer(x, None);
                 let mut rt = self.resolve(&xt);
@@ -1533,6 +1655,12 @@ impl Checker {
                         self.unify(&Type::Con(owner.clone(), args), &xt);
                         rt = self.resolve(&xt);
                     }
+                }
+                if let Type::Con(n, _) = &rt
+                    && n == "Array"
+                    && f == "len"
+                {
+                    return Type::int();
                 }
                 if let Type::Con(n, args) = &rt {
                     if let Some(TypeInfo { kind: TypeKind::New(inner), .. }) = self.types.get(n)
@@ -1594,6 +1722,13 @@ impl Checker {
             }
             ExprKind::Index(a, i) => {
                 let at = self.infer(a, None);
+                if let Type::Con(n, args) = self.resolve(&at)
+                    && n == "Array"
+                {
+                    let it = self.infer(i, Some(&Type::int()));
+                    self.expect(&Type::int(), &it, i.span);
+                    return args[0].clone();
+                }
                 let elem = self.fresh();
                 self.expect(&Type::list(elem.clone()), &at, a.span);
                 let it = self.infer(i, Some(&Type::int()));
@@ -1799,7 +1934,7 @@ impl Checker {
                         return self.fresh();
                     }
                 },
-                (PathSeg::Index(i), Type::Con(n, args)) if n == "List" => {
+                (PathSeg::Index(i), Type::Con(n, args)) if n == "List" || n == "Array" => {
                     let it = self.infer(i, Some(&Type::int()));
                     self.expect(&Type::int(), &it, i.span);
                     args[0].clone()

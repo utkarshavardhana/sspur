@@ -52,6 +52,13 @@ int64_t ss_tick_hz(void);
 void sspur_kmain(void);
 void sspur_irq(int64_t n);
 void sspur_on_trap(int64_t code);
+uint64_t ss_crit_enter(void);
+void ss_crit_leave(uint64_t s);
+static int64_t ss_sload(volatile int64_t* p) { uint64_t s = ss_crit_enter(); int64_t v = *p; ss_crit_leave(s); return v; }
+static void ss_sstore(volatile int64_t* p, int64_t v) { uint64_t s = ss_crit_enter(); *p = v; ss_crit_leave(s); }
+static int64_t ss_sswap(volatile int64_t* p, int64_t v) { uint64_t s = ss_crit_enter(); int64_t o = *p; *p = v; ss_crit_leave(s); return o; }
+static int64_t ss_scas(volatile int64_t* p, int64_t e, int64_t v) { uint64_t s = ss_crit_enter(); int64_t o = *p; if (o == e) *p = v; ss_crit_leave(s); return o == e; }
+static int ss_sadd(volatile int64_t* p, int64_t d) { uint64_t s = ss_crit_enter(); int64_t r; int o = __builtin_add_overflow(*p, d, &r); if (!o) *p = r; ss_crit_leave(s); return o; }
 #define TRAPV(c, cl, val) ss_trap((c), FIDX, (cl), (int64_t)(val))
 typedef struct { int64_t len; const char* p; } Str;
 static inline Str str_lit(const char* p, int64_t n) { return (Str){n, p}; }
@@ -90,6 +97,8 @@ void __attribute__((noreturn)) ss_halt(int64_t code) {
     *(volatile uint32_t*)0x100000UL = code == 0 ? 0x5555u : (uint32_t)(((uint64_t)code & 0xffff) << 16) | 0x3333u;
     for (;;) __asm__ volatile("wfi");
 }
+uint64_t ss_crit_enter(void) { uint64_t s; __asm__ volatile("csrrci %0, mstatus, 8" : "=r"(s) :: "memory"); return s & 8; }
+void ss_crit_leave(uint64_t s) { if (s) __asm__ volatile("csrsi mstatus, 8" ::: "memory"); }
 void ss_wait_irq(void) { __asm__ volatile("wfi"); }
 void ss_irq_enable(int64_t n) {
     if (n >= 0 && n < 64) { uint64_t m = 1ULL << n; __asm__ volatile("csrs mie, %0" :: "r"(m)); }
@@ -128,6 +137,8 @@ void __attribute__((noreturn)) ss_halt(int64_t code) {
     __asm__ volatile("hvc #0" : "+r"(p0) :: "memory");
     for (;;) __asm__ volatile("wfi");
 }
+uint64_t ss_crit_enter(void) { uint64_t s; __asm__ volatile("mrs %0, daif\n msr daifset, #2" : "=r"(s) :: "memory"); return s; }
+void ss_crit_leave(uint64_t s) { __asm__ volatile("msr daif, %0" :: "r"(s) : "memory"); }
 void ss_wait_irq(void) { __asm__ volatile("wfi"); }
 void ss_irq_enable(int64_t n) {
     if (n < 0 || n >= 1020) return;
@@ -222,6 +233,8 @@ void __attribute__((noreturn)) ss_halt(int64_t code) {
     }
     for (;;) __asm__ volatile("wfi");
 }
+uint64_t ss_crit_enter(void) { uint32_t s; __asm__ volatile("mrs %0, primask\n cpsid i" : "=r"(s) :: "memory"); return s; }
+void ss_crit_leave(uint64_t s) { __asm__ volatile("msr primask, %0" :: "r"((uint32_t)s) : "memory"); }
 void ss_wait_irq(void) { __asm__ volatile("wfi"); }
 void ss_irq_enable(int64_t n) {
     if (n >= 0 && n < 240) SS_NVIC_ISER[n / 32] = 1u << (n % 32);

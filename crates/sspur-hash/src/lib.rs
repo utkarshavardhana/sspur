@@ -157,6 +157,10 @@ impl<'a> Hasher<'a> {
             }
             Def::Test(t) => exprs.push(&t.body),
             Def::Store(st) => tys.extend([&st.key, &st.val]),
+            Def::Static(s) => {
+                tys.push(&s.ty);
+                exprs.push(&s.init);
+            }
             Def::Svc(sv) => sv.eps.iter().for_each(|e| add(&e.handler)),
             Def::Effect(e) => {
                 for op in &e.ops {
@@ -403,6 +407,11 @@ impl<'a> Hasher<'a> {
                 enc.str(&st.kind);
                 self.ty(&mut enc, &st.key, group);
                 self.ty(&mut enc, &st.val, group);
+            }
+            Def::Static(s) => {
+                enc.tag(b'G');
+                self.ty(&mut enc, &s.ty, group);
+                self.expr(&mut enc, &s.init, group);
             }
             Def::Svc(sv) => {
                 enc.tag(b'V');

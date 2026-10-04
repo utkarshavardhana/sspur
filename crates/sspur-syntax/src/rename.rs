@@ -112,6 +112,11 @@ impl Renamer<'_> {
                 self.hit(&mut sv.name);
                 sv.eps.iter_mut().for_each(|e| self.hit(&mut e.handler));
             }
+            Def::Static(s) => {
+                self.hit(&mut s.name);
+                self.ty(&mut s.ty);
+                self.expr(&mut s.init, &mut vec![]);
+            }
             Def::Effect(e) => {
                 self.hit(&mut e.name);
                 let shadow = e.params.iter().any(|p| p.name == self.from);

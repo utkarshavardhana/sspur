@@ -234,6 +234,66 @@ fn bit_and_byte_builtins_match_across_tiers() {
 }
 
 #[test]
+fn statics_shared_with_interrupt_handlers_and_stack_arrays_on_every_target() {
+    for target in ["riscv64-qemu", "aarch64-qemu", "thumbv7em-mps2"] {
+        boots(target, "ticks", "hist 804\nticks 5 seen 14 base 1005\n");
+    }
+    let (out, err, ok) = sspur(&["test", "examples/bare/ticks.ssp"]);
+    assert!(ok && out.contains("3 passed, 0 failed"), "{out}{err}");
+}
+
+#[test]
+fn fixed_arrays_match_across_tiers() {
+    let native = sspur(&["run", "tests/bare/arrays.ssp"]);
+    let interp = sspur(&["run", "--interp", "tests/bare/arrays.ssp"]);
+    assert_eq!(native, interp);
+    assert!(native.0.starts_with("ring 80 500 grid 14 pts 16 flags 5\n7\n"), "{native:?}");
+    assert!(native.1.contains("index 3 out of bounds for list of length 3"), "{native:?}");
+    let (out, _, _) = sspur(&["native", "--release", "tests/bare/arrays.ssp"]);
+    for f in ["fill_ring", "grid", "pts", "flags", "at"] {
+        assert!(out.contains(&format!("native  {f}\n")), "{f}: {out}");
+    }
+    let (out, _, ok) = sspur(&["fmt", "examples/bare/ticks.ssp"]);
+    assert!(ok && out.contains("static seen: Array[Int, 4] = [0; 4]\n") && out.contains("  var a = [0; 8]\n") && out.contains("    a[i % 8] := a[i % 8] + i\n"), "{out}");
+}
+
+#[test]
+fn statics_and_arrays_reject_unsafe_access() {
+    let d = scratch("static-reject");
+    let pre = "static n: Int = 0\n\n";
+    let cases = [
+        ("profile bare", "fn f() -> Int ! static\n= n + 1", "E_STATIC_ACCESS"),
+        ("profile bare", "fn f() -> Int\n= n.load", "E_EFFECT_MISSING"),
+        ("profile bare", "fn f() ! static\n= n.push(1)", "E_STATIC_ACCESS"),
+        ("profile bare", "static s: Str = \"x\"", "E_STATIC_TYPE"),
+        ("profile bare", "static m: Int = 1 + 2", "E_STATIC_INIT"),
+        ("profile bare", "fn tick() ! static\n  interrupt timer\n= n.add(1)\n\nfn main() ! static\n= n.store(n.load + 1)", "E_STATIC_RACE"),
+        ("profile bare", "fn tick() ! static\n  interrupt timer\n= n.add(1)\n\nfn main() ! static\n= n.store(n.swap(0) * 2)", "E_STATIC_RACE"),
+        ("profile bare", "fn f(i: Int) -> Int\n= [1; 4][i] + [true; 2].len", ""),
+        ("profile bare", "fn f(a: Array[Int]) -> Int\n= 0", "E_TYPE_ARITY"),
+        ("", "fn f() -> Int\n= 0", "E_PROFILE"),
+        ("", "fn f() -> Int\n= [0; 2].len", "E_PROFILE"),
+    ];
+    for (i, (profile, body, code)) in cases.iter().enumerate() {
+        let f = d.join(format!("s{i}.ssp"));
+        std::fs::write(&f, format!("{profile}\n\n{pre}{body}\n")).unwrap();
+        let (out, err, ok) = sspur(&["check", f.to_str().unwrap()]);
+        let all = format!("{out}{err}");
+        if code.is_empty() {
+            assert!(ok, "case {i} should pass: {all}");
+        } else {
+            assert!(!ok && all.contains(code), "case {i}: expected {code}, got {all}");
+        }
+    }
+    let ok_src = "profile bare\n\nstatic n: Int = 0\n\nfn tick() ! static\n  interrupt timer\n= n.store(n.load + 1)\n\nfn main() -> Int ! static\n= do\n  n.add(1)\n  n.load\n";
+    let f = d.join("ok.ssp");
+    std::fs::write(&f, ok_src).unwrap();
+    let (out, err, ok) = sspur(&["check", f.to_str().unwrap()]);
+    assert!(ok, "a handler's own read-modify-write is not preempted by main: {out}{err}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn inline_asm_reads_cycle_counters_on_both_targets() {
     for target in ["riscv64-qemu", "aarch64-qemu"] {
         boots(target, "cycles", "mix 63534 counter advanced\n");

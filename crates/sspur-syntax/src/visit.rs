@@ -232,6 +232,11 @@ pub fn strip_spans(m: &mut Module) {
                 sv.span = z;
                 sv.eps.iter_mut().for_each(|e| e.span = z);
             }
+            Def::Static(s) => {
+                s.span = z;
+                strip_ty(&mut s.ty);
+                strip_expr(&mut s.init);
+            }
         }
     }
 }

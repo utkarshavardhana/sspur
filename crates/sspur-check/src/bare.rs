@@ -29,7 +29,7 @@ pub fn check(m: &Module, t: &Tables) -> Vec<Diag> {
             Def::Store(s) => cx.err("E_PROFILE_BARE", s.span, "stores need a deploy host, which bare code doesn't have".into(), None),
             Def::Svc(s) => cx.err("E_PROFILE_BARE", s.span, "services need a deploy host, which bare code doesn't have".into(), None),
             Def::Effect(e) => cx.err("E_PROFILE_BARE", e.span, "effect handlers need the effect runtime, which bare code doesn't have".into(), None),
-            Def::Type(_) | Def::Test(_) => {}
+            Def::Type(_) | Def::Test(_) | Def::Static(_) => {}
         }
     }
     cx.diags
@@ -68,6 +68,7 @@ impl Cx<'_> {
                 "#DevBuf" => Some("device buffers need the GPU runtime".into()),
                 "#Time" | "#Duration" => Some(format!("{} values need the app runtime", &n[1..])),
                 "#Set" | "#Heap" | "#StrBuf" | "#Bits" | "#HashMap" | "#HashSet" | "#BigInt" | "#Dec" | "#Regex" | "#View" => Some(format!("{} values need the GC heap; bare code has none", &n[1..])),
+                "Array" => self.type_why(&a[0], depth + 1),
                 "Opt" | "Secret" | "Pii" | "Untrusted" => a.iter().find_map(|x| self.type_why(x, depth + 1)),
                 _ if self.t.newtypes.contains_key(n) => self.type_why(&self.t.newtypes[n], depth + 1),
                 _ if self.t.records.contains_key(n) => self.t.records[n].1.iter().map(|(_, ft)| ft).chain(a).find_map(|x| self.type_why(x, depth + 1)),
@@ -92,8 +93,8 @@ impl Cx<'_> {
             return;
         }
         for e in &f.effects {
-            if !matches!(e.name.as_str(), "div" | "unsafe" | "mmio") && !f.tparams.iter().any(|p| p.name == e.name) {
-                self.err("E_PROFILE_BARE", e.span, format!("effect '{}' is not available in bare code: {}", printer::effect(e), effect_why(&e.name)), Some("bare code may perform div, unsafe and mmio"));
+            if !matches!(e.name.as_str(), "div" | "unsafe" | "mmio" | "static") && !f.tparams.iter().any(|p| p.name == e.name) {
+                self.err("E_PROFILE_BARE", e.span, format!("effect '{}' is not available in bare code: {}", printer::effect(e), effect_why(&e.name)), Some("bare code may perform div, unsafe, mmio and static"));
             }
         }
         let sig = self.t.fns.get(&f.name).cloned();

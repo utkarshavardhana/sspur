@@ -1,0 +1,88 @@
+profile bare
+
+static count: Int = 0
+static seen: Array[Int, 4] = [0; 4]
+static done: Bool = false
+static base: Int = 1000
+
+fn putc(c: Int) ! mmio, div
+= if arch() == "riscv64" then do
+    lsr = mmio[U8](0x10000005)
+    while lsr.read.band(0x20) == 0
+      ()
+    mmio[U8](0x10000000).write(c)
+  else if arch() == "thumbv7em" then do
+    mmio[U32](0x40004008).write(1)
+    while mmio[U32](0x40004004).read.band(1) != 0
+      ()
+    mmio[U32](0x40004000).write(c)
+  else do
+    fr = mmio[U32](0x09000018)
+    while fr.read.band(0x20) != 0
+      ()
+    mmio[U32](0x09000000).write(c)
+
+fn puts(s: Str) ! mmio, div
+= do
+  for i in 0..s.byte_len
+    putc(s.byte(i))
+
+fn put_int(n: Int) ! mmio, div
+= do
+  if n >= 10 then put_int(n / 10)
+  putc(48 + n % 10)
+
+fn record_tick() ! static
+= do
+  count.add(1)
+  seen.store(count.load % seen.len, count.load)
+  if count.load >= 5 then done.store(true)
+
+fn on_tick() ! mmio, static
+  interrupt timer
+= do
+  if not done.load then record_tick()
+  timer_start(tick_hz() / 1000)
+
+fn histogram(n: Int) -> Int
+= do
+  var a = [0; 8]
+  for i in 0..n
+    a[i % 8] := a[i % 8] + i
+  var s = 0
+  for i in 0..a.len
+    s := s + a[i] * (i + 1)
+  s
+
+fn seen_sum() -> Int ! static
+= do
+  var s = 0
+  for i in 0..seen.len
+    s := s + seen.load(i)
+  s
+
+fn main() ! mmio, div, static
+= do
+  puts("hist ")
+  put_int(histogram(20))
+  putc(10)
+  timer_start(tick_hz() / 1000)
+  while not done.load
+    wait_irq()
+  puts("ticks ")
+  put_int(count.load)
+  puts(" seen ")
+  put_int(seen_sum())
+  base.add(count.load)
+  puts(" base ")
+  put_int(base.load)
+  putc(10)
+
+test hist = histogram(20) == 804
+
+test ticks_on_the_host = do
+  for i in 0..5
+    record_tick()
+  count.load == 5 and done.load and seen_sum() == 14
+
+test statics_reset_per_test = count.load == 0 and not done.load and seen.cas(2, 0, 9) and seen.load(2) == 9

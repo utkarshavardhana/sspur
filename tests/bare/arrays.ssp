@@ -1,0 +1,62 @@
+profile sys
+
+type Pt = {x: Int, y: Int}
+
+type Ring = {buf: Array[Int, 4], head: Int, n: Int}
+
+fn push(r: Ring, v: Int) -> Ring
+= do
+  var b = r.buf
+  b[(r.head + r.n) % 4] := v
+  if r.n < 4 then r with buf := b, n := r.n + 1 else r with buf := b, head := (r.head + 1) % 4
+
+fn ring_sum(r: Ring) -> Int
+= do
+  var s = 0
+  for i in 0..r.n
+    s := s + r.buf[(r.head + i) % 4] * (i + 1)
+  s
+
+fn fill_ring(k: Int) -> Int
+= do
+  var r = Ring{buf: [0; 4], head: 0, n: 0}
+  for i in 0..k
+    r := push(r, i * 10)
+  ring_sum(r)
+
+fn grid(n: Int) -> Int
+= do
+  var g = [[0; 3]; 3]
+  for i in 0..3
+    for j in 0..3
+      g[i][j] := i * 3 + j + n
+  g[2][1] - g[0][2] + g[1][1]
+
+fn pts(k: Int) -> Int
+= do
+  var ps = [Pt{x: 0, y: 0}; 5]
+  for i in 0..5
+    ps[i] := Pt{x: i, y: i * k}
+  ps[4].y - ps[1].x + ps.len
+
+fn flags(n: Int) -> Int
+= do
+  var f = [false; 16]
+  var i = 0
+  for j in 0..16
+    if j % 3 == n % 3 then f[j] := true
+  var c = 0
+  for j in 0..f.len
+    if f[j] then c := c + 1
+  c
+
+fn at(i: Int) -> Int
+= do
+  a = [7; 3]
+  a[i]
+
+fn main() -> Unit ! log, div
+= do
+  log("ring {fill_ring(3)} {fill_ring(7)} grid {grid(5)} pts {pts(3)} flags {flags(4)}")
+  log("{at(2)}")
+  log("{at(3)}")

@@ -25,6 +25,7 @@ pub fn print_def(d: &Def) -> String {
             }
             s
         }
+        Def::Static(s) => format!("static {}: {} = {}", s.name, ty(&s.ty), expr(&s.init, 0)),
     }
 }
 
@@ -300,6 +301,7 @@ pub fn expr(e: &Expr, ind: usize) -> String {
             let rest: String = args.iter().map(|a| format!(", {}", expr(a, ind))).collect();
             format!("mmio[{}]({}{rest})", ty(&targs[0]), expr(recv, ind))
         }
+        ExprKind::Method { recv, name, targs, .. } if name == "#array" && targs.len() == 1 => format!("[{}; {}]", expr(recv, ind), ty(&targs[0])),
         ExprKind::Method { recv, name, targs, args } if name == "asm" && args.len() == 3 => {
             let tmpl = match &recv.kind {
                 ExprKind::Str(p) => p.iter().map(|x| if let StrPart::Lit(s) = x { s.as_str() } else { "" }).collect::<String>(),

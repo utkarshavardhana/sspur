@@ -116,6 +116,8 @@ pub struct Interp {
     pub json_types: HashMap<(u32, u32), sspur_check::Type>,
     pub layouts: sspur_native::nval::Layouts,
     kernels: RefCell<HashMap<String, Rc<sspur_check::kernel::Kernel>>>,
+    statics: HashMap<String, Expr>,
+    static_vals: RefCell<HashMap<String, Value>>,
 }
 
 const MAX_DEPTH: u32 = 20_000;
@@ -165,6 +167,8 @@ impl Interp {
             json_types: HashMap::new(),
             layouts: Default::default(),
             kernels: RefCell::new(HashMap::new()),
+            statics: HashMap::new(),
+            static_vals: RefCell::new(HashMap::new()),
         };
         for d in &m.defs {
             match d {
@@ -180,6 +184,9 @@ impl Interp {
                     it.add_type(t)
                 }
                 Def::Effect(e) => it.ops.extend(e.ops.iter().map(|o| o.name.clone())),
+                Def::Static(s) => {
+                    it.statics.insert(s.name.clone(), s.init.clone());
+                }
                 Def::Store(_) | Def::Svc(_) => {}
             }
         }
@@ -234,6 +241,7 @@ impl Interp {
         if !main.params.is_empty() {
             return Err("'main' must take no parameters".into());
         }
+        self.static_vals.borrow_mut().clear();
         match self.call_fn(&main, vec![]).and_then(|_| kernel::sync()) {
             Ok(_) => Ok(()),
             Err(c) => Err(describe(c)),
@@ -253,6 +261,7 @@ impl Interp {
         cases.extend(self.tests.iter().map(|t| (t.name.clone(), t.body.clone())));
         for (name, body) in &cases {
             let t = TestDef { name: name.clone(), body: body.clone(), span: Span::default() };
+            self.static_vals.borrow_mut().clear();
             *self.output.borrow_mut() = Some(vec![]);
             let r = match self.eval(&t.body, &Env::child(&self.globals)).and_then(|v| kernel::sync().map(|_| v)) {
                 Ok(Value::Bool(true)) => Ok(()),
@@ -852,6 +861,58 @@ impl Interp {
         self.call_method(name, recv, args)
     }
 
+    fn is_static(&self, x: &Expr, env: &Rc<Env>) -> bool {
+        matches!(&x.kind, ExprKind::Name(n) if self.statics.contains_key(n) && env.cell(n).is_none())
+    }
+
+    fn static_op(&self, x: &Expr, m: &str, args: &[Expr], env: &Rc<Env>) -> R {
+        let ExprKind::Name(n) = &x.kind else { unreachable!() };
+        let vals = self.eval_args(args, env)?;
+        if !self.static_vals.borrow().contains_key(n) {
+            let v = self.eval(&self.statics[n], &Env::child(&self.globals))?;
+            self.static_vals.borrow_mut().insert(n.clone(), v);
+        }
+        let mut map = self.static_vals.borrow_mut();
+        let cell = map.get_mut(n).unwrap();
+        let (slot, rest) = match cell {
+            Value::List(xs) => {
+                if m == "len" {
+                    return Ok(Value::Int(xs.len() as i64));
+                }
+                let Some(Value::Int(i)) = vals.first() else { return trap("static array access needs an index") };
+                let len = xs.len();
+                if *i < 0 || *i as usize >= len {
+                    return trap(format!("index {i} out of bounds for list of length {len}"));
+                }
+                (&mut Rc::make_mut(xs)[*i as usize], &vals[1..])
+            }
+            v => (v, &vals[..]),
+        };
+        Ok(match (m, rest) {
+            ("load", []) => slot.clone(),
+            ("store", [v]) => {
+                *slot = v.clone();
+                Value::Unit
+            }
+            ("swap", [v]) => std::mem::replace(slot, v.clone()),
+            ("add", [Value::Int(d)]) => match slot {
+                Value::Int(cur) => {
+                    *cur = cur.checked_add(*d).map_or_else(|| trap("integer overflow"), Ok)?;
+                    Value::Unit
+                }
+                _ => return trap("static add needs an Int"),
+            },
+            ("cas", [old, new]) => {
+                let hit = slot == old;
+                if hit {
+                    *slot = new.clone();
+                }
+                Value::Bool(hit)
+            }
+            _ => return trap(format!("unknown static access {n}.{m}")),
+        })
+    }
+
     pub fn eval(&self, e: &Expr, env: &Rc<Env>) -> R {
         let fuel = self.fuel.get();
         if fuel == 0 {
@@ -859,6 +920,16 @@ impl Interp {
         }
         self.fuel.set(fuel - 1);
         match &e.kind {
+            ExprKind::Field(x, f) if self.is_static(x, env) => self.static_op(x, f, &[], env),
+            ExprKind::Method { recv, name, args, .. } if self.is_static(recv, env) => self.static_op(recv, name, args, env),
+            ExprKind::Method { recv, name, targs, .. } if name == "#array" && targs.len() == 1 => {
+                let v = self.eval(recv, env)?;
+                let n = match &targs[0] {
+                    Ty::Named { name, .. } => name.parse::<usize>().unwrap_or(0),
+                    _ => 0,
+                };
+                Ok(Value::List(Rc::new(vec![v; n])))
+            }
             ExprKind::Int(n) => Ok(Value::Int(*n)),
             ExprKind::Float(x) => Ok(Value::Float(*x)),
             ExprKind::Bool(b) => Ok(Value::Bool(*b)),

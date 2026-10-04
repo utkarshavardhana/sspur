@@ -219,6 +219,15 @@ impl Parser {
                 let body = self.expr_seq()?;
                 Ok(Def::Test(TestDef { name, span: start.to(self.prev_span()), body }))
             }
+            Tok::Ident(w) if w == "static" && matches!(self.peek_at(1), Tok::Ident(_)) && matches!(self.peek_at(2), Tok::Sym(":")) => {
+                self.bump();
+                let name = self.expect_ident()?;
+                self.expect_sym(":")?;
+                let ty = self.ty()?;
+                self.expect_sym("=")?;
+                let init = self.expr()?;
+                Ok(Def::Static(StaticDef { name, ty, init, span: start.to(self.prev_span()) }))
+            }
             Tok::Kw("effect") => self.effect_def().map(Def::Effect),
             Tok::Kw("store") => self.store_def().map(Def::Store),
             Tok::Kw("svc") => self.svc_def().map(Def::Svc),
@@ -484,6 +493,14 @@ impl Parser {
             let mut args = Vec::new();
             if self.eat_sym("[") {
                 loop {
+                    if let Tok::Int(n) = self.peek().clone() {
+                        let sp = self.bump().span;
+                        args.push(Ty::Named { name: n.to_string(), args: vec![], span: sp });
+                        if !self.eat_sym(",") {
+                            break;
+                        }
+                        continue;
+                    }
                     args.push(self.ty()?);
                     if !self.eat_sym(",") {
                         break;
@@ -1478,6 +1495,14 @@ impl Parser {
                 let mut items = Vec::new();
                 while !self.is_sym("]") {
                     let item = self.expr()?;
+                    if items.is_empty() && self.is_sym(";") {
+                        self.bump();
+                        let nspan = self.span();
+                        let Tok::Int(n) = self.bump().tok else { return self.err("E_PARSE_ARRAY", "expected the array length, a literal, after ';'") };
+                        self.expect_sym("]")?;
+                        let targs = vec![Ty::Named { name: n.to_string(), args: vec![], span: nspan }];
+                        return Ok(Expr::new(ExprKind::Method { recv: Box::new(item), name: "#array".into(), targs, args: vec![] }, start.to(self.prev_span())));
+                    }
                     items.push(self.wrap_placeholder(item));
                     if !self.eat_sym(",") {
                         break;

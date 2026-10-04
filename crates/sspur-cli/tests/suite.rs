@@ -473,7 +473,16 @@ test t_mds = mds(2) == 0
 test t_mdr = mdr(3) == 0
 test t_mdbad = mdbad(5) == 0
 test t_mdneg = mdneg() == 0
-test t_ok = gam(2.0) > 0.0 and bin(10) <= 10 and wpick([0.0, 1.0]) == 1 and mdbad(0) == 1 and mdi(1) == 4
+fn fz(m: Int) -> Str
+= fixed_zone(m).name
+fn zfmt(p: Str) -> Str
+= time_ms(0).format_in(fixed_zone(60), p)
+fn zlocal(t: Int) -> Int
+= fixed_zone(60).local(time_ms(t)).unix_ms
+test t_fz = fz(1440) == \"\"
+test t_zfmt = zfmt(\"%Z %Q\") == \"\"
+test t_zlocal = zlocal(9223372036854775807) == 0
+test t_ok = gam(2.0) > 0.0 and bin(10) <= 10 and wpick([0.0, 1.0]) == 1 and mdbad(0) == 1 and mdi(1) == 4 and fz(90) == \"+01:30\"
 ";
     let expected = [
         "FAIL  t_gam: rand_gamma needs a finite shape > 0 and scale > 0",
@@ -488,7 +497,10 @@ test t_ok = gam(2.0) > 0.0 and bin(10) <= 10 and wpick([0.0, 1.0]) == 1 and mdba
         "FAIL  t_mdr: mdspan slice 1..3 out of range for extent 2",
         "FAIL  t_mdbad: malformed mdspan",
         "FAIL  t_mdneg: mdspan extents must be >= 0",
-        "1 passed, 12 failed",
+        "FAIL  t_fz: fixed_zone needs -1440 < minutes < 1440",
+        "FAIL  t_zfmt: bad time format '%Z %Q'",
+        "FAIL  t_zlocal: integer overflow",
+        "1 passed, 15 failed",
     ];
     assert_trap_parity("std_round3", src, &expected);
 }

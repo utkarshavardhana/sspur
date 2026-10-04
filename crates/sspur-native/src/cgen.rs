@@ -20,6 +20,7 @@ mod stdlib;
 mod stdcx;
 mod stdflat;
 mod stdrng;
+mod stdtz;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
 type G<T = String> = Result<T, String>;
@@ -3301,6 +3302,12 @@ impl<'a> Cx<'a> {
         }
         if matches!(&rt, Type::Con(n, _) if n == "#Complex") {
             return self.cx_method(&r, name, args);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "#Zone") {
+            return self.tz_method(&r, name, args, t);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "#Time") && matches!(name, "format_in" | "iso_in") {
+            return self.tz_time_method(&r, name, args);
         }
         if matches!(&rt, Type::Con(n, _) if n == "#FlatMap") {
             return self.flat_method(&r, &rt, name, args, t);

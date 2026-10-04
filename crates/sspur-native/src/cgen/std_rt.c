@@ -1516,3 +1516,213 @@ static int64_t ss_md_slice(int64_t off, const int64_t* sh, const int64_t* sd, in
     RawL r = ss_md_ints(sh, rank, 0); ((int64_t*)r.data)[dim] = hi - lo; *nsh = r;
     return no;
 }
+//@ tz chrono fail failstr utf8 sys
+typedef struct { Str name; RawL tr, ix, off, dst, ab, rule; } SsZB;
+typedef struct { int64_t ntr; const int64_t* tr; const int64_t* ix; const int64_t* off; const int64_t* dst; const Str* ab; int64_t nrule; const int64_t* rule; } SsZ;
+static Str ss_tz_str(const char* p, int64_t n) { char* c = (char*)sspur_alloc_atomic((size_t)n + 1); memcpy(c, p, (size_t)n); return (Str){n, c}; }
+static void ss_tz_offname(SB* b, int64_t secs) { int64_t a = secs < 0 ? -secs : secs; sb_put(b, secs < 0 ? "-" : "+", 1); ss_pad0(b, a / 3600, 2); sb_put(b, ":", 1); ss_pad0(b, a / 60 % 60, 2); }
+static RawL ss_tz_l(int64_t es) { return raw_alloc(4, (size_t)es); }
+static RawL ss_tz_pushi(RawL l, int64_t v) { return raw_push(l, &v, 8); }
+static int64_t ss_tz_add(SsZB* z, int64_t off, int64_t dst, Str ab) { z->off = ss_tz_pushi(z->off, off); z->dst = ss_tz_pushi(z->dst, dst); z->ab = raw_push(z->ab, &ab, sizeof(Str)); return z->off.len - 1; }
+static SsZB ss_tz_empty(Str name) { SsZB z; z.name = name; z.tr = ss_tz_l(8); z.ix = ss_tz_l(8); z.off = ss_tz_l(8); z.dst = ss_tz_l(8); z.ab = ss_tz_l(sizeof(Str)); z.rule = ss_tz_l(8); return z; }
+static SsZB ss_tz_fixed(Str name, int64_t secs) { SsZB z = ss_tz_empty(name); ss_tz_add(&z, secs, 0, name); return z; }
+static int ss_tz_two(const char* x, int64_t* v) { if (x[0] < '0' || x[0] > '9' || x[1] < '0' || x[1] > '9') return 0; *v = (x[0] - '0') * 10 + (x[1] - '0'); return 1; }
+static int ss_tz_parse_fixed(Str s, int64_t* out) {
+    if ((s.len == 3 && memcmp(s.p, "UTC", 3) == 0) || (s.len == 1 && s.p[0] == 'Z')) { *out = 0; return 1; }
+    if (s.len < 3 || (s.p[0] != '+' && s.p[0] != '-')) return 0;
+    const char* d = s.p + 1; int64_t n = s.len - 1, h = 0, m = 0;
+    if (n == 2) { if (!ss_tz_two(d, &h)) return 0; }
+    else if (n == 4) { if (!ss_tz_two(d, &h) || !ss_tz_two(d + 2, &m)) return 0; }
+    else if (n == 5 && d[2] == ':') { if (!ss_tz_two(d, &h) || !ss_tz_two(d + 3, &m)) return 0; }
+    else return 0;
+    if (h > 23 || m > 59) return 0;
+    int64_t v = h * 3600 + m * 60; *out = s.p[0] == '-' ? -v : v; return 1;
+}
+typedef struct { const unsigned char* b; int64_t n, i; } SsTzP;
+static int ss_tzp_peek(SsTzP* p) { return p->i < p->n ? p->b[p->i] : 0; }
+static int ss_tzp_num(SsTzP* p, int64_t max, int64_t* out) { int64_t s = p->i, v = 0; while (ss_tzp_peek(p) >= '0' && ss_tzp_peek(p) <= '9' && p->i - s < 4) { v = v * 10 + (ss_tzp_peek(p) - '0'); p->i++; } if (p->i == s || v > max) return 0; *out = v; return 1; }
+static int ss_tzp_name(SsTzP* p, Str* out) {
+    int64_t s, e;
+    if (ss_tzp_peek(p) == '<') { p->i++; s = p->i; while (ss_tzp_peek(p) != '>') { if (ss_tzp_peek(p) == 0) return 0; p->i++; } e = p->i; p->i++; }
+    else { s = p->i; while ((ss_tzp_peek(p) | 32) >= 'a' && (ss_tzp_peek(p) | 32) <= 'z') p->i++; e = p->i; }
+    if (e - s < 3 || !ss_utf8_ok(p->b + s, e - s)) return 0;
+    *out = ss_tz_str((const char*)p->b + s, e - s); return 1;
+}
+static int ss_tzp_hms(SsTzP* p, int64_t maxh, int64_t* out) {
+    int neg = 0; if (ss_tzp_peek(p) == '-') { neg = 1; p->i++; } else if (ss_tzp_peek(p) == '+') p->i++;
+    int64_t h, m, s; if (!ss_tzp_num(p, maxh, &h)) return 0; int64_t v = h * 3600;
+    if (ss_tzp_peek(p) == ':') { p->i++; if (!ss_tzp_num(p, 59, &m)) return 0; v += m * 60; if (ss_tzp_peek(p) == ':') { p->i++; if (!ss_tzp_num(p, 59, &s)) return 0; v += s; } }
+    *out = neg ? -v : v; return 1;
+}
+static int ss_tzp_date(SsTzP* p, RawL* r) {
+    int64_t a = 0, b = 0, c = 0, k;
+    if (ss_tzp_peek(p) == 'M') {
+        p->i++; if (!ss_tzp_num(p, 12, &a) || a < 1 || ss_tzp_peek(p) != '.') return 0; p->i++;
+        if (!ss_tzp_num(p, 5, &b) || b < 1 || ss_tzp_peek(p) != '.') return 0; p->i++;
+        if (!ss_tzp_num(p, 6, &c)) return 0; k = 0;
+    } else if (ss_tzp_peek(p) == 'J') { p->i++; if (!ss_tzp_num(p, 365, &a) || a < 1) return 0; k = 1; }
+    else { if (!ss_tzp_num(p, 365, &a)) return 0; k = 2; }
+    int64_t t = 7200; if (ss_tzp_peek(p) == '/') { p->i++; if (!ss_tzp_hms(p, 167, &t)) return 0; }
+    *r = ss_tz_pushi(*r, k); *r = ss_tz_pushi(*r, a); *r = ss_tz_pushi(*r, b); *r = ss_tz_pushi(*r, c); *r = ss_tz_pushi(*r, t); return 1;
+}
+static int ss_tz_rule(SsZB* z, const unsigned char* s, int64_t n) {
+    SsTzP p = {s, n, 0}; Str sn, dn; int64_t so, dso;
+    if (!ss_tzp_name(&p, &sn) || !ss_tzp_hms(&p, 24, &so)) return 0;
+    so = -so; int64_t st = ss_tz_add(z, so, 0, sn);
+    RawL r = ss_tz_l(8);
+    if (p.i == n) { r = ss_tz_pushi(r, st); r = ss_tz_pushi(r, -1); for (int k = 0; k < 10; k++) r = ss_tz_pushi(r, 0); z->rule = r; return 1; }
+    if (!ss_tzp_name(&p, &dn)) return 0;
+    if (ss_tzp_peek(&p) != ',' && p.i < n) { if (!ss_tzp_hms(&p, 24, &dso)) return 0; dso = -dso; } else dso = so + 3600;
+    int64_t dt = ss_tz_add(z, dso, 1, dn);
+    r = ss_tz_pushi(r, st); r = ss_tz_pushi(r, dt);
+    if (p.i == n) { static const int64_t def[10] = {0, 3, 2, 0, 7200, 0, 11, 1, 0, 7200}; for (int k = 0; k < 10; k++) r = ss_tz_pushi(r, def[k]); }
+    else { for (int k = 0; k < 2; k++) { if (ss_tzp_peek(&p) != ',') return 0; p.i++; if (!ss_tzp_date(&p, &r)) return 0; } if (p.i != n) return 0; }
+    z->rule = r; return 1;
+}
+static int64_t ss_tz_be(const unsigned char* b, int64_t at, int n) { uint64_t v = 0; for (int k = 0; k < n; k++) v = v << 8 | b[at + k]; return n == 4 ? (int64_t)(int32_t)(uint32_t)v : (int64_t)v; }
+static int ss_tz_head(const unsigned char* b, int64_t n, int64_t at, uint64_t* c) { if (n < at + 44 || memcmp(b + at, "TZif", 4) != 0) return 0; for (int k = 0; k < 6; k++) c[k] = (uint64_t)(uint32_t)ss_tz_be(b, at + 20 + 4 * k, 4); return 1; }
+static int ss_tz_parse(Str name, const unsigned char* b, int64_t len, SsZB* out) {
+    uint64_t c[6], c1[6]; if (!ss_tz_head(b, len, 0, c1)) return 0;
+    memcpy(c, c1, sizeof c); int64_t p = 44, ts = 4;
+    if (b[4] != 0) {
+        uint64_t v1 = c1[3] * 5 + c1[4] * 6 + c1[5] + c1[2] * 8 + c1[1] + c1[0];
+        if (v1 > (uint64_t)len || !ss_tz_head(b, len, 44 + (int64_t)v1, c)) return 0;
+        p = 44 + (int64_t)v1 + 44; ts = 8;
+    }
+    uint64_t isut = c[0], isstd = c[1], leap = c[2], timecnt = c[3], typecnt = c[4], charcnt = c[5];
+    uint64_t need = timecnt * (uint64_t)ts + timecnt + typecnt * 6 + charcnt + leap * (uint64_t)(ts + 4) + isstd + isut;
+    if (typecnt == 0 || typecnt > 256 || need > (uint64_t)(len - p)) return 0;
+    SsZB z = ss_tz_empty(name);
+    for (uint64_t k = 0; k < timecnt; k++) z.tr = ss_tz_pushi(z.tr, ss_tz_be(b, p + (int64_t)k * ts, (int)ts));
+    p += (int64_t)timecnt * ts;
+    for (uint64_t k = 0; k < timecnt; k++) { if (b[p + (int64_t)k] >= typecnt) return 0; z.ix = ss_tz_pushi(z.ix, b[p + (int64_t)k]); }
+    p += (int64_t)timecnt;
+    const unsigned char* chars = b + p + (int64_t)typecnt * 6;
+    for (uint64_t k = 0; k < typecnt; k++) {
+        int64_t at = p + (int64_t)k * 6; uint64_t d = b[at + 5];
+        if (d >= charcnt) return 0;
+        uint64_t e = d; while (e < charcnt && chars[e] != 0) e++;
+        if (!ss_utf8_ok(chars + d, (int64_t)(e - d))) return 0;
+        ss_tz_add(&z, ss_tz_be(b, at, 4), b[at + 4] != 0, ss_tz_str((const char*)chars + d, (int64_t)(e - d)));
+    }
+    p += (int64_t)(typecnt * 6 + charcnt + leap * (uint64_t)(ts + 4) + isstd + isut);
+    if (ts == 8 && p < len) {
+        if (b[p] != '\n') return 0;
+        int64_t s = p + 1, e = s; while (e < len && b[e] != '\n') e++;
+        if (e >= len) return 0;
+        if (e > s && !ss_tz_rule(&z, b + s, e - s)) return 0;
+    }
+    *out = z; return 1;
+}
+static unsigned char* ss_tz_read(const char* path, int64_t* n) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC); if (fd < 0) return 0;
+    int64_t cap = 4096, len = 0; unsigned char* buf = (unsigned char*)malloc((size_t)cap);
+    for (;;) {
+        if (len == cap) { cap *= 2; buf = (unsigned char*)realloc(buf, (size_t)cap); }
+        ssize_t k = read(fd, buf + len, (size_t)(cap - len));
+        if (k < 0) { if (errno == EINTR) continue; close(fd); free(buf); return 0; }
+        if (k == 0) break;
+        len += k;
+    }
+    close(fd); *n = len; return buf;
+}
+static int ss_tz_valid(Str s) {
+    if (s.len == 0 || s.len > 255 || s.p[0] == '/') return 0;
+    int64_t seg = 0;
+    for (int64_t i = 0; i <= s.len; i++) {
+        if (i == s.len || s.p[i] == '/') { int64_t l = i - seg; if (l == 0 || (l == 1 && s.p[seg] == '.') || (l == 2 && s.p[seg] == '.' && s.p[seg + 1] == '.')) return 0; seg = i + 1; continue; }
+        char c = s.p[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '+' || c == '.')) return 0;
+    }
+    return 1;
+}
+static Str ss_tz_err(Str name, const char* why) { SB_INIT(b); sb_put(&b, name.p, name.len); sb_put(&b, why, (int64_t)strlen(why)); return sb_done(&b); }
+static int ss_tz_load(Str name, SsZB* out, Str* err) {
+    int64_t secs;
+    if (ss_tz_parse_fixed(name, &secs)) { *out = ss_tz_fixed(secs == 0 ? (Str){3, "UTC"} : name, secs); return 1; }
+    if (!ss_tz_valid(name)) { *err = ss_tz_err(name, ": unknown time zone"); return 0; }
+    const char* dir = getenv("TZDIR"); if (!dir || !*dir) dir = "/usr/share/zoneinfo";
+    size_t dl = strlen(dir); char* path = (char*)malloc(dl + (size_t)name.len + 2); memcpy(path, dir, dl); path[dl] = '/'; memcpy(path + dl + 1, name.p, (size_t)name.len); path[dl + 1 + name.len] = 0;
+    int64_t n = 0; unsigned char* b = ss_tz_read(path, &n); free(path);
+    if (!b) { *err = ss_tz_err(name, ": unknown time zone"); return 0; }
+    int ok = ss_tz_parse(name, b, n, out); free(b);
+    if (!ok) *err = ss_tz_err(name, ": invalid time zone data");
+    return ok;
+}
+static int ss_tz_local(SsZB* out, Str* err) {
+    int64_t n = 0; unsigned char* b = ss_tz_read("/etc/localtime", &n);
+    if (!b) { *err = ss_tz_err((Str){9, "localtime"}, ": unknown time zone"); return 0; }
+    char link[1024]; ssize_t k = readlink("/etc/localtime", link, sizeof link - 1); if (k < 0) k = 0; link[k] = 0;
+    Str name = {9, "localtime"};
+    for (ssize_t i = k - 9; i >= 0; i--) if (memcmp(link + i, "zoneinfo/", 9) == 0) { name = ss_tz_str(link + i + 9, (int64_t)k - i - 9); break; }
+    int ok = ss_tz_parse(name, b, n, out); free(b);
+    if (!ok) *err = ss_tz_err((Str){9, "localtime"}, ": invalid time zone data");
+    return ok;
+}
+static int64_t ss_tz_fdiv(int64_t a, int64_t b) { int64_t q = a / b; if ((a % b != 0) && ((a < 0) != (b < 0))) q--; return q; }
+static int64_t ss_tz_rlocal(int64_t y, const int64_t* r) {
+    int64_t days;
+    if (r[0] == 0) {
+        int64_t first = ss_dfc(y, r[1], 1); int64_t wd = ((first + 4) % 7 + 7) % 7;
+        int64_t day = 1 + ((r[3] - wd) % 7 + 7) % 7 + (r[2] - 1) * 7;
+        if (day > ss_mdays(y, r[1])) day -= 7;
+        days = ss_dfc(y, r[1], day);
+    } else if (r[0] == 1) days = ss_dfc(y, 1, 1) + r[1] - 1 + (ss_leap(y) && r[1] >= 60);
+    else days = ss_dfc(y, 1, 1) + r[1];
+    return days * 86400 + r[4];
+}
+static int64_t ss_tz_rtype(const SsZ* z, int64_t s) {
+    const int64_t* r = z->rule;
+    if (r[1] < 0) return r[0];
+    int64_t so = z->off[r[0]], dso = z->off[r[1]];
+    int64_t y, mo, d; ss_civil(ss_tz_fdiv(s + so, 86400), &y, &mo, &d);
+    int64_t start = ss_tz_rlocal(y, r + 2) - so, end = ss_tz_rlocal(y, r + 7) - dso;
+    int dst = start < end ? (start <= s && s < end) : !(end <= s && s < start);
+    return dst ? r[1] : r[0];
+}
+static int64_t ss_tz_type(const SsZ* z, int64_t t) {
+    int64_t s = ss_tz_fdiv(t, 1000), n = z->ntr;
+    if (n == 0 || s < z->tr[0]) return (n == 0 && z->nrule) ? ss_tz_rtype(z, s) : 0;
+    int64_t lo = 0, hi = n;
+    while (lo < hi) { int64_t m = lo + (hi - lo) / 2; if (z->tr[m] <= s) lo = m + 1; else hi = m; }
+    if (lo == n && z->nrule) return ss_tz_rtype(z, s);
+    return z->ix[lo - 1];
+}
+static int64_t ss_tz_off(const SsZ* z, int64_t t) { return z->off[ss_tz_type(z, t)] * 1000; }
+static int64_t ss_tz_localt(const SsZ* z, int64_t t, Status* st) { int64_t o; if (__builtin_add_overflow(t, ss_tz_off(z, t), &o)) ss_fail(st, "integer overflow"); return o; }
+static int ss_tz_utc(const SsZ* z, int64_t w, int64_t* out, Status* st) {
+    int64_t two = 2 * 86400000LL, pr[3], best = 0; int found = 0;
+    if (__builtin_sub_overflow(w, two, &pr[0]) || __builtin_add_overflow(w, two, &pr[2])) ss_fail(st, "integer overflow");
+    pr[1] = w;
+    for (int k = 0; k < 3; k++) {
+        int64_t o = ss_tz_off(z, pr[k]), t;
+        if (__builtin_sub_overflow(w, o, &t)) ss_fail(st, "integer overflow");
+        if (ss_tz_off(z, t) == o && (!found || t < best)) { best = t; found = 1; }
+    }
+    *out = best; return found;
+}
+static Str ss_tz_iso(const SsZ* z, int64_t t, Status* st) {
+    int64_t off = ss_tz_off(z, t); int64_t l = ss_tz_localt(z, t, st);
+    SB_INIT(b); ss_iso_put(&b, l);
+    if (off != 0) { b.len -= 1; ss_tz_offname(&b, off / 1000); }
+    return sb_done(&b);
+}
+static Str ss_tz_format(const SsZ* z, int64_t t, Str pat, Status* st) {
+    int64_t off = ss_tz_off(z, t); int64_t l = ss_tz_localt(z, t, st); Str ab = z->ab[ss_tz_type(z, t)];
+    SB_INIT(b);
+    for (int64_t i = 0; i < pat.len; i++) {
+        if (pat.p[i] != '%') { sb_put(&b, pat.p + i, 1); continue; }
+        if (i + 1 >= pat.len) { sb_put(&b, "%", 1); continue; }
+        char d = pat.p[++i];
+        if (d == 'z') { SB_INIT(o); ss_tz_offname(&o, off / 1000); for (int64_t k = 0; k < o.len; k++) if (o.p[k] != ':') sb_put(&b, o.p + k, 1); }
+        else if (d == 'Z') { for (int64_t k = 0; k < ab.len; k++) { sb_put(&b, ab.p + k, 1); if (ab.p[k] == '%') sb_put(&b, "%", 1); } }
+        else { sb_put(&b, "%", 1); sb_put(&b, &d, 1); }
+    }
+    Str q = sb_done(&b);
+    for (int64_t i = 0; i < q.len; i++) {
+        if (q.p[i] != '%') continue;
+        if (i + 1 >= q.len || q.p[i + 1] == 0 || !strchr("YmdHMSLjuaAbBFT%", q.p[i + 1])) { SB_INIT(e); sb_put(&e, "bad time format '", 17); sb_put(&e, pat.p, pat.len); sb_put(&e, "'", 1); ss_failstr(st, sb_done(&e)); }
+        i++;
+    }
+    return ss_tfmt(l, q, st);
+}

@@ -304,6 +304,18 @@ impl Interp {
                 let v = crate::stdflat::mdspan(&data, &Value::list(shape.iter().map(|e| Value::Int(*e)).collect())).ok()?;
                 if rng.chance(30) { crate::stdflat::md_method("transpose", match &v { Value::Record(_, fs) => fs, _ => return None }, &[]).ok()? } else { v }
             }
+            "Zone" if !self.types.contains_key(name) => {
+                const NAMES: &[&str] = &["America/New_York", "Europe/London", "Europe/Dublin", "Australia/Sydney", "Australia/Lord_Howe", "Asia/Kolkata", "America/St_Johns", "Pacific/Chatham", "Africa/Casablanca", "America/Sao_Paulo", "Antarctica/Troll", "Asia/Tehran", "America/Godthab"];
+                let k = rng.below(NAMES.len() as u64 + 3) as usize;
+                let z = match NAMES.get(k) {
+                    Some(n) => sspur_native::tz::load(n).ok()?,
+                    None => {
+                        let m = rng.range(-1439, 1439);
+                        sspur_native::tz::fixed(&sspur_native::tz::offset_name(m * 60), m * 60)
+                    }
+                };
+                crate::stdtz::zone_value(&z)
+            }
             "Complex" if !self.types.contains_key(name) => {
                 let f_ty = Ty::Named { name: "F64".into(), args: vec![], span: Span::default() };
                 let (re, im) = (self.generate(&f_ty, rng, opts, depth)?, self.generate(&f_ty, rng, opts, depth)?);

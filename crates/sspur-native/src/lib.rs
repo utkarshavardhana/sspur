@@ -14,6 +14,7 @@ pub mod chrono;
 pub mod json;
 pub mod nval;
 pub mod rnd;
+pub mod tz;
 
 use nval::{scalar_display, Layouts, NVal};
 use sspur_check::Type;

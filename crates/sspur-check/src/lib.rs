@@ -1703,6 +1703,10 @@ impl Checker {
         let mut cur = self.resolve(base);
         for seg in path {
             cur = match (seg, &cur) {
+                (PathSeg::Field(_), Type::Con(n, _)) if n.starts_with('#') => {
+                    self.err("E_WITH_PATH", span, format!("{cur} fields are read-only"));
+                    return self.fresh();
+                }
                 (PathSeg::Field(f), Type::Con(n, args)) => match self.types.get(n).cloned() {
                     Some(TypeInfo { params, kind: TypeKind::Record(fields) }) => match fields.iter().find(|(name, _)| name == f) {
                         Some((_, ft)) => {

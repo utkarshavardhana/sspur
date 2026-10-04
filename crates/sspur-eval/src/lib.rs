@@ -11,6 +11,7 @@ mod stdflat;
 mod stdre;
 mod stdrng;
 mod stdtime;
+mod stdtz;
 mod stdx;
 pub mod value;
 

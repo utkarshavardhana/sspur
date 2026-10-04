@@ -74,7 +74,7 @@ impl Checker {
                 match n.as_str() {
                     "Int" | "F64" | "Bool" | "Str" | "Unit" | "List" | "Opt" | "Map" | "Pii" | "#Set" | "#Heap" | "#StrBuf" | "#Time" | "#Duration" | "#Bits" | "#HashMap" | "#HashSet" | "#BigInt" | "#Dec" => None,
                     "Secret" => Some("secrets cannot be encoded".into()),
-                    "#Regex" => Some("Regex has no JSON form".into()),
+                    "#Regex" | "#Zone" => Some(format!("{} has no JSON form", &n[1..])),
                     _ if seen.contains(n) => None,
                     _ if decode && self.refined_names.contains(n) => Some(format!("{n} has 'where' refinements that decoding cannot check")),
                     _ => {

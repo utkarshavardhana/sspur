@@ -257,6 +257,9 @@ impl Interp {
         if let Some(v) = crate::stdcx::global(n, &a)? {
             return Ok(v);
         }
+        if let Some(v) = crate::stdtz::global(n, &a)? {
+            return Ok(v);
+        }
         match n {
             "empty_flat_map" => return Ok(crate::stdflat::empty_flat()),
             "mdspan" => return crate::stdflat::mdspan(&a[0], &a[1]),

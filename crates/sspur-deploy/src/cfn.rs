@@ -221,15 +221,23 @@ fn rollout(res: &mut Map<String, Value>, svc: &Service, id: &str) {
 }
 
 const BUILD: &str = r#"#!/bin/sh
-# Builds bootstrap.zip for provided.al2023 on arm64 inside an Amazon Linux 2023 container. Needs docker; touches no AWS account.
+# Builds bootstrap.zip for provided.al2023 on arm64 without containers: cross-compiles with zig against glibc 2.34 and
+# links a libcurl.so.4 stub, since the Lambda AL2023 runtime ships the real libcurl. Touches no AWS account.
 set -eu
 cd "$(dirname "$0")"
-docker run --rm --platform linux/arm64 -v "$PWD":/w -w /w public.ecr.aws/amazonlinux/amazonlinux:2023 sh -c '
-  dnf install -y --allowerasing clang libcurl-devel zip findutils >/dev/null
-  clang -O2 -w -o bootstrap bootstrap.c -lcurl -lpthread -lm
-  rm -rf lib && mkdir lib
-  ldd bootstrap | awk "/=> \//{print \$3}" | grep -v -E "/(libc|libm|libpthread|libdl|librt|ld-linux)[.-]" | xargs -r -I{} cp -L {} lib/
-  rm -f bootstrap.zip && zip -qr bootstrap.zip bootstrap lib'
+command -v zig >/dev/null || { echo "build.sh needs zig (brew install zig)"; exit 1; }
+T=aarch64-linux-gnu.2.34
+W=$(mktemp -d)
+for d in "$(brew --prefix curl 2>/dev/null)/include" "$(xcrun --show-sdk-path 2>/dev/null)/usr/include" /usr/include; do
+  [ -f "$d/curl/curl.h" ] && { mkdir -p "$W/inc" && cp -R "$d/curl" "$W/inc/"; break; }
+done
+[ -d "$W/inc/curl" ] || { echo "build.sh needs curl headers"; exit 1; }
+for f in curl_easy_getinfo curl_easy_init curl_easy_perform curl_easy_reset curl_easy_setopt curl_global_init curl_slist_append curl_slist_free_all; do
+  echo "void $f(void) {}"
+done > "$W/stub.c"
+zig cc -target $T -shared -Wl,-soname,libcurl.so.4 -o "$W/libcurl.so" "$W/stub.c"
+zig cc -target $T -O2 -w -I"$W/inc" -o bootstrap bootstrap.c -L"$W" -lcurl -lpthread -lm
+rm -rf "$W" bootstrap.zip && zip -q bootstrap.zip bootstrap
 echo "built bootstrap.zip"
 "#;
 

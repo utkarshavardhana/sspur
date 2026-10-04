@@ -85,3 +85,12 @@ For `examples/crud/items.ssp` the derived actions are: `create` and `update` Get
 - The runtime's Unicode helpers (`lower`, `upper`, `words` on non-ASCII text) are ASCII approximations of the host versions.
 - `migrate` for value schema changes, staged rollout and SLO alarms from `slo`, `queue`/`sched`, and Fargate via the cost model.
 - An explicit operator decision, with credentials, to run `deploy.sh`.
+
+## First real deploy (2026-10-04)
+
+`examples/crud/items.ssp` was deployed with the generated `build.sh` and `deploy.sh` to a test account in us-west-2 (stack `sspur-items`), then fully torn down, including the retained table and the artifact bucket.
+
+- `build.sh` no longer needs containers. It cross-compiles `bootstrap.c` with `zig cc` for `aarch64-linux-gnu.2.34` and links a `libcurl.so.4` stub; the Lambda AL2023 runtime provides the real libcurl.
+- Live results: create 201, duplicate create 409, read 200, update 200, list 200, a `where` violation 400, delete 204, read after delete 404, delete again 404.
+- The deployed read role allowed exactly `dynamodb:GetItem` on the table plus writes to its own log group, with no managed policies.
+- SigV4 with session tokens worked against real DynamoDB.

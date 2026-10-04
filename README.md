@@ -179,7 +179,7 @@ SSPUR is at version 0.1 and under active development. The language and tools are
 | 3. Agent loop: codebase, transactions, queries, MCP, effect handlers | Done |
 | 4. Native compiler, `sys` profile, ownership, concurrency, SMT contracts | Done |
 | 5. Bare-metal profile, SIMD, C interop, LLVM, PGO and LTO, inline asm, embedded | Done: C through clang stays the production path (a direct LLVM IR prototype was measured at 0.98x to 1.04x, ADR 0024), opt-in PGO and explicit LTO, inline asm, a Cortex-M4 firmware target, fixed arrays and static state shared with interrupt handlers; real boards beyond QEMU and a board description format remain |
-| 6. Deployment, migrations, hot swap, replay, GPU kernels, standard library | Mostly done: 22 of 23 C++ library areas covered, locale partial by decision; a first real AWS deploy is pending |
+| 6. Deployment, migrations, hot swap, replay, GPU kernels, standard library | Mostly done: 22 of 23 C++ library areas covered, locale partial by decision; first real AWS deploy verified end to end |
 | 7. Multi-agent sync, replica sync, global build cache, proven rewrites, cost-driven optimization | Done: 100 concurrent agents with no lost work, per-definition native objects, proven rewrites with `sspur explain-opt`, cost-driven inlining and fusion; an authenticated sync server remains |
 
 See the [roadmap](docs/roadmap.md) for details and exit criteria.

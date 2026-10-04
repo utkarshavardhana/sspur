@@ -1,0 +1,61 @@
+type Event = {ts: Int, level: Str, msg: Str}
+type EventErr = BadJson{text: Str}
+
+fn parse_line(line: Str) -> Opt[Event]
+= do
+  caps = regex("^\\[(\\d+)\\] ([A-Z]+):(.*)$").map(r => r.captures(line)).or(none)
+  match caps
+    | some(g) => g[1].to_int.map(ts => Event{ts, level: g[2], msg: g[3].trim})
+    | none => none
+
+fn ingest(lines: List[Str]) -> List[Event] ! log
+= do
+  var out = []
+  for l in lines
+    match parse_line(l)
+      | some(e) => out := out.push(e)
+      | none => log("skip: " + l)
+  out
+
+fn count_by_level(evs: List[Event]) -> List[(Str, Int)]
+= evs.map(_.level).counts
+
+fn to_json(evs: List[Event]) -> Str
+= json.encode(evs)
+
+fn from_json(s: Str) -> List[Event] ! fail[EventErr]
+= match json.decode[List[Event]](s)
+  | ok(evs) => evs
+  | err(_) => raise BadJson{text: s}
+
+fn redact(e: Event) -> Event
+= match regex("[A-Za-z0-9._-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+")
+  | ok(r) => e with msg := r.replace(e.msg, "<email>")
+  | err(_) => e
+
+fn skipped(lines: List[Str]) -> List[Str]
+= do
+  var out = []
+  handle ingest(lines)
+    | log(m) => do
+      out := out.push(m.drop(6))
+      resume()
+  out
+
+fn sample() -> List[Str]
+= ["[1] INFO: start", "[2] WARN: disk low", "oops", "[3] INFO: done"]
+
+fn main() -> Unit ! log
+= log(count_by_level(ingest(sample())).map(p => "{p.0}={p.1}").join(","))
+
+test parse_ok = parse_line("[5] INFO: up") == some(Event{ts: 5, level: "INFO", msg: "up"})
+
+test parse_bad = parse_line("5|INFO|up").is_none
+
+test counts = count_by_level([Event{ts: 1, level: "B", msg: ""}, Event{ts: 2, level: "A", msg: ""}, Event{ts: 3, level: "B", msg: ""}]) == [("B", 2), ("A", 1)]
+
+test json_round = from_json(to_json(ingest(sample()))) == ingest(sample())
+
+test redact_one = redact(Event{ts: 1, level: "I", msg: "mail a.b@x.io now"}).msg == "mail <email> now"
+
+test skipped_one = skipped(sample()) == ["oops"]

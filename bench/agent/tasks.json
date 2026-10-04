@@ -84,5 +84,16 @@
    "Add get_bool(cfg, key, default): \"true\", \"yes\", \"1\" give true and \"false\", \"no\", \"0\" give false (case-insensitive); a missing key gives default; any other value raises a new variant NotBool(key, value).",
    "Add tests for the new behavior."],
   "sspur": "NotInt{key: Str, value: Str} and NotBool{key: Str, value: Str} are new variants of CfgErr; fn get_int(cfg: List[Entry], key: Str) -> Int ! fail[CfgErr]; fn get_bool(cfg: List[Entry], key: Str, default: Bool) -> Bool ! fail[CfgErr]",
-  "python": "class NotInt(CfgErr) and class NotBool(CfgErr), each with attributes key and value; get_int(cfg, key) -> int; get_bool(cfg, key, default) -> bool"}
+  "python": "class NotInt(CfgErr) and class NotBool(CfgErr), each with attributes key and value; get_int(cfg, key) -> int; get_bool(cfg, key, default) -> bool"},
+ {"id": "a9_events", "new": true,
+  "title": "Event log: switch the parser to a regex, add JSON export and import, redaction, and skipped lines",
+  "steps": [
+   "parse_line must accept only the new format \"[<ts>] <LEVEL>: <msg>\": ts is one or more digits, LEVEL is one or more uppercase letters A-Z, msg is the rest of the line with surrounding whitespace trimmed (it may be empty). Use a regular expression. The old \"|\" format and anything else give nothing. Update sample and the tests.",
+   "Add to_json(evs): compact JSON (no spaces) of the list, each event an object with fields ts, level, msg in that order, for example [{\"ts\":1,\"level\":\"INFO\",\"msg\":\"up\"}].",
+   "Add an error type EventErr with a variant BadJson (field text), and from_json(s): the events in a JSON array of such objects. Raise BadJson(s) if s is not valid JSON or does not have that shape (ts an integer, level and msg strings, none missing).",
+   "Add redact(e): the event with every email address in msg replaced by \"<email>\". An email is one or more of A-Z a-z 0-9 . _ -, then @, then one or more of A-Z a-z 0-9 -, then one or more groups of a dot followed by one or more of A-Z a-z 0-9 -.",
+   "Add skipped(lines): the lines that ingest skips, in order.",
+   "Add tests for the new behavior."],
+  "sspur": "fn parse_line(line: Str) -> Opt[Event]; type EventErr = BadJson{text: Str}; fn to_json(evs: List[Event]) -> Str; fn from_json(s: Str) -> List[Event] ! fail[EventErr]; fn redact(e: Event) -> Event; fn skipped(lines: List[Str]) -> List[Str]",
+  "python": "parse_line(line) -> Optional[Event]; class EventErr(Exception); class BadJson(EventErr) with attribute text; to_json(evs) -> str; from_json(s) -> List[Event]; redact(e) -> Event; skipped(lines) -> List[str]"}
 ]

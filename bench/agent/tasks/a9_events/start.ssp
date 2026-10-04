@@ -1,0 +1,33 @@
+type Event = {ts: Int, level: Str, msg: Str}
+
+fn parse_line(line: Str) -> Opt[Event]
+= do
+  parts = line.split("|")
+  if parts.len != 3 then return none
+  match parts[0].trim.to_int
+    | some(ts) => some(Event{ts, level: parts[1].trim, msg: parts[2].trim})
+    | none => none
+
+fn ingest(lines: List[Str]) -> List[Event] ! log
+= do
+  var out = []
+  for l in lines
+    match parse_line(l)
+      | some(e) => out := out.push(e)
+      | none => log("skip: " + l)
+  out
+
+fn count_by_level(evs: List[Event]) -> List[(Str, Int)]
+= evs.map(_.level).counts
+
+fn sample() -> List[Str]
+= ["1|INFO|start", "2|WARN|disk low", "oops", "3|INFO|done"]
+
+fn main() -> Unit ! log
+= log(count_by_level(ingest(sample())).map(p => "{p.0}={p.1}").join(","))
+
+test parse_ok = parse_line("5|INFO|up") == some(Event{ts: 5, level: "INFO", msg: "up"})
+
+test parse_bad = parse_line("x|INFO|up").is_none
+
+test counts = count_by_level([Event{ts: 1, level: "B", msg: ""}, Event{ts: 2, level: "A", msg: ""}, Event{ts: 3, level: "B", msg: ""}]) == [("B", 2), ("A", 1)]

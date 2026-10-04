@@ -1,0 +1,39 @@
+fn hidden_ev(ts: Int, level: Str, msg: Str) -> Event
+= Event{ts, level, msg}
+
+test hidden_parse_new = parse_line("[42] ERROR: disk full") == some(hidden_ev(42, "ERROR", "disk full"))
+
+test hidden_parse_trim = parse_line("[7] WARN:    spaced out   ") == some(hidden_ev(7, "WARN", "spaced out"))
+
+test hidden_parse_empty_msg = parse_line("[3] INFO: ") == some(hidden_ev(3, "INFO", ""))
+
+test hidden_parse_old_rejected = parse_line("5|INFO|up").is_none
+
+test hidden_parse_bad = parse_line("[x] INFO: a").is_none and parse_line("[1] info: a").is_none and parse_line("1] INFO: a").is_none and parse_line("[1]INFO: a").is_none
+
+test hidden_ingest = ingest(["[1] INFO: a", "junk", "[2] WARN: b"]) == [hidden_ev(1, "INFO", "a"), hidden_ev(2, "WARN", "b")]
+
+test hidden_to_json = to_json([hidden_ev(1, "INFO", "up"), hidden_ev(2, "WARN", "x y")]) == "[{\"ts\":1,\"level\":\"INFO\",\"msg\":\"up\"},{\"ts\":2,\"level\":\"WARN\",\"msg\":\"x y\"}]"
+
+test hidden_to_json_empty = to_json([]) == "[]"
+
+test hidden_from_json = from_json("[{\"ts\": 9, \"level\": \"INFO\", \"msg\": \"hi\"}]") == [hidden_ev(9, "INFO", "hi")]
+
+test hidden_json_round = from_json(to_json([hidden_ev(1, "A", "q\"uote")])) == [hidden_ev(1, "A", "q\"uote")]
+
+test hidden_from_json_bad = catch from_json("nope") == []
+  | BadJson{text} => text == "nope"
+
+test hidden_from_json_shape = catch from_json("[{\"ts\": \"1\", \"level\": \"A\", \"msg\": \"\"}]") == []
+  | BadJson{text} => text.starts_with("[")
+
+test hidden_from_json_missing = catch from_json("[{\"ts\": 1, \"level\": \"A\"}]") == []
+  | BadJson{text} => true
+
+test hidden_redact = redact(hidden_ev(1, "INFO", "from bob.smith@mail.example.com to a_b-c@x-y.io.")).msg == "from <email> to <email>."
+
+test hidden_redact_none = redact(hidden_ev(4, "INFO", "no @ here or a@b")) == hidden_ev(4, "INFO", "no @ here or a@b")
+
+test hidden_skipped = skipped(["[1] INFO: a", "junk", "[2] WARN: b", "", "2|INFO|old"]) == ["junk", "", "2|INFO|old"]
+
+test hidden_counts = count_by_level(ingest(["[1] B: x", "[2] A: y", "[3] B: z"])) == [("B", 2), ("A", 1)]

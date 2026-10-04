@@ -49,7 +49,7 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 `extern fn cbrt(x: F64) -> F64 ! ffi from "m"`. `profile sys`: `res type F = {fd: Int} drop close` (moved, dropped at scope end), `&x`/`&mut x` borrows, `! unsafe` pointers. `profile bare`: no heap, `mmio`, `interrupt`. `kernel fn k(y: &mut [F32]) @grid(y.len, 64)` + `= y[gid] := 2.0 * y[gid]` runs per thread; `k(&mut ys)` needs `! dev`; `dev_f32(xs)` stays on the GPU. Details: `./sspur spec --full`.
 
 ## Services
-`store S = table[K, V]`; `db.get(S, k)` (Opt) `db.scan(S)` need `! db.read[S]`, `db.put(S, k, v) db.del` need `! db.write[S]`. `svc name` + `ep get "/items/{id}" = fname` (`{id}` binds `id`, another param is the JSON body, `none` or `NotFound` is 404). Changing V beyond new `Opt` fields or variants needs `fn migrate_S(old: OldV) -> V` (and `unmigrate_S` back, to run side by side).
+`store S = table[K, V]`; `db.get(S, k)` (Opt) `db.scan(S)` need `! db.read[S]`, `db.put(S, k, v) db.del` need `! db.write[S]`. `svc name` + `ep get "/items/{id}" = fname` (`{id}` binds `id`, another param is the JSON body, `none` or `NotFound` is 404). Changing V beyond new `Opt` fields or variants needs `fn migrate_S(old: OldV) -> V`.
 
 ## CLI
-`./sspur src`, `./sspur q body|sig|callers NAME`. `./sspur edit --test -e '<definitions>'`: replaces or adds definitions by name (`rename OLD NEW`, `remove NAME` lines first); atomic; `--test` runs all tests. `./sspur test|check`, `./sspur deploy plan|local file`, `deploy migrate|replay old new`.
+`./sspur src`, `./sspur q body|sig|callers NAME`. `./sspur edit --test -e '<definitions>'`: adds or replaces by name (`rename OLD NEW`, `remove NAME` lines first), atomic, `--test` runs tests. Concurrent edits merge; on `E_CONFLICT` read theirs, merge, resend. `./sspur test|check`, `sync pull|push DIR`, `deploy plan|local|migrate|replay`.

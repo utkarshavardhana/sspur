@@ -536,8 +536,23 @@ The codebase is edited only through transactions, using `sspur apply` or the MCP
 | `refine` | `target`, `contract: {pre?, post?, effects?: ["+log", "-log"]}` | |
 | `fill` | `hole` (`"?name"` or `"?"`), `expr`, optional `target` | |
 | `attach` | `target`, `kind: "test"` or `"req"`, `value` | |
+| `resolve` | `path`, `pick: "ours"` or `"theirs"` | Only in a `"merge": true` transaction while a sync pull is pending |
 
 A transaction applies completely or not at all. If the result doesn't typecheck, it's rejected with diagnostics; typed holes are allowed. Diagnostics carry `fix` ops you can apply directly.
+
+### Concurrent agents
+
+Any number of agents (threads or processes) may edit one codebase at once. A transaction runs against `base` (default: HEAD when it starts) and is merged into whatever HEAD is when it commits:
+
+- Changes to different definitions merge. So do a rename and a body edit of the same definition, identical edits, and `refine`, `fill` or `attach` against a concurrent edit (they are replayed on the new version). Callers written against an old name follow the rename.
+- The merged program is typechecked before it lands. If it doesn't typecheck, the transaction is rejected with `E_MERGE`, the definitions that changed concurrently, and a `rebase` (`{base, ops}`) to retry.
+- Two edits of one body, a rename to two names, an edit of a removed definition, or two definitions with one name are `E_CONFLICT`: the result lists `conflicts` (path, kind, their source, agent, commit, time) and the diagnostic's `fix` is a `replace` that forces your version. Rebase: read theirs, merge, resend.
+
+A crash at any point leaves the old or the new state. Check results are cached per definition in `~/.cache/sspur/check` (or `$SSPUR_CACHE`), shared by every codebase, so `sspur check` only rechecks definitions whose text or callees' signatures changed (`--no-cache` disables it).
+
+### Replicas
+
+`sspur sync serve [--port N] [--max N]` serves the codebase over TCP (one JSON line per request). `sspur sync pull REMOTE` and `sspur sync push REMOTE` exchange commits and texts by hash with a directory or `tcp://host:port` and merge them by the rules above. A pull with conflicts, or whose merge doesn't typecheck, leaves HEAD unchanged and prints both sides; settle it with `sspur sync resolve ours|theirs [PATH...]`, or with a transaction that has `"merge": true` (and `resolve` ops). A push that would conflict is refused: pull, resolve, push again. `sspur sync status` shows HEAD, heads and any pending merge. Replicas that have exchanged all commits have the same root hash.
 
 Queries (`sspur q <query> [target] [--budget N]`, or the MCP tool `sspur_query`):
 

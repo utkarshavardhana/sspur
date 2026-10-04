@@ -1,3 +1,4 @@
+#![allow(clippy::result_large_err)]
 pub mod cache;
 pub mod crdt;
 pub mod query;
@@ -393,11 +394,10 @@ impl Store {
     /// Brings HEAD in line with the index after a crash between the two writes.
     pub fn recover(&self) {
         let Some(r) = self.index_root_hint() else {
-            if self.head().is_some() {
-                if let Ok(_l) = self.lock() {
+            if self.head().is_some()
+                && let Ok(_l) = self.lock() {
                     let _ = self.ensure_index();
                 }
-            }
             return;
         };
         if self.head().unwrap_or_default() != r

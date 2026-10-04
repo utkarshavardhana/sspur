@@ -1,0 +1,63 @@
+kernel fn ops(a: &[F32], b: &[F32], c: &[F32], o: &mut [F32], tiny: F32) @grid(a.len, 128)
+= do
+  x = a[gid]
+  y = b[gid]
+  z = c[gid]
+  k = gid * 10
+  o[k] := x * y + z
+  o[k + 1] := x / y
+  o[k + 2] := x.abs.sqrt
+  o[k + 3] := x - y * z
+  o[k + 4] := (x + y) * (x - z)
+  o[k + 5] := (x / 3.0).floor + (y * 0.5).round
+  o[k + 6] := x.min(y) - z.max(x)
+  o[k + 7] := if x < y then -x.ceil else y / (z + 1.0)
+  o[k + 8] := gid.to_f32 * 1.0e-3 + (gid * 7919 % 1000003).to_f32
+  o[k + 9] := (x * tiny) * (y * tiny)
+
+kernel fn ints(a: &[I32], b: &[I32], o: &mut [Int]) @grid(a.len, 64)
+= do
+  x = a[gid].to_int
+  y = b[gid].to_int
+  var acc = 0
+  for j in 0..8
+    acc := acc + (x * (j + 1)) % (y.abs + 1) - (y / (j + 2))
+  o[gid] := acc + x.max(y) * 3 - x.min(y).abs
+
+fn lcg(s: Int) -> Int
+= (s * 1103515245 + 12345) % 2147483648
+
+fn floats(n: Int, seed: Int, lo: Int) -> List[F64]
+= do
+  var s = seed
+  var out = []
+  for i in 0..n
+    s := lcg(s)
+    m = (s % 2000000).to_f64 / 1000.0 - 1000.0
+    e = (s / 2000000) % (9 - lo) + lo
+    v = if e == 0 then m * 1.0e-36 else if e == 1 then m * 1.0e30 else if e == 2 then 0.0 else m
+    out := out.push(v)
+  out
+
+fn small(n: Int, seed: Int) -> List[Int]
+= do
+  var s = seed
+  var out = []
+  for i in 0..n
+    s := lcg(s)
+    out := out.push(s % 200001 - 100000)
+  out
+
+fn main() ! dev, log
+= do
+  n = 3000
+  for lo in 0..2
+    a = floats(n, 1, lo)
+    b = floats(n, 2, lo)
+    c = floats(n, 3, lo)
+    var o = (0..n * 10).map(i => 0.0)
+    ops(&a, &b, &c, &mut o, if lo == 0 then 1.0e-20 else 1.0)
+    log("{o}")
+  var r = (0..n).map(i => 0)
+  ints(&small(n, 4), &small(n, 5), &mut r)
+  log("{r.sum} {r.take(20)}")

@@ -25,67 +25,106 @@ kernel fn mixed(a: &[I32], b: &[U32], f: &mut [F64]) @grid(f.len, 8)
 kernel fn conv(a: &[Int], b: &mut [I32]) @grid(a.len, 8)
 = b[gid] := a[gid].to_i32
 
-test oob_read = do
+fn run_oob_read() -> Bool ! dev
+= do
   var ys = [0.0, 0.0, 0.0]
   shift(&[1.0, 2.0, 3.0], &mut ys)
   ys == [2.0, 3.0, 0.0]
 
-test shift_ok = do
+test oob_read = run_oob_read()
+
+fn run_shift_ok() -> Bool ! dev
+= do
   var ys = [0.0, 0.0]
   shift(&[1.0, 2.0, 3.0], &mut ys)
   ys == [2.0, 3.0]
 
-test i32_overflow = do
+test shift_ok = run_shift_ok()
+
+fn run_i32_overflow() -> Bool ! dev
+= do
   var m = (0..100).map(i => i * 1000)
   times(&mut m, 30000)
   m[1] == 30000000
 
-test i32_ok = do
+test i32_overflow = run_i32_overflow()
+
+fn run_i32_ok() -> Bool ! dev
+= do
   var m = (0..100).map(i => i - 50)
   times(&mut m, -7)
   m[0] == 350 and m[99] == -343
 
-test div_zero = do
+test i32_ok = run_i32_ok()
+
+fn run_div_zero() -> Bool ! dev
+= do
   var m = (0..80).map(i => 70 - i)
   inv(&mut m)
   m[0] == 1
 
-test u32_underflow = do
+test div_zero = run_div_zero()
+
+fn run_u32_underflow() -> Bool ! dev
+= do
   var u = [3, 2, 1, 0, 5]
   decr(&mut u)
   u == [2, 1, 0, 0, 4]
 
-test pre_violation = do
+test u32_underflow = run_u32_underflow()
+
+fn run_pre_violation() -> Bool ! dev
+= do
   var ys = [1.0]
   guarded(&[1.0, 2.0], &mut ys)
   true
 
-test element_range = do
+test pre_violation = run_pre_violation()
+
+fn run_element_range() -> Bool ! dev
+= do
   var m = [1, 2, 3000000000]
   times(&mut m, 2)
   true
 
-test scalar_range = do
+test element_range = run_element_range()
+
+fn run_scalar_range() -> Bool ! dev
+= do
   var m = [1, 2]
   times(&mut m, 3000000000)
   true
 
-test f32_rounding = do
+test scalar_range = run_scalar_range()
+
+fn run_f32_rounding() -> Bool ! dev
+= do
   var ys = [0.1, 1.0e-30, 3.0e38, -2.5]
   tiny(&mut ys, 1.0e-10)
   ys[1] > 0.0 and ys[1] < 1.0e-39 and ys[0] != 0.1 * 1.0e-10
 
-test subnormal_input = do
+test f32_rounding = run_f32_rounding()
+
+fn run_subnormal_input() -> Bool ! dev
+= do
   var ys = [1.0e-40, 1.0]
   tiny(&mut ys, 2.0)
   ys[0] > 1.0e-40 and ys[1] == 2.0
 
-test mixed_types = do
+test subnormal_input = run_subnormal_input()
+
+fn run_mixed_types() -> Bool ! dev
+= do
   var f = [0.0, 0.0, 0.0, 0.0]
   mixed(&[1, -4, 7, 10], &[1, 1, 3, 4], &mut f)
   f == [2.0.sqrt, 3.0, 10.0.sqrt, 14.0.sqrt]
 
-test narrowing = do
+test mixed_types = run_mixed_types()
+
+fn run_narrowing() -> Bool ! dev
+= do
   var b = [0, 0, 0]
   conv(&[5, -2147483648, 2147483648], &mut b)
   true
+
+test narrowing = run_narrowing()

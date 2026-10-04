@@ -797,6 +797,13 @@ impl Lower<'_> {
                     {
                         return Some((true, s));
                     }
+                    if let Some(s) = self.stride(m)
+                        && let KExpr::Lit(KTy::Int, c) = self.deref(j)
+                        && let KExpr::Lit(KTy::Int, w) = self.stride_expr(m)
+                        && (0..*w as i64).contains(&(*c as i64))
+                    {
+                        return Some((true, s));
+                    }
                 }
                 None
             }
@@ -810,6 +817,14 @@ impl Lower<'_> {
             KExpr::Bin(BinOp::Mul, KTy::Int, a, b) if self.is_gid(a) => self.uniform(b),
             KExpr::Bin(BinOp::Mul, KTy::Int, a, b) if self.is_gid(b) => self.uniform(a),
             _ => None,
+        }
+    }
+
+    fn stride_expr<'b>(&'b self, e: &'b KExpr) -> &'b KExpr {
+        match self.deref(e) {
+            KExpr::Bin(BinOp::Mul, KTy::Int, a, b) if self.is_gid(a) => self.deref(b),
+            KExpr::Bin(BinOp::Mul, KTy::Int, a, _) => self.deref(a),
+            other => other,
         }
     }
 

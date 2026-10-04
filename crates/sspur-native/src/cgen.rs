@@ -11,6 +11,7 @@ mod conc;
 pub mod export;
 mod ffi;
 mod fuse;
+pub mod gpu;
 mod lower;
 mod own;
 mod prove;
@@ -950,7 +951,16 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
                 continue;
             };
             let snapshot = cx.snapshot();
-            let r = if f.ext.is_some() { cx.extern_fn(f, &params, &ret, index[&f.name]) } else { cx.function(f, &params, &ret, index[&f.name], &f.name) };
+            let r = if f.ext.is_some() {
+                cx.extern_fn(f, &params, &ret, index[&f.name])
+            } else if f.kernel.is_some() {
+                match check.kernels.get(&f.name) {
+                    Some(k) => cx.kernel_fn(f, &params, &ret, index[&f.name], k),
+                    None => Err("is a kernel that did not check".into()),
+                }
+            } else {
+                cx.function(f, &params, &ret, index[&f.name], &f.name)
+            };
             match r {
                 Ok(code) => {
                     bodies.push_str(&code);
@@ -1044,6 +1054,20 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
             src.push_str(&cx.fwd);
             src.push_str(&cx.defs);
             src.push_str(&cx.protos);
+            let kernels: Vec<&sspur_check::kernel::Kernel> = defs.iter().filter(|f| f.kernel.is_some() && ok.contains(&f.name)).filter_map(|f| check.kernels.get(&f.name)).collect();
+            if !kernels.is_empty() {
+                if export.is_some() {
+                    return Err("kernel fns can't be exported to C yet".into());
+                }
+                src.push_str(gpu::HOST_PRELUDE);
+                writeln!(src, "static const char ss_msl[] = {};", c_lit(&gpu::msl_source(&kernels.iter().copied().filter(|k| !k.uses_f64()).collect::<Vec<_>>()))).unwrap();
+                for k in &kernels {
+                    src.push_str(&gpu::cpu_kernel(k, index[&k.name]));
+                }
+                if cfg!(target_os = "macos") {
+                    links.get_or_insert_with(Vec::new).push(gpu::SHIM_LINK.into());
+                }
+            }
             for f in defs.iter().filter(|f| ok.contains(&f.name) && f.tparams.is_empty()) {
                 let (params, ret, _) = &plan_fns[&f.name];
                 let ps: Vec<String> = params.iter().zip(&f.params).map(|(t, p)| cx.cty(t).map(|c| if is_mut_borrow(&p.ty) { format!("{c}*") } else { c })).collect::<G<_>>()?;
@@ -1086,7 +1110,7 @@ fn iv_safe(op: BinOp, ra: Iv, rb: Iv) -> bool {
 }
 
 fn precheck(f: &FnDef, bare: bool) -> G<()> {
-    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe" | "fs" | "io" | "time" | "env" | "proc") && !(bare && e.name == "mmio") && !f.tparams.iter().any(|p| p.name == e.name)) {
+    if let Some(e) = f.effects.iter().find(|e| !matches!(e.name.as_str(), "div" | "log" | "fail" | "ffi" | "conc" | "db.read" | "db.write" | "unsafe" | "fs" | "io" | "time" | "env" | "proc" | "dev") && !(bare && e.name == "mmio") && !f.tparams.iter().any(|p| p.name == e.name)) {
         return Err(format!("performs '{}'", printer::effect(e)));
     }
     Ok(())
@@ -1098,6 +1122,7 @@ fn cache_dir() -> PathBuf {
 }
 
 fn build(src: &str, opt: &str, links: &[String]) -> Result<PathBuf, String> {
+    let links: Vec<String> = links.iter().map(|l| if l == gpu::SHIM_LINK { gpu::shim().map(|p| p.display().to_string()) } else { Ok(l.clone()) }).collect::<Result<_, _>>()?;
     let key = blake3::hash(format!("{opt}{}\n{src}", links.iter().map(|l| format!(" {l}")).collect::<String>()).as_bytes()).to_hex().to_string();
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -2134,7 +2159,7 @@ impl<'a> Cx<'a> {
     }
 
     fn may_raise(&self, name: &str) -> bool {
-        self.fn_def(name).is_none_or(|f| f.effects.iter().any(|e| !matches!(e.name.as_str(), "log" | "div" | "conc" | "unsafe")))
+        self.fn_def(name).is_none_or(|f| f.effects.iter().any(|e| !matches!(e.name.as_str(), "log" | "div" | "conc" | "unsafe" | "dev")))
     }
 
     fn fn_def(&self, name: &str) -> Option<&FnDef> {

@@ -2,6 +2,7 @@ mod agent;
 mod bind;
 mod deploy;
 mod mcp;
+mod sync;
 mod verify;
 
 use serde_json::{json, Value as Json};
@@ -32,7 +33,8 @@ const USAGE: &str = "usage:
   --O3 raises the optimization level; fuzz --differential compares native against the interpreter
   sspur build --target riscv64-qemu|aarch64-qemu file.ssp [-o kernel.elf]  build a 'profile bare' kernel (freestanding C, clang, ld.lld)
   sspur gpu file.ssp [--emit metal|opencl|spirv|ptx] [-o out]  emit the kernel fns as Metal, OpenCL C, SPIR-V or PTX (ADR 0020)
-  sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status   (sspur deploy for details; ADR 0016, 0019; never calls AWS)";
+  sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status   (sspur deploy for details; ADR 0016, 0019; never calls AWS)
+  sspur sync serve [--port N] | push REMOTE | pull REMOTE | status | resolve ours|theirs [PATH]   replicate by hash (REMOTE: dir or tcp://host:port; ADR 0021)";
 
 fn main() -> ExitCode {
     std::thread::Builder::new().stack_size(1 << 29).spawn(real_main).unwrap().join().unwrap()
@@ -63,7 +65,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -152,6 +154,7 @@ fn real_main() -> ExitCode {
             }
         }
         "deploy" => deploy::run(&args.pos[1..], &args.flags),
+        "sync" => sync::run(&args.pos[1..], args.val("--port").map(String::as_str), args.val("--max").and_then(|m| m.parse().ok()), args.val("--agent").map_or("sync", String::as_str), args.has("--json")),
         "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" | "build" | "gpu" => program_cmd(&cmd, &args),
         _ => {
             eprintln!("{USAGE}");

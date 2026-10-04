@@ -655,10 +655,7 @@ impl Store {
                 }
                 Some((bname, be, bids)) => {
                     let btext = self.text(&be.text).unwrap_or_default();
-                    let explained = be.hash == hash && {
-                        let mapped: BTreeSet<&str> = cache::idents(&btext).into_iter().map(|x| rename_map.get(x).copied().unwrap_or(x)).collect();
-                        mapped == cache::idents(&text)
-                    };
+                    let explained = btext == text || cache::map_idents(&btext, &rename_map) == text;
                     let body = if explained {
                         None
                     } else {
@@ -988,6 +985,7 @@ impl Store {
             Err(r) => r,
         };
         let (_, clashes) = crdt::view(&next);
+        if std::env::var_os("SSPUR_DEBUG").is_some() { for c in &clashes { for d in &c.dots { let cm = self.commit(crdt::dot_commit(d)).unwrap(); let i: usize = d.split(".").nth(1).unwrap().parse().unwrap(); eprintln!("DBG {} {} {} {:?} mine={}", c.path, d, cm.agent, cm.writes[i], mine.contains(&cm.id)); } } }
         let mut out = r;
         out.conflicts = clashes.iter().map(|c| self.clash_conflict(&ix, &next, c)).collect();
         if keep {

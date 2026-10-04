@@ -83,6 +83,29 @@ pub fn idents(text: &str) -> BTreeSet<&str> {
     out
 }
 
+pub fn map_idents(text: &str, map: &HashMap<&str, &str>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let b = text.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_alphabetic() || b[i] == b'_' {
+            let s = i;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+                i += 1;
+            }
+            out.push_str(map.get(&text[s..i]).copied().unwrap_or(&text[s..i]));
+        } else {
+            let s = i;
+            i += 1;
+            while i < b.len() && !b[i].is_ascii_alphabetic() && b[i] != b'_' {
+                i += 1;
+            }
+            out.push_str(&text[s..i]);
+        }
+    }
+    out
+}
+
 fn sev(s: &str) -> &'static str {
     match s {
         "error" => "error",

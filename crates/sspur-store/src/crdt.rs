@@ -83,6 +83,10 @@ impl Index {
     pub fn apply(&mut self, c: &Commit) {
         for (i, w) in c.writes.iter().enumerate() {
             let r = self.defs.entry(w.def.clone()).or_default();
+            let dot = c.dot(i);
+            if r.name.iter().any(|x| x.0 == dot) || r.body.iter().any(|x| x.0 == dot) {
+                continue;
+            }
             if let Some(n) = &w.name {
                 r.name.retain(|(d, _)| !w.sup.contains(d));
                 r.name.push((c.dot(i), n.clone()));

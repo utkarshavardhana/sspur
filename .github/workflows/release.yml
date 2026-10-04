@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-15
+          - target: x86_64-apple-darwin
+            os: macos-15
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Check the tag matches the crate version
+        shell: bash
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          have="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          if [ "$want" != "$have" ]; then
+            echo "tag $GITHUB_REF_NAME does not match workspace version $have" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p sspur-cli
+
+      - name: Smoke test
+        if: matrix.target != 'x86_64-apple-darwin'
+        run: ./target/${{ matrix.target }}/release/sspur --version
+
+      - name: Package
+        shell: bash
+        run: |
+          name="sspur-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/sspur" "dist/$name/"
+          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          cd dist
+          if command -v sha256sum >/dev/null; then sha256sum "$name.tar.gz"; else shasum -a 256 "$name.tar.gz"; fi > "$name.tar.gz.sha256"
+          cat "$name.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sspur-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums and Homebrew formula
+        run: |
+          cd dist
+          cat ./*.tar.gz.sha256 | sort -k2 > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cd ..
+          packaging/homebrew/render.sh "${GITHUB_REF_NAME#v}" dist/SHA256SUMS > dist/sspur.rb
+          cat dist/sspur.rb
+
+      - name: Release notes
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md || echo "See CHANGELOG.md." > notes.md
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+            --title "SSPUR ${GITHUB_REF_NAME}" --notes-file notes.md \
+            dist/*.tar.gz dist/SHA256SUMS dist/sspur.rb

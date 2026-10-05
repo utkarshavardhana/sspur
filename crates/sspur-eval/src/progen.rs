@@ -644,7 +644,7 @@ impl Gen {
             cx.eff.insert("log".into());
         } else if k < 90 {
             self.local_fn(cx, ind);
-        } else if k < 94 && self.sys && !cx.lambda {
+        } else if k < 97 && self.sys && !cx.lambda && (k >= 94 || self.r.chance(50)) {
             self.res_stmt(cx, ind);
         } else if k < 97 {
             self.par_stmt(cx, ind);

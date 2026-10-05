@@ -149,6 +149,10 @@ fn cmp_fields(a: &Fields, b: &Fields) -> Ordering {
     a.iter().map(|(_, v)| v).cmp(b.iter().map(|(_, v)| v))
 }
 
+fn canon(x: f64) -> f64 {
+    if x.is_nan() { f64::NAN } else { x }
+}
+
 impl Ord for Value {
     fn cmp(&self, other: &Self) -> Ordering {
         use Value::*;
@@ -156,7 +160,7 @@ impl Ord for Value {
             (Unit, Unit) => Ordering::Equal,
             (Bool(a), Bool(b)) => a.cmp(b),
             (Int(a), Int(b)) => a.cmp(b),
-            (Float(a), Float(b)) => a.total_cmp(b),
+            (Float(a), Float(b)) => canon(*a).total_cmp(&canon(*b)),
             (Str(a), Str(b)) => a.cmp(b),
             (List(a), List(b)) | (Tuple(a), Tuple(b)) => a.iter().cmp(b.iter()),
             (Record(n1, a), Record(n2, b)) => n1.cmp(n2).then_with(|| cmp_fields(a, b)),

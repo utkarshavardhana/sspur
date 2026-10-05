@@ -569,7 +569,7 @@ static inline int64_t ss_cas(SsAtom* a, int64_t e, int64_t v) { return __atomic_
 #define TO_RAW(l) ((RawL){(l).len, (void*)(l).data, (l).hdr})
 static inline int64_t dbits(double x) { int64_t b; memcpy(&b, &x, 8); return b; }
 static inline double bitsd(int64_t b) { double x; memcpy(&x, &b, 8); return x; }
-static inline int64_t dkey(double x) { int64_t b = dbits(x); b ^= (int64_t)(((uint64_t)(b >> 63)) >> 1); return b; }
+static inline int64_t dkey(double x) { int64_t b = x != x ? 0x7ff8000000000000LL : dbits(x); b ^= (int64_t)(((uint64_t)(b >> 63)) >> 1); return b; }
 static uint64_t sspur_prio_state = 0x9E3779B97F4A7C15ULL;
 static inline uint64_t sspur_prio(void) { uint64_t z = SS_MT() ? __atomic_add_fetch(&sspur_prio_state, 0x9E3779B97F4A7C15ULL, __ATOMIC_RELAXED) : (sspur_prio_state += 0x9E3779B97F4A7C15ULL); z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL; z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL; return z ^ (z >> 31); }
 static inline uint64_t hmix(uint64_t h) { h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ULL; h ^= h >> 33; return h; }

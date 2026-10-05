@@ -238,7 +238,13 @@ impl Interp {
                 };
                 Value::Int(if unsigned { v.checked_abs().unwrap_or(0) } else { v })
             }
-            "F64" | "F32" => Value::Float(if rng.chance(15) { 0.0 } else { rng.range(-100_000, 100_000) as f64 / 100.0 }),
+            "F64" | "F32" => Value::Float(if opts.edge && rng.chance(12) {
+                [-0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX, f64::MIN_POSITIVE, 5e-324, 0.1, 9007199254740993.0, -1e300][rng.below(10) as usize]
+            } else if rng.chance(15) {
+                0.0
+            } else {
+                rng.range(-100_000, 100_000) as f64 / 100.0
+            }),
             "Bool" => Value::Bool(rng.chance(50)),
             "Unit" => Value::Unit,
             "Str" => {

@@ -144,7 +144,7 @@ pub fn run(cfg: &Cfg) -> ExitCode {
                     }
                 }
                 Ok(Ok(ModuleRun { diffs, funcs, cases, native, skipped })) => {
-                    if *mode == "O2" {
+                    if *mode == cfg.modes[0] {
                         st.functions += funcs;
                         for (f, why) in &skipped {
                             let key: String = why.chars().take(60).map(|c| if c.is_ascii_digit() { 'N' } else { c }).collect();

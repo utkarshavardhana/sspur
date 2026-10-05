@@ -57,7 +57,7 @@ Decisions with lasting impact get an ADR in `docs/adr/`. If your change alters b
 ## Releasing
 
 1. Bump `version` in the root `Cargo.toml`, run `cargo build --release` to refresh `Cargo.lock`, and move the `Unreleased` notes in `CHANGELOG.md` under the new version.
-2. Tag and push: `git tag -a v0.2.0 -m v0.2.0 && git push origin v0.2.0`.
+2. Tag and push: `git tag -a v0.2.1 -m v0.2.1 && git push origin v0.2.1`.
 3. `release.yml` builds the four targets, writes `SHA256SUMS`, renders the Homebrew formula with `packaging/homebrew/render.sh VERSION SHA256SUMS`, and creates a draft release with all of them attached.
 4. Review the draft and publish it, then copy the rendered `sspur.rb` into `Formula/sspur.rb` of the `utkarshavardhana/homebrew-sspur` tap.
 

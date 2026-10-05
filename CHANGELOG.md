@@ -4,6 +4,28 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-06
+
+This release closes the open items of the 0.2.0 hardening pass (ADR 0025). Native build failures are no longer silent, the program generator covers more of the language, and most effect handlers now compile to native code.
+
+### Added
+- `--strict-native` for `run`, `test`, `fuzz --differential`, `native --release` and `build`, also settable with `SSPUR_STRICT_NATIVE=1`. A failed native build becomes an error with exit status 1. CI sets it for the test suite and the corpus check.
+- `--quiet` hides the native build warning.
+- The `fuzz --gen` generator now writes `F64` code, generic types and functions used at several types, `par` tasks, `profile sys` resources with borrows, moves and drops, and more handler shapes (aborting, raising, code after `resume`, `log` handlers). `--edge` feeds `F64` edge values such as `-0.0`, NaN, infinities and subnormals.
+
+### Changed
+- When a native build fails, `run` and `test` print one warning that names the function and the C error. A per-definition build failure falls back to the whole-program build, a whole-program failure to the interpreter.
+- These handler shapes now compile natively (ADR 0010): arms that finish without resuming, arms that raise, code after `resume`, `log` handlers, lambdas with declared effects passed to `map`, `filter`, `fold` and similar, `return` or a raise inside a generator loop, and bodies that shadow a name their handler uses. In `tests/programs` the interpreted functions went from 25 to 15, and 14 of the 15 left are entry points that perform an operation.
+- Every NaN compares equal to every other NaN and above infinity, whatever its sign bit, in both tiers.
+
+### Fixed
+- Interpreter: a closure made before a statement that rebinds a parameter or an outer name saw the new value.
+- Native: assigning over a resource after a local function in the same function skipped the old value's destructor.
+- Native: `--O3` builds could spend minutes in clang on code that indexes strings with a constant, such as `s.get(30)`.
+- Native: NaN ordering and equality could differ from the interpreter, because the sign of a NaN is not stable across compilers and CPUs.
+- Native: contract traps inside handled code named an internal `f__ev` copy instead of `f`.
+- Printer: `(-0.0).fmt(1)` lost its parentheses and changed meaning, and a nested `if` inside string interpolation printed as a block that did not parse.
+
 ## [0.2.0] - 2026-10-05
 
 This release covers Phases 3 to 7 of the roadmap and ADRs 0003 to 0024. SSPUR now compiles to native code by default, has a standard library close to C++ coverage, and ships the agent, deploy, GPU and sync tooling.
@@ -96,6 +118,7 @@ This release covers Phases 3 to 7 of the roadmap and ADRs 0003 to 0024. SSPUR no
 - Language design spec, JSON schemas and the token benchmark.
 - Compiler core: parser, checker, content hashing, interpreter and the `sspur` CLI, with an 11-program suite.
 
-[Unreleased]: https://github.com/utkarshavardhana/sspur/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/utkarshavardhana/sspur/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/utkarshavardhana/sspur/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/utkarshavardhana/sspur/releases/tag/v0.2.0
 [0.1.0]: https://github.com/utkarshavardhana/sspur/tree/6c55224

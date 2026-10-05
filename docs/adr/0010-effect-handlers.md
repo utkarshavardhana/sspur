@@ -67,9 +67,18 @@ Before generating C, the release tier lowers handlers by evidence passing (`crat
 - A generator loop passes its body as the `yield` closure, so `for v in walk(t)` compiles to a recursive call with a loop-body closure.
 - The lowered module is printed, re-parsed, compared with the lowered AST, and re-checked. A function that fails any step keeps its original body and falls back, and so do its callers.
 
-These stay in the interpreter, with the reason shown by `sspur native --release`: arms that can finish without resuming, code after `resume`, arms that may raise, `log` handlers, `return` inside a generator loop, and lambdas or function-typed parameters that carry declared effects. The interpreter-visible entry point of an effect-performing function is still interpreted (`performs 'yield[Int]'`), because the interpreter's dynamic handler stack has to see its operations; its native copy is used only by native callers. Native code never performs an operation the interpreter has to handle, so control effects never cross the native boundary. While a `log` handler is active, the interpreter calls no native code, because native `log` writes straight to the host. Programs without effects compile exactly as before.
+Since 0.2.1 (ADR 0025) the lowering also covers the cases that used to stay interpreted:
+
+- An arm that can finish without resuming raises a private sum type `Ab__n{v: T}` with its value, and the `handle` becomes a `catch` of that type. No user `catch` can name the type, so the abort passes through `catch`es inside the body as the interpreter's `Ctrl::Abort` does, and the `return` arm is skipped. An arm that may raise `E` wraps each error in another variant of the same type and the `handle` raises it again outside, so a `catch` of `E` inside the body never sees it.
+- Code after `r = resume(v)` records the arm's bound values in a list that the `handle` owns. After the body (and the `return` arm, or the abort value), the `handle` folds the remainders over the result newest first. One remainder site per `handle` is supported; more than one keeps the interpreter.
+- A module with a `log` arm treats `log` as an operation: every function that declares `log` gets an evidence copy as well, and outside a `log` handler calls still go to the host `log`. Calls to functions without a copy, named logging functions passed as values, and logging lambdas under a `log` handler stay interpreted.
+- A lambda that performs a declared effect is lowered when it is passed straight to an eager `List` or `Opt` method (`map`, `filter`, `fold`, `any` and the like), which calls it before returning.
+- `return` inside a generator loop raises the same kind of private type, caught at the loop, and a loop body that may raise is wrapped like an arm.
+- A body that rebinds a name an arm uses freely gets the arms as lambdas bound before the body.
+
+Aborting handlers stay interpreted in a function that can reach itself through named calls, takes function-typed parameters, or holds the handler inside a local function. Two live instances of one `handle` would share the private type, and an inner instance's `catch` could take an abort meant for the outer one. The interpreter-visible entry point of an effect-performing function is still interpreted (`performs 'yield[Int]'`), because the interpreter's dynamic handler stack has to see its operations; its native copy is used only by native callers. Native code never performs an operation the interpreter has to handle, so control effects never cross the native boundary. While a `log` handler is active, the interpreter calls no native code, because native `log` writes straight to the host. Programs without effects compile exactly as before.
 
 ## Next
 
-- Native aborting arms (a private `raise` caught by the `handle`) and native code after `resume`.
 - First-class handler values (`with h in e`), multi-shot continuations, and effect-generic arguments for `fail[E]` in function types.
+- Function-typed parameters that carry declared effects, and handler instances told apart at run time so that aborting handlers in recursive functions can be native.

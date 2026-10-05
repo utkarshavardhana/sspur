@@ -1,6 +1,6 @@
 # ADR 0025: Hardening pass before v0.2.0
 
-Status: accepted, 2026-10-05
+Status: accepted, 2026-10-05. The open items below were closed in 0.2.1 on 2026-10-06 (see "Follow-up in 0.2.1").
 
 ## Problem
 
@@ -53,8 +53,59 @@ Generated programs use small literal loop bounds, `n % k` bounds, lists of at mo
 
 About 2,200 generated programs (roughly 0.9 million differential cases, every one executed natively) in batches of 150 to 200, after the generator stabilized, plus about 600 earlier ones run while fixing. Campaigns found bugs 1, 2, 5 to 12; the rest came from the targeted suites. The last 1,700 programs found nothing. CI runs 200 programs with seed 2026 in the `-O2` per-definition and `--O3` builds (about two minutes) and uploads findings on failure.
 
-## Not done
+## Not done in 0.2.0
+
+These were the open items when 0.2.0 shipped. All three are addressed below.
 
 - The generator has no `F64`, generics, generators, `par`, atomics, channels, `sys` resources or GPU kernels; those remain covered by their own suites.
 - Functions whose handler arm can finish without resuming, whose handler arm may raise, or whose lambda performs a declared effect still run in the interpreter, so the native comparison skips them.
 - A failing per-definition build still falls back silently in normal use; only the fuzzer reports it (`cgen::SPLIT_FALLBACK`).
+
+## Follow-up in 0.2.1
+
+### No silent fallbacks
+
+`sspur run`, `test`, `fuzz --differential`, `native --release`, `build` and `edit --test` print one line when a native build fails, naming the function and the first C error:
+
+```
+warning: per-definition native build failed in fn f: error: ...; using the whole-program build
+warning: native build failed in fn f: error: ...; interpreting
+```
+
+The function comes from the `#define FIDX` marker around the failing line of the generated C (or the unit name in a per-definition build). `--quiet` hides the line. `--strict-native` or `SSPUR_STRICT_NATIVE=1` prints it as `error:` and exits with status 1; CI sets the variable for `cargo test` and the corpus check. A per-definition failure still falls back to the whole-program build, not to the interpreter. `Compiled::fallback` replaces the global `SPLIT_FALLBACK`, and the suite, ownership and hardening tests require it to be empty. No suite, fuzz regression, example or corpus program fails to build.
+
+### Generator coverage
+
+| Added to `progen.rs` | How it stays comparable |
+|---|---|
+| `F64` parameters, results, `var`s and expressions: `+ - * / %`, negation, `abs`, `sqrt`, `min`/`max`, `to_f64`, list sums and folds, fused range pipelines over `to_f64`, comparisons, `is_nan`, `is_finite`, `.str`, `fmt(k)` and interpolation, literals such as `-0.0`, `1e300`, `1e-300`, `2^52 + 1` | Only correctly rounded operations are compared exactly; `sin cos exp ln atan` go through `(x * 1000.0).round`; NaN and `-0.0` follow the total order, now with every NaN equal (bug 15). The differential fuzzer feeds `-0.0`, NaN, both infinities, `MAX`, `MIN_POSITIVE`, a subnormal and `2^53 + 1` with `--edge` |
+| A generic sum `G[T]` and record `P[A, B]` with `gfrom gto glen gmap gnth swap pick`, used at `Int`, `Str`, `F64`, `Bool`, `List[Int]` and records, and the effect-polymorphic `gapp[A, e]` | Lambdas passed to `gmap` are pure |
+| `par(e1, e2, e3)` over `Int`, `Str`, `F64` and `List[Int]` tasks | Tasks see only immutable, non-function values and may only perform `div`, so their results do not depend on scheduling |
+| `profile sys` programs with `res type Rs ... drop`, borrows (`&`, `&mut`), moves into a consuming function, moves in one branch of an `if`, reassignment over a live value, and drops on `return` | Moves of a resource declared outside the current loop are not generated; destructors `log`, so drop order is compared |
+| Handlers: aborting arms, arms that raise, code after `resume`, and `log` handlers with each of those shapes | The driver joins programs with one `profile sys` line when any of them needs it |
+
+### Native handlers
+
+ADR 0010 now lowers aborting and raising arms, code after `resume`, `log` handlers, effectful lambdas passed to eager `List`/`Opt` methods, `return` and raises inside generator loops, and bodies that shadow a name an arm uses. Interpreted functions in `tests/programs`: 25 of 468 before, 15 of 468 after. The 10 that became native are every function held back by a handler shape; the 15 left are 14 effect-performing entry points (by design) and `generators.main`, which passes generator lambdas to a function-typed parameter. The corpus has no handlers and stays at 270 of 270 native. `tests/fuzz/native_handlers.ssp` covers the new shapes and `tests/fuzz/handler_reentry.ssp` the re-entrant case that must stay interpreted.
+
+### Bugs found and fixed
+
+| # | Area | Severity | Symptom | Root cause | Fix | Test |
+|---|---|---|---|---|---|---|
+| 13 | Printer | Medium | `sspur fmt` turned `(-0.0).fmt(1).len` (4) into `-0.0.fmt(1).len` (-3), and handler lowering, which prints and re-parses the module, gave up on every handler in it | The receiver check used `n < 0.0`, which is false for `-0.0`, so the literal lost its parentheses and the minus applied to the whole chain | Test the sign bit | `tests/fuzz/negative_zero_receiver.ssp`, `negative_zero_receiver_keeps_its_parentheses` |
+| 14 | Native build | Medium | A whole-program `--O3` build ran clang for many minutes | clang fully unrolled the counted UTF-8 loop of `str_char_at` (`s.get(30)`) inside an inlined caller, then scalar evolution blew up | Disable unrolling of the counted loops in `str_char_at` and `utf8_byte_at` | `tests/fuzz/o3_counted_utf8_loops.ssp` |
+| 15 | Both tiers | Medium | `-(0.0 / 0.0) == 0.0 / 0.0`, sorting and `min`/`max` with NaN differed between tiers | The total order used the NaN sign bit, which LLVM does not preserve when folding and which differs by CPU | Every NaN compares equal and above `inf` in both tiers | `tests/fuzz/nan_sign_order.ssp` |
+| 16 | Native codegen | High | Assigning over a resource after a local function skipped the destructor of the old value | Emitting the local function reset the outer function's drop flags | Save and restore drop flags, borrowed resources and tail-call spans around it | `tests/fuzz/local_fn_res_reassign.ssp` |
+| 17 | Native codegen | Low | A contract trap in a `log` evidence copy named `f__ev` | Trap contexts used the internal name | Use the original name | `tests/fuzz/ev_copy_trap_names.ssp` |
+| 18 | Printer | Low | `"{if a then (if b then 1 else 2) else 3}"` printed as a multi-line `do` block inside the string, which does not parse, so handler lowering skipped every handler in the module | Fix 1 always used a block | Parenthesize the then-branch when it fits on one line | `tests/fuzz/if_in_interpolation.ssp`, `nested_if_inside_interpolation_stays_on_one_line` |
+| 19 | Interpreter | High | A closure or local function made before a statement that rebinds a parameter or an enclosing block's name saw the new value; native code captured lexically | Fix 2 started a child frame only when the name was in the current frame | Start one whenever the name is visible | `tests/fuzz/shadow_outer_capture.ssp` |
+
+### Campaign
+
+26 batches of 300 generated programs (7,800 programs, about 1.4 million differential cases, all run natively), one batch per run, in the `-O2` per-definition and `--O3` builds (three batches used the whole-program `-O2` build instead). Batches found bugs 13 to 19; each was fixed, its batch was rerun clean, and the last 1,800 programs found nothing. `sspur fuzz --gen 200 --seed 2026` in all three builds reports 0 findings.
+
+### Still not done
+
+- The generator has no generators, atomics, channels or GPU kernels.
+- Aborting handlers in a function that may re-enter itself, function-typed parameters that carry declared effects, and logging closures under a `log` handler stay interpreted.
+- When the whole-program build fails, the whole program runs in the interpreter; there is no retry with only the failing function interpreted.

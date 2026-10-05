@@ -71,7 +71,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto" | "--gen" | "--group" | "--keep" | "--modes" | "--reduce" | "--want-skip");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto" | "--gen" | "--group" | "--keep" | "--modes" | "--reduce" | "--want-skip" | "--want-build" | "--from");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -179,7 +179,7 @@ fn gen_fuzz(args: &Args) -> ExitCode {
     let n = args.num("--gen", 100);
     let seed = args.num("--seed", 1) as u64;
     if args.has("--print") {
-        for i in 0..n {
+        for i in args.num("--from", 0)..args.num("--from", 0) + n {
             println!("{}", genfuzz::source(seed, i));
         }
         return ExitCode::SUCCESS;
@@ -189,7 +189,7 @@ fn gen_fuzz(args: &Args) -> ExitCode {
         None => genfuzz::MODES.to_vec(),
     };
     let keep = args.val("--keep").map_or_else(|| std::env::temp_dir().join("sspur-fuzz-gen"), std::path::PathBuf::from);
-    genfuzz::run(&genfuzz::Cfg { n, seed, cases: args.num("--cases", 12), group: args.num("--group", 25).max(1), keep, modes })
+    genfuzz::run(&genfuzz::Cfg { n, from: args.num("--from", 0), seed, cases: args.num("--cases", 12), group: args.num("--group", 25).max(1), keep, modes })
 }
 
 fn reduce_fuzz(args: &Args) -> ExitCode {
@@ -198,9 +198,10 @@ fn reduce_fuzz(args: &Args) -> ExitCode {
         eprintln!("cannot read {path}");
         return ExitCode::from(2);
     };
-    let want = match args.val("--want-skip") {
-        Some(s) => genfuzz::Want::Skip(s.clone()),
-        None => genfuzz::Want::Diff(match args.val("--modes") {
+    let want = match (args.val("--want-skip"), args.val("--want-build")) {
+        (Some(s), _) => genfuzz::Want::Skip(s.clone()),
+        (_, Some(s)) => genfuzz::Want::Build(s.clone()),
+        _ => genfuzz::Want::Diff(match args.val("--modes") {
             Some(m) => genfuzz::MODES.iter().copied().filter(|x| m.split(',').any(|y| y == *x)).collect(),
             None => genfuzz::MODES.to_vec(),
         }),

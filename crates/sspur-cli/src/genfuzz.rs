@@ -8,6 +8,7 @@ use std::process::ExitCode;
 
 pub struct Cfg {
     pub n: usize,
+    pub from: usize,
     pub seed: u64,
     pub cases: usize,
     pub group: usize,
@@ -90,9 +91,9 @@ fn prog_of(func: &str) -> Option<usize> {
 pub fn run(cfg: &Cfg) -> ExitCode {
     let mut st = Stats::default();
     let _ = std::fs::create_dir_all(&cfg.keep);
-    let mut id = 0;
-    while id < cfg.n {
-        let ids: Vec<usize> = (id..(id + cfg.group).min(cfg.n)).collect();
+    let mut id = cfg.from;
+    while id < cfg.from + cfg.n {
+        let ids: Vec<usize> = (id..(id + cfg.group).min(cfg.from + cfg.n)).collect();
         id += cfg.group;
         let mut srcs: BTreeMap<usize, String> = ids.iter().map(|i| (*i, source(cfg.seed, *i))).collect();
         st.programs += srcs.len();
@@ -127,9 +128,19 @@ pub fn run(cfg: &Cfg) -> ExitCode {
                     }
                 }
                 Ok(Err(e)) => {
-                    st.findings.push(format!("BUILD {mode} programs {:?}: {e}", srcs.keys().collect::<Vec<_>>()));
-                    for (i, s) in &srcs {
-                        let _ = std::fs::write(cfg.keep.join(format!("build-{}-{i}.ssp", cfg.seed)), s);
+                    let culprits: Vec<usize> = srcs
+                        .iter()
+                        .filter(|(_, s)| {
+                            load_src((*s).clone()).is_ok_and(|l| {
+                                set_mode(mode);
+                                sspur_native::cgen::compile_release(&l.module, &l.check, if *mode == "O3" { "-O3" } else { "-O2" }).is_err()
+                            })
+                        })
+                        .map(|(i, _)| *i)
+                        .collect();
+                    st.findings.push(format!("BUILD {mode} programs {culprits:?}: {e}"));
+                    for i in &culprits {
+                        let _ = std::fs::write(cfg.keep.join(format!("build-{}-{i}.ssp", cfg.seed)), &srcs[i]);
                     }
                 }
                 Ok(Ok(ModuleRun { diffs, funcs, cases, native, skipped })) => {
@@ -172,6 +183,7 @@ pub fn run(cfg: &Cfg) -> ExitCode {
 pub enum Want {
     Diff(Vec<&'static str>),
     Skip(String),
+    Build(String),
 }
 
 fn interesting(src: &str, want: &Want, cases: usize, seed: u64) -> bool {
@@ -183,6 +195,10 @@ fn interesting(src: &str, want: &Want, cases: usize, seed: u64) -> bool {
         Want::Skip(s) => {
             set_mode("O2-whole");
             sspur_native::cgen::compile_release(&l.module, &l.check, "-O2").is_ok_and(|c| c.skipped.values().any(|w| w.contains(s.as_str())))
+        }
+        Want::Build(s) => {
+            set_mode("O2-whole");
+            sspur_native::cgen::compile_release(&l.module, &l.check, "-O2").err().is_some_and(|e| e.contains(s.as_str()))
         }
         Want::Diff(modes) => modes.iter().any(|m| {
             let r = catch_unwind(AssertUnwindSafe(|| diff_module(&l, m, cases, seed)));

@@ -44,3 +44,13 @@ fn fuzz_regressions_match_the_interpreter_in_every_build() {
         }
     }
 }
+
+#[test]
+fn generated_programs_match_the_interpreter() {
+    if !has_clang() {
+        return;
+    }
+    let (out, ok) = sspur(&["fuzz", "--gen", "20", "--seed", "11", "--cases", "6"], &[]);
+    assert!(ok, "{out}");
+    assert!(out.contains("20 programs (0 rejected)"), "{out}");
+}

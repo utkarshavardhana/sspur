@@ -2,6 +2,7 @@
 mod builtins;
 mod ffi;
 pub mod fuzz;
+pub mod progen;
 pub mod kernel;
 mod sched;
 mod stdlib;
@@ -100,6 +101,7 @@ pub struct Interp {
     pub fuel: Cell<u64>,
     native: Option<sspur_native::Compiled>,
     pub bypass_native: Cell<bool>,
+    pub native_hits: Cell<u64>,
     pub calls: RefCell<Option<std::collections::BTreeMap<String, u64>>>,
     pub float_sums: HashSet<(u32, u32)>,
     ops: HashSet<String>,
@@ -151,6 +153,7 @@ impl Interp {
             fuel: Cell::new(u64::MAX),
             native: None,
             bypass_native: Cell::new(false),
+            native_hits: Cell::new(0),
             calls: RefCell::new(None),
             float_sums: HashSet::new(),
             ops: ["yield", "log"].iter().map(|s| s.to_string()).collect(),
@@ -414,6 +417,10 @@ impl Interp {
 
     pub fn call_fn(&self, f: &FnDef, args: Vec<Value>) -> R {
         if let Some(n) = self.native.as_ref().filter(|_| !self.bypass_native.get() && !self.log_handled()) {
+            fn emit_hook(ctx: *const (), s: &str) {
+                let it = unsafe { &*(ctx as *const Interp) };
+                it.emit(s.to_string());
+            }
             let raw: Option<Vec<i64>> = args
                 .iter()
                 .map(|a| match a {
@@ -422,8 +429,14 @@ impl Interp {
                     _ => None,
                 })
                 .collect();
-            if let Some(raw) = raw
-                && let Some(r) = n.call(&f.name, &raw) {
+            let scalar = raw.and_then(|raw| {
+                sspur_native::set_log_hook(Some((emit_hook, self as *const Interp as *const ())));
+                let r = n.call(&f.name, &raw);
+                sspur_native::set_log_hook(None);
+                r
+            });
+            if let Some(r) = scalar {
+                    self.native_hits.set(self.native_hits.get() + 1);
                     return match r {
                         Ok(v) if n.returns_bool(&f.name) => Ok(Value::Bool(v != 0)),
                         Ok(_) if n.returns_unit(&f.name) => Ok(Value::Unit),
@@ -434,14 +447,11 @@ impl Interp {
             if n.has(&f.name)
                 && let Some(nargs) = args.iter().map(to_nval).collect::<Option<Vec<_>>>()
             {
-                fn emit_hook(ctx: *const (), s: &str) {
-                    let it = unsafe { &*(ctx as *const Interp) };
-                    it.emit(s.to_string());
-                }
                 sspur_native::set_log_hook(Some((emit_hook, self as *const Interp as *const ())));
                 let r = n.call_rich(&f.name, &nargs);
                 sspur_native::set_log_hook(None);
                 if let Some(r) = r {
+                    self.native_hits.set(self.native_hits.get() + 1);
                     return match r {
                         Ok(v) => Ok(from_nval(v)),
                         Err(sspur_native::NativeError::Trap(msg)) => trap(msg),

@@ -1,6 +1,7 @@
 mod agent;
 mod bind;
 mod deploy;
+mod genfuzz;
 mod mcp;
 mod sync;
 mod verify;
@@ -31,6 +32,7 @@ const USAGE: &str = "usage:
   verify proves pre/post/where clauses with z3 and reports proved, counterexample, or unknown per clause
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
   --O3 raises the optimization level; fuzz --differential compares native against the interpreter
+  sspur fuzz --gen N [--seed S] [--cases C] [--group G] [--modes O2,O2-whole,O3] [--keep DIR] [--print]  generate N random programs and compare interpreter and native
   run/test/build --pgo [--retrain] train once, then build with clang profile data; --lto off|thin|full (ADR 0024)
   sspur build --backend llvm file.ssp [-o prog]  direct LLVM IR prototype for the scalar and record subset (ADR 0024)
   sspur explain-opt file.ssp [--all]    show the proven rewrites applied before native codegen (--all adds rejected candidates)
@@ -69,7 +71,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto" | "--gen" | "--group" | "--keep" | "--modes" | "--reduce" | "--want-skip");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -163,10 +165,54 @@ fn real_main() -> ExitCode {
         }
         "deploy" => deploy::run(&args.pos[1..], &args.flags),
         "sync" => sync::run(&args.pos[1..], args.val("--port").map(String::as_str), args.val("--max").and_then(|m| m.parse().ok()), args.val("--agent").map_or("sync", String::as_str), args.has("--json")),
+        "fuzz" if args.val("--gen").is_some() => gen_fuzz(&args),
+        "fuzz" if args.val("--reduce").is_some() => reduce_fuzz(&args),
         "check" | "run" | "test" | "fuzz" | "verify" | "hash" | "fmt" | "native" | "export-c" | "build" | "gpu" | "explain-opt" => program_cmd(&cmd, &args),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
+        }
+    }
+}
+
+fn gen_fuzz(args: &Args) -> ExitCode {
+    let n = args.num("--gen", 100);
+    let seed = args.num("--seed", 1) as u64;
+    if args.has("--print") {
+        for i in 0..n {
+            println!("{}", genfuzz::source(seed, i));
+        }
+        return ExitCode::SUCCESS;
+    }
+    let modes = match args.val("--modes") {
+        Some(m) => genfuzz::MODES.iter().copied().filter(|x| m.split(',').any(|y| y == *x)).collect(),
+        None => genfuzz::MODES.to_vec(),
+    };
+    let keep = args.val("--keep").map_or_else(|| std::env::temp_dir().join("sspur-fuzz-gen"), std::path::PathBuf::from);
+    genfuzz::run(&genfuzz::Cfg { n, seed, cases: args.num("--cases", 12), group: args.num("--group", 25).max(1), keep, modes })
+}
+
+fn reduce_fuzz(args: &Args) -> ExitCode {
+    let path = args.val("--reduce").unwrap();
+    let Ok(src) = std::fs::read_to_string(path) else {
+        eprintln!("cannot read {path}");
+        return ExitCode::from(2);
+    };
+    let want = match args.val("--want-skip") {
+        Some(s) => genfuzz::Want::Skip(s.clone()),
+        None => genfuzz::Want::Diff(match args.val("--modes") {
+            Some(m) => genfuzz::MODES.iter().copied().filter(|x| m.split(',').any(|y| y == *x)).collect(),
+            None => genfuzz::MODES.to_vec(),
+        }),
+    };
+    match genfuzz::reduce(&src, &want, args.num("--cases", 12), args.num("--seed", 1) as u64) {
+        Some(out) => {
+            print!("{out}");
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("the input does not show the wanted behavior");
+            ExitCode::FAILURE
         }
     }
 }

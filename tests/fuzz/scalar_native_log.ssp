@@ -1,0 +1,9 @@
+// Log lines from a native call whose arguments were all scalars bypassed the interpreter output buffer, so tests and the differential fuzzer saw no output.
+
+fn noisy(a: Int, b: Bool) -> Int ! log
+= do
+  log("a={a}")
+  if b then log("b")
+  a % 7
+
+test quiet = noisy(3, true) == 3

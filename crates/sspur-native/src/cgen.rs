@@ -793,6 +793,8 @@ static OptS_ str_last(Str s) {
 }
 "#;
 
+pub static SPLIT_FALLBACK: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Compiled, String> {
     let opted = self::opt::optimize(m, check);
     let (m, check) = match &opted {
@@ -823,6 +825,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
                 if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
                     eprintln!("per-definition build failed, building the whole program: {e}");
                 }
+                *SPLIT_FALLBACK.lock().unwrap() = Some(e);
                 build(&src, opt, &plan.links, bo.lto)?
             }
         }

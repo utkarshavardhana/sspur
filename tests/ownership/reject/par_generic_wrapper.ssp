@@ -1,0 +1,15 @@
+type Box[T] = {v: T}
+fn call(b: Box[Int -> Int], k: Int) -> Int
+= do
+  g = b.v
+  g(k)
+fn f() -> Int
+= do
+  var s = 0
+  fn bump(k: Int) -> Int
+  = do
+    s := s + k
+    s
+  bx = Box{v: bump}
+  (a, b) = par(call(bx, 1), call(bx, 2))
+  s

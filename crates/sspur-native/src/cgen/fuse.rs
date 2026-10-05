@@ -446,7 +446,7 @@ impl Cx<'_> {
                 self.std("fail");
                 let (av, bv, kv) = (self.expr(&args[0])?, self.expr(&args[1])?, self.expr(&args[2])?);
                 let oom = format!("if (UNLIKELY({n} > ((int64_t)1 << 26))) TRAPV({T_OOM}, 0, 0); ");
-                (format!("int64_t s_ = {av}; int64_t re_ = {bv}; int64_t k_ = {kv}; if (UNLIKELY(k_ == 0)) ss_fail(st, \"range step must not be 0\"); {} {oom}", super::range_count(&n, "s_", "re_", "k_")), format!("int64_t {x} = (int64_t)(s_ + (__int128){i} * k_); "))
+                (format!("int64_t s_ = {av}; int64_t re_ = {bv}; int64_t ks_ = {kv}; if (UNLIKELY(ks_ == 0)) ss_fail(st, \"range step must not be 0\"); {} {oom}", super::range_count(&n, "s_", "re_", "ks_")), format!("int64_t {x} = (int64_t)(s_ + (__int128){i} * ks_); "))
             }
             _ => {
                 let lv = self.expr(src)?;

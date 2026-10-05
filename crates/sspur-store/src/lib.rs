@@ -179,7 +179,7 @@ pub fn unique_tmp(p: &Path) -> PathBuf {
     p.with_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
 }
 
-fn crash_point(at: &str) {
+pub fn crash_point(at: &str) {
     if std::env::var("SSPUR_CRASH_AT").is_ok_and(|v| v == at) {
         std::process::abort();
     }
@@ -914,6 +914,7 @@ impl Store {
             names.insert(d.name.clone(), Entry { hash, text: mat.texts[&d.name].clone() });
         }
         self.write_reqs(&next, reqs, agent, reason).map_err(|e| TxResult::fail("E_IO", e))?;
+        crash_point("objects");
         let head = self.head_root();
         let old: BTreeMap<String, String> = head.as_ref().map(|h| h.names.iter().map(|(n, e)| (n.clone(), e.hash.clone())).collect()).unwrap_or_default();
         let changes = diff(&old, &names);
@@ -942,6 +943,7 @@ impl Store {
         } else {
             self.write("HEAD", &hash).map_err(io)?;
         }
+        crash_point("head");
         Ok(TxResult { ok: true, root: Some(hash).filter(|h| !h.is_empty()), commit, changes, diags: next.check.diags, conflicts: vec![], rebase: None, src: Some(next.src) })
     }
 

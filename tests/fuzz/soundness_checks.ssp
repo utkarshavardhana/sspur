@@ -1,0 +1,239 @@
+// Adversarial cases for check elimination: every removed check must be one that cannot fail.
+type T = Lf | Nd{l: T, v: Int, r: T}
+type P = {a: Int, b: Int where _ > 0}
+
+fn below_max(a: Int where _ < 9223372036854775807) -> Int
+= a + 1
+
+fn at_max(a: Int where _ <= 9223372036854775807) -> Int
+= a + 1
+
+fn neg_min(a: Int where _ <= 0) -> Int
+= -a
+
+fn shadow_param(n: Int where _ >= 0) -> Int
+= do
+  n = n - 10
+  100 / (n + 10)
+
+fn shadow_list(xs: List[Int]) -> Int
+= do
+  var s = 0
+  for i in 0..xs.len
+    xs = xs.drop(1)
+    s := s + xs[i]
+  s
+
+fn mutate_list(xs: List[Int]) -> Int
+= do
+  var ys = xs
+  var s = 0
+  for i in 0..ys.len
+    ys := ys.take(1)
+    s := s + ys[i]
+  s
+
+fn len_then_shadow(xs: List[Int]) -> Int
+= do
+  n = xs.len
+  xs = [1]
+  if n > 0 then xs[n - 1] else 0
+
+fn table_shadow(i: Int) -> Int
+= do
+  words = [1, 2, 3, 4, 5, 6, 7, 8]
+  words = words.take(2)
+  words[(i * 7) % 8]
+
+fn var_after_check(xs: List[Int], k: Int) -> Int
+= do
+  var i = 0
+  if i < xs.len then do
+    i := i + k
+    xs[i]
+  else 0
+
+fn closure_moves_index(xs: List[Int]) -> Int
+= do
+  var i = 0
+  fn bump(k: Int) -> Int
+  = do
+    i := i + k
+    k
+  if i >= 0 and i < xs.len and bump(100) > 0 then xs[i] else -1
+
+fn cond_can_trap(a: Int) -> Int
+= if a + 1 > a then 1 else 2
+
+fn cond_div(a: Int where _ >= 0) -> Int
+= if 10 / a >= 0 then 1 else 2
+
+fn odd_tail(n: Int where _ >= 0) -> Int
+= if n == 0 then 0 else odd_tail(n - 2)
+
+fn width(lo: Int, hi: Int) -> Int
+  pre lo <= hi
+= hi - lo
+
+fn swapped(a: Int, b: Int) -> Int
+= if a < b then width(b, a) else 0
+
+fn clamp_post(x: Int, lo: Int, hi: Int) -> Int
+  pre lo <= hi
+  post r >= lo and r <= hi
+= do
+  r = catch pick(x, lo, hi)
+    | Low => lo - 1
+  r
+
+type E = Low
+
+fn pick(x: Int, lo: Int, hi: Int) -> Int ! fail[E]
+= if x < lo then raise Low else min(x, hi)
+
+fn record_with(p: P, d: Int) -> Int
+= (p with b := p.b - d).b
+
+fn sum_vs_div(xs: List[Int]) -> Int
+= xs.map(x => 100 / x).sum
+
+fn mul_then_sum(xs: List[Int]) -> Int
+= xs.map(x => x * 4611686018427387904).filter(y => y != 1).sum
+
+fn div_then_index(xs: List[Int]) -> Int
+= xs.map(x => 10 / x).map(y => [1, 2, 3][y]).sum
+
+fn ins(t: T, x: Int) -> T
+= match t
+  | Lf => Nd{l: Lf, v: x, r: Lf}
+  | Nd{l, v, r} => if x < v then Nd{l: ins(l, x), v: v, r: r} else Nd{l: l, v: v, r: ins(r, x)}
+
+fn dup(t: T) -> T
+= match t
+  | Lf => Lf
+  | Nd{l, v, r} => Nd{l: dup(l), v: v + 1, r: l}
+
+fn tsum(t: T) -> Int
+= match t
+  | Lf => 0
+  | Nd{l, v, r} => tsum(l) + v + tsum(r)
+
+fn build(xs: List[Int]) -> T
+= do
+  var t = Lf
+  for x in xs
+    t := ins(t, x)
+  t
+
+fn alias_owned(xs: List[Int]) -> Int
+= do
+  var t = build(xs)
+  u = t
+  t := dup(t)
+  t := ins(t, 5)
+  tsum(u) * 1000 + tsum(t)
+
+fn alias_list(xs: List[Int]) -> Int
+= do
+  var ps = xs.map(x => x + 1)
+  qs = ps
+  ps := ps.map(x => x * 2)
+  qs.sum * 1000 + ps.sum
+
+fn overflow_in_place(xs: List[Int], d: Int) -> Int
+= do
+  var t = build(xs)
+  t := inc(t, d)
+  tsum(t)
+
+fn inc(t: T, d: Int) -> T
+= match t
+  | Lf => Lf
+  | Nd{l, v, r} => Nd{l: inc(l, d), v: v * d, r: inc(r, d)}
+
+test boundaries = below_max(1) == 2 and neg_min(-5) == 5 and shadow_param(20) == 5
+test contracts = swapped(5, 1) == 0 and width(1, 4) == 3
+
+fn probe_at_max() -> Int
+= at_max(9223372036854775807)
+
+fn probe_shadow_param() -> Int
+= shadow_param(0)
+
+fn probe_shadow_list() -> Int
+= shadow_list([1, 2, 3, 4])
+
+fn probe_mutate_list() -> Int
+= mutate_list([1, 2, 3])
+
+fn probe_len_shadow() -> Int
+= len_then_shadow([4, 5, 6])
+
+fn probe_table() -> Int
+= table_shadow(1)
+
+fn probe_var_after() -> Int
+= var_after_check([1, 2], 1) + var_after_check([1, 2], 2)
+
+fn probe_closure_index() -> Int
+= closure_moves_index([1, 2, 3])
+
+fn probe_cond_trap() -> Int
+= cond_can_trap(9223372036854775807)
+
+fn probe_cond_div() -> Int
+= cond_div(0)
+
+fn probe_odd_tail() -> Int
+= odd_tail(7)
+
+fn probe_swapped() -> Int
+= swapped(1, 5)
+
+fn probe_wide() -> Int
+= width(-9223372036854775807, 9223372036854775807)
+
+fn probe_clamp() -> Int
+= clamp_post(-5, 0, 10)
+
+fn probe_record() -> Int
+= record_with(P{a: 1, b: 3}, 3)
+
+fn probe_sum_div() -> Int
+= sum_vs_div([1, 9223372036854775807, 0])
+
+fn probe_sum_div2() -> Int
+= sum_vs_div([0, 1])
+
+fn probe_mul_sum() -> Int
+= mul_then_sum([1, 2])
+
+fn probe_div_index() -> Int
+= div_then_index([5, 0])
+
+fn probe_alias() -> Int
+= alias_owned([5, 3, 8, 1])
+
+fn probe_alias_list() -> Int
+= alias_list([1, 2, 3])
+
+fn probe_inplace_overflow() -> Int
+= overflow_in_place([5, 3, 4611686018427387904, 1], 2)
+
+fn big_div_sum(xs: List[Int]) -> Int
+= xs.map(x => 9223372036854775807 / x).sum
+
+fn probe_big_div_sum() -> Int
+= big_div_sum([1, 1, 0])
+
+fn big_div_len(xs: List[Int]) -> Int
+= xs.map(x => 9223372036854775807 / x).filter(y => y * 2 > 0).len
+
+fn probe_big_div_len() -> Int
+= big_div_len([1, 0])
+
+fn range_div_sum(n: Int) -> Int
+= (0..n % 5).map(i => 9223372036854775807 / (2 - i)).sum
+
+fn probe_range_div_sum() -> Int
+= range_div_sum(4)

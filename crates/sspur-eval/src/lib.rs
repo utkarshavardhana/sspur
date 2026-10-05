@@ -2,6 +2,7 @@
 mod builtins;
 mod ffi;
 pub mod fuzz;
+pub mod progen;
 pub mod kernel;
 mod sched;
 mod stdlib;
@@ -100,6 +101,7 @@ pub struct Interp {
     pub fuel: Cell<u64>,
     native: Option<sspur_native::Compiled>,
     pub bypass_native: Cell<bool>,
+    pub native_hits: Cell<u64>,
     pub calls: RefCell<Option<std::collections::BTreeMap<String, u64>>>,
     pub float_sums: HashSet<(u32, u32)>,
     ops: HashSet<String>,
@@ -123,6 +125,36 @@ pub struct Interp {
 const MAX_DEPTH: u32 = 20_000;
 const BARE_NAMES: &[&str] = &["halt", "wait_irq", "irq_enable", "timer_start", "ticks", "tick_hz", "arch"];
 pub const OUT_OF_FUEL: &str = "evaluation step budget exhausted";
+
+fn pat_rebinds(p: &Pat, env: &Env) -> bool {
+    match p {
+        Pat::Bind(n) => env.vars.borrow().contains_key(n.as_str()),
+        Pat::Tuple(ps) => ps.iter().any(|p| pat_rebinds(p, env)),
+        Pat::Ctor { args: CtorArgs::Positional(ps), .. } => ps.iter().any(|p| pat_rebinds(p, env)),
+        Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().any(|(_, p)| pat_rebinds(p, env)),
+        _ => false,
+    }
+}
+
+fn frame_for(s: &Stmt, frames: &mut Vec<Rc<Env>>) -> Rc<Env> {
+    let cur = frames.last().unwrap().clone();
+    let shadows = match s {
+        Stmt::Var(n, _) => cur.vars.borrow().contains_key(n.as_str()),
+        Stmt::Let(p, _) => pat_rebinds(p, &cur),
+        _ => false,
+    };
+    if shadows {
+        frames.push(Env::child(&cur));
+        return frames.last().unwrap().clone();
+    }
+    if let Stmt::Fn(f) = s
+        && frames.len() > 1
+        && let Some(c) = cur.cell(&f.name)
+    {
+        *c.borrow_mut() = Value::LocalFn(Rc::new((**f).clone()), cur.clone());
+    }
+    cur
+}
 
 fn ty_name(t: &Ty) -> Option<&str> {
     match t {
@@ -151,6 +183,7 @@ impl Interp {
             fuel: Cell::new(u64::MAX),
             native: None,
             bypass_native: Cell::new(false),
+            native_hits: Cell::new(0),
             calls: RefCell::new(None),
             float_sums: HashSet::new(),
             ops: ["yield", "log"].iter().map(|s| s.to_string()).collect(),
@@ -414,6 +447,10 @@ impl Interp {
 
     pub fn call_fn(&self, f: &FnDef, args: Vec<Value>) -> R {
         if let Some(n) = self.native.as_ref().filter(|_| !self.bypass_native.get() && !self.log_handled()) {
+            fn emit_hook(ctx: *const (), s: &str) {
+                let it = unsafe { &*(ctx as *const Interp) };
+                it.emit(s.to_string());
+            }
             let raw: Option<Vec<i64>> = args
                 .iter()
                 .map(|a| match a {
@@ -422,8 +459,14 @@ impl Interp {
                     _ => None,
                 })
                 .collect();
-            if let Some(raw) = raw
-                && let Some(r) = n.call(&f.name, &raw) {
+            let scalar = raw.and_then(|raw| {
+                sspur_native::set_log_hook(Some((emit_hook, self as *const Interp as *const ())));
+                let r = n.call(&f.name, &raw);
+                sspur_native::set_log_hook(None);
+                r
+            });
+            if let Some(r) = scalar {
+                    self.native_hits.set(self.native_hits.get() + 1);
                     return match r {
                         Ok(v) if n.returns_bool(&f.name) => Ok(Value::Bool(v != 0)),
                         Ok(_) if n.returns_unit(&f.name) => Ok(Value::Unit),
@@ -434,14 +477,11 @@ impl Interp {
             if n.has(&f.name)
                 && let Some(nargs) = args.iter().map(to_nval).collect::<Option<Vec<_>>>()
             {
-                fn emit_hook(ctx: *const (), s: &str) {
-                    let it = unsafe { &*(ctx as *const Interp) };
-                    it.emit(s.to_string());
-                }
                 sspur_native::set_log_hook(Some((emit_hook, self as *const Interp as *const ())));
                 let r = n.call_rich(&f.name, &nargs);
                 sspur_native::set_log_hook(None);
                 if let Some(r) = r {
+                    self.native_hits.set(self.native_hits.get() + 1);
                     return match r {
                         Ok(v) => Ok(from_nval(v)),
                         Err(sspur_native::NativeError::Trap(msg)) => trap(msg),
@@ -752,7 +792,9 @@ impl Interp {
                     }
                 }
                 let mut last = Value::Unit;
+                let mut frames = vec![env];
                 for (i, s) in stmts.iter().enumerate() {
+                    let env = frame_for(s, &mut frames);
                     let resumed = match s {
                         Stmt::Expr(x) if i + 1 == stmts.len() => return self.eval_tail(x, &env),
                         Stmt::Expr(x) => is_resume(x).map(|a| (Pat::Wild, a)),
@@ -834,8 +876,10 @@ impl Interp {
                 return trap(format!("pattern {} did not match {x}", printer::pat(&p.pat)));
             }
             x = Value::Unit;
+            let mut frames = vec![inner];
             for s in &p.rest {
-                x = self.exec(s, &inner)?;
+                let cur = frame_for(s, &mut frames);
+                x = self.exec(s, &cur)?;
             }
         }
         Ok(x)
@@ -1077,13 +1121,22 @@ impl Interp {
                     }
                 }
                 let mut last = Value::Unit;
-                let r = (|| {
-                    for s in stmts {
-                        last = self.exec(s, &env)?;
+                let mut frames = vec![env];
+                let mut r = Ok(());
+                for s in stmts {
+                    let cur = frame_for(s, &mut frames);
+                    match self.exec(s, &cur) {
+                        Ok(v) => last = v,
+                        Err(c) => {
+                            r = Err(c);
+                            break;
+                        }
                     }
-                    Ok(())
-                })();
-                self.release(&env, r).map(|_| last)
+                }
+                for f in frames.iter().rev() {
+                    r = self.release(f, r);
+                }
+                r.map(|_| last)
             }
             ExprKind::Record { ctor, fields } => {
                 let owner = match ctor {

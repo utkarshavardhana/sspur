@@ -44,7 +44,7 @@ pub(super) fn raw_op(op: BinOp, a: Iv, b: Iv) -> Option<Iv> {
             (*c.iter().min().unwrap(), *c.iter().max().unwrap())
         }
         BinOp::Div => {
-            if excludes(b, 0) && (b.0 > 0 || b.1 < 0) {
+            if excludes(b, 0) && (b.0 > 0 || b.1 < 0) && b.0 != 0 && b.1 != 0 {
                 let c = [a.0 / b.0, a.0 / b.1, a.1 / b.0, a.1 / b.1];
                 (*c.iter().min().unwrap(), *c.iter().max().unwrap())
             } else {
@@ -94,7 +94,7 @@ fn is_cmp(op: BinOp) -> bool {
 }
 
 fn plain_var(c: &str) -> bool {
-    let c = c.strip_prefix("e_->").unwrap_or(c);
+    let c = c.strip_prefix("env_->").unwrap_or(c);
     !c.is_empty() && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 

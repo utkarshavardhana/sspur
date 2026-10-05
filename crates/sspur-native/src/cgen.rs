@@ -657,6 +657,7 @@ static Str str_take(Str s, int64_t n) { if (n < 0) n = 0; return (Str){utf8_byte
 static Str str_drop(Str s, int64_t n) { if (n < 0) n = 0; int64_t b = utf8_byte_at(s, n); return (Str){s.len - b, s.p + b}; }
 static int64_t str_find(Str h, Str n, int64_t from) {
     if (n.len == 0) return from;
+    if (from < 0 || h.len - from < n.len) return -1;
     const char* e = h.p + h.len - n.len + 1;
     for (const char* p = h.p + from; p < e;) {
         p = (const char*)memchr(p, n.p[0], (size_t)(e - p));
@@ -793,6 +794,8 @@ static OptS_ str_last(Str s) {
 }
 "#;
 
+pub static SPLIT_FALLBACK: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Compiled, String> {
     let opted = self::opt::optimize(m, check);
     let (m, check) = match &opted {
@@ -823,6 +826,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
                 if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
                     eprintln!("per-definition build failed, building the whole program: {e}");
                 }
+                *SPLIT_FALLBACK.lock().unwrap() = Some(e);
                 build(&src, opt, &plan.links, bo.lto)?
             }
         }
@@ -2226,7 +2230,7 @@ impl<'a> Cx<'a> {
         sig.push("Status* st".into());
         sig.push("int64_t depth".into());
         let (fname_c, env_pre, env_line) = match &env {
-            Some((es, _)) => (cname.to_string(), "void* env, ".to_string(), format!("  struct {es}* e_ = (struct {es}*)env; (void)e_;\n")),
+            Some((es, _)) => (cname.to_string(), "void* env, ".to_string(), format!("  struct {es}* env_ = (struct {es}*)env; (void)env_;\n")),
             None => (format!("f_{cname}"), String::new(), String::new()),
         };
         if cname != f.name || env.is_some() {
@@ -2543,7 +2547,7 @@ impl<'a> Cx<'a> {
         self.hit_ok = saved_hit;
         let b = b?;
         writeln!(self.protos, "static {rr} {id}(void* env, {sig}Status* st, int64_t depth);").unwrap();
-        writeln!(self.lambdas, "#define RRT {rr}\n#define FIDX {}\nstatic {rr} {id}(void* env, {sig}Status* st, int64_t depth) {{ struct {env}* e_ = (struct {env}*)env; (void)e_; return ({rr}){{{b}, 0}}; }}\n#undef RRT\n#undef FIDX", self.fidx).unwrap();
+        writeln!(self.lambdas, "#define RRT {rr}\n#define FIDX {}\nstatic {rr} {id}(void* env, {sig}Status* st, int64_t depth) {{ struct {env}* env_ = (struct {env}*)env; (void)env_; return ({rr}){{{b}, 0}}; }}\n#undef RRT\n#undef FIDX", self.fidx).unwrap();
         let fc = self.cty(ft)?;
         let mut s = format!("({{ struct {env}* ev_ = (struct {env}*)sspur_alloc(sizeof(struct {env})); ");
         for (i, (_, c, _)) in captures.iter().enumerate() {
@@ -4217,7 +4221,28 @@ impl<'a> Cx<'a> {
         let first_fn = stmts.iter().position(|x| matches!(x, Stmt::Fn(_)));
         let fn_names: Vec<&str> = stmts.iter().filter_map(|x| if let Stmt::Fn(f) = x { Some(f.name.as_str()) } else { None }).collect();
         let group_at = match first_fn {
-            Some(k) if !stmts[..k].iter().any(|x| fn_names.iter().any(|n| stmt_mentions(x, n))) => k,
+            Some(k) if !stmts[..k].iter().any(|x| fn_names.iter().any(|n| stmt_mentions(x, n))) => {
+                let last_fn = stmts.iter().rposition(|x| matches!(x, Stmt::Fn(_))).unwrap_or(k);
+                let used = |n: &str| stmts.iter().any(|x| matches!(x, Stmt::Fn(f) if stmt_mentions(&Stmt::Fn(f.clone()), n)));
+                let declared = |x: &Stmt| {
+                    let mut names = HashSet::new();
+                    match x {
+                        Stmt::Var(v, _) => {
+                            names.insert(v.clone());
+                        }
+                        Stmt::Let(p, _) => prove::pat_names(p, &mut names),
+                        _ => {}
+                    }
+                    names
+                };
+                let late = (k..last_fn)
+                    .rev()
+                    .find(|&j| declared(&stmts[j]).iter().any(|n| used(n) && self.lookup(n).is_none() && !stmts[..j].iter().any(|x| declared(x).contains(n))));
+                match late {
+                    Some(j) if !stmts[..=j].iter().any(|x| !matches!(x, Stmt::Fn(_)) && fn_names.iter().any(|n| stmt_mentions(x, n))) => j + 1,
+                    _ => k,
+                }
+            }
             _ => 0,
         };
         let n = stmts.len();

@@ -65,19 +65,22 @@ impl Interp {
         let mut out = Vec::new();
         for n in names {
             let f = self.fns[&n].clone();
-            let mut rep = DiffReport { name: n.clone(), cases: 0, mismatch: None };
+            let mut rep = DiffReport { name: n.clone(), cases: 0, native_cases: 0, mismatch: None };
             if f.params.iter().any(|p| has_fn_type(&p.ty)) || f.effects.iter().any(|e| matches!(e.name.as_str(), "conc" | "fs" | "io" | "time" | "proc")) {
                 out.push(rep);
                 continue;
             }
             let mut attempts = 0;
-            while rep.cases < opts.cases && attempts < opts.cases * 10 {
+            let want = if f.params.is_empty() { 1 } else { opts.cases };
+            while rep.cases < want && attempts < want * 10 {
                 attempts += 1;
                 let Some(args) = f.params.iter().map(|p| self.generate(&p.ty, &mut rng, opts, 0)).collect::<Option<Vec<_>>>() else { continue };
                 self.bypass_native.set(true);
                 self.depth.set(0);
                 self.fuel.set(FUEL);
+                *self.output.borrow_mut() = Some(vec![]);
                 let interp = self.call_fn(&f, args.clone());
+                let interp_log = self.output.replace(Some(vec![])).unwrap_or_default();
                 self.fuel.set(u64::MAX);
                 self.bypass_native.set(false);
                 let interp = match interp {
@@ -85,8 +88,21 @@ impl Interp {
                     other => describe_result(other),
                 };
                 self.depth.set(0);
+                let hits = self.native_hits.get();
+                if std::env::var_os("SSPUR_FUZZ_TRACE").is_some() {
+                    eprintln!("native {}({})", n, args.iter().map(|a| crate::value::Quoted(a).to_string()).collect::<Vec<_>>().join(", "));
+                }
                 let native = describe_result(self.call_fn(&f, args.clone()));
+                let native_log = self.output.replace(Some(vec![])).unwrap_or_default();
                 rep.cases += 1;
+                if self.native_hits.get() > hits {
+                    rep.native_cases += 1;
+                }
+                let (interp, native) = if interp == native && interp_log != native_log {
+                    (format!("{interp} log {interp_log:?}"), format!("{native} log {native_log:?}"))
+                } else {
+                    (interp, native)
+                };
                 if interp != native {
                     rep.mismatch = Some((args.iter().map(|a| crate::value::Quoted(a).to_string()).collect(), interp, native));
                     break;
@@ -394,6 +410,7 @@ impl Interp {
 pub struct DiffReport {
     pub name: String,
     pub cases: usize,
+    pub native_cases: usize,
     pub mismatch: Option<(Vec<String>, String, String)>,
 }
 

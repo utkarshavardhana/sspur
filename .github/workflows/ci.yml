@@ -65,6 +65,17 @@ jobs:
       - name: Test
         run: cargo test --release --no-fail-fast
 
+      - name: Generated program fuzz (interpreter vs native)
+        run: ./target/release/sspur fuzz --gen 200 --seed 2026 --cases 6 --group 50 --modes O2,O3 --keep "$RUNNER_TEMP/fuzz-gen"
+
+      - name: Upload fuzz findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-gen-${{ matrix.os }}
+          path: ${{ runner.temp }}/fuzz-gen
+          if-no-files-found: ignore
+
       - name: Corpus differential check
         env:
           SSPUR_BIN: ${{ github.workspace }}/target/release/sspur

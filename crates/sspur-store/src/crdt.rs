@@ -27,10 +27,14 @@ pub struct Write {
     pub def: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     pub body: Option<Option<Body>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sup: Vec<Dot>,
+}
+
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<Body>>, D::Error> {
+    Option::<Body>::deserialize(d).map(Some)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1,0 +1,9 @@
+fn f() -> Int
+= do
+  var s = 0
+  fn bump(k: Int) -> Int
+  = do
+    s := s + k
+    s
+  (a, b) = par(bump(1), bump(2))
+  s

@@ -1,0 +1,7 @@
+fn f() -> Int
+= do
+  var s = 0
+  (a, b) = par(do
+      s := 1
+      1, 2)
+  s

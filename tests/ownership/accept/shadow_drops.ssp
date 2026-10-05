@@ -1,0 +1,65 @@
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File) -> Unit ! log
+= do
+  File{fd} = f
+  log("close {fd}")
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn consume(f: File) -> Int ! log
+= f.fd
+
+fn shadowed(n: Int) -> Int ! log
+= do
+  a = open(1)
+  a = open(2)
+  size(&a) + n
+
+fn shadow_loop(n: Int) -> Int ! log
+= do
+  var s = 0
+  for i in 0..n % 4
+    a = open(i)
+    a = open(i + 10)
+    s := s + size(&a)
+  s
+
+fn reassign(n: Int) -> Int ! log
+= do
+  var a = open(1)
+  for i in 0..n % 3
+    a := open(i + 20)
+  size(&a)
+
+fn early(n: Int) -> Int ! log
+= do
+  a = open(1)
+  b = open(2)
+  if n > 0 then return size(&b)
+  c = open(3)
+  size(&c)
+
+fn maybe_moved(n: Int) -> Int ! log
+= do
+  a = open(5)
+  if n > 0 then consume(a) else 0
+
+fn nested(n: Int) -> Int ! log
+= do
+  a = open(1)
+  x = do
+    a = open(7)
+    size(&a)
+  x + size(&a)
+
+fn main() -> Unit ! log
+= log("{shadowed(1)} {shadow_loop(3)} {reassign(5)} {early(1)} {early(0)} {maybe_moved(1)} {maybe_moved(0)} {nested(0)}")
+
+test values = shadowed(1) == 3 and shadow_loop(3) == 33 and reassign(5) == 21 and nested(0) == 8

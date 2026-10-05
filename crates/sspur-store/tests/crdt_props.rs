@@ -65,15 +65,15 @@ fn run(seed: u64, replicas: usize, steps: usize) {
             known[r].insert(k);
         }
     }
-    for r in 0..replicas {
+    for ix in ixs.iter_mut() {
         let mut order: Vec<usize> = (0..commits.len()).collect();
         for i in (1..order.len()).rev() {
             order.swap(i, rng.below(i as u64 + 1) as usize);
         }
         for k in order {
-            ixs[r].apply(&commits[k]);
+            ix.apply(&commits[k]);
             if rng.below(4) == 0 {
-                ixs[r].apply(&commits[k]);
+                ix.apply(&commits[k]);
             }
         }
     }

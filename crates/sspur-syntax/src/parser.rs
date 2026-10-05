@@ -1335,14 +1335,21 @@ impl Parser {
                 self.bump();
                 let mut targs = Vec::new();
                 if self.is_sym("[") && matches!(self.peek_at(1), Tok::Ident(s) if is_upper(s)) {
+                    let saved = self.pos;
                     self.bump();
-                    loop {
-                        targs.push(self.ty()?);
-                        if !self.eat_sym(",") {
-                            break;
+                    let parsed: PResult<()> = (|| {
+                        loop {
+                            targs.push(self.ty()?);
+                            if !self.eat_sym(",") {
+                                break;
+                            }
                         }
+                        self.expect_sym("]").map(|_| ())
+                    })();
+                    if parsed.is_err() {
+                        self.pos = saved;
+                        targs.clear();
                     }
-                    self.expect_sym("]")?;
                 }
                 if self.is_sym("(") || !targs.is_empty() {
                     let args = if self.is_sym("(") { self.args()? } else { vec![] };

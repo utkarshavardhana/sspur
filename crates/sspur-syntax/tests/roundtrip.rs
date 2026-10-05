@@ -104,3 +104,14 @@ fn nested_strings_in_interpolation() {
     let m = parse("fn f(x: Str) -> Str\n= \"a {x.replace(\"b\", 'c')} d\"").unwrap();
     assert!(print_module(&m).contains("x.replace(\"b\", \"c\")"));
 }
+
+#[test]
+fn index_after_method_with_constructor_expression() {
+    let src = "type S = A{x: Int} | C\nfn g(m: Map[Int, Int]) -> Int = m.keys[A{x: 3}.x]\nfn h(j: Json) -> Int = j.as[Int]\n";
+    let m = parse(src).unwrap_or_else(|e| panic!("{e:?}"));
+    let Def::Fn(f) = &m.defs[1] else { panic!() };
+    assert!(matches!(&f.body.kind, ExprKind::Index(..)), "{:?}", f.body.kind);
+    let Def::Fn(h) = &m.defs[2] else { panic!() };
+    assert!(matches!(&h.body.kind, ExprKind::Method { targs, .. } if targs.len() == 1));
+    roundtrip(src);
+}

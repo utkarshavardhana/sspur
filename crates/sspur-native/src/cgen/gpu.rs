@@ -1071,7 +1071,7 @@ pub const EMIT_TARGETS: &[&str] = &["metal", "opencl", "spirv", "ptx"];
 
 fn device_cc(backend: &str) -> Result<String, String> {
     let mut cands: Vec<String> = std::env::var("SSPUR_GPU_CC").into_iter().collect();
-    cands.extend(["clang", "/opt/homebrew/opt/llvm/bin/clang", "/usr/local/opt/llvm/bin/clang"].map(String::from));
+    cands.extend(["/opt/homebrew/opt/llvm/bin/clang", "/usr/local/opt/llvm/bin/clang", "clang-22", "clang-21", "clang-20", "clang-19", "clang"].map(String::from));
     cands
         .into_iter()
         .find(|c| Command::new(c).arg("-print-targets").output().is_ok_and(|o| String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim_start().starts_with(backend))))
@@ -1102,13 +1102,19 @@ pub fn emit(check: &CheckOutput, target: &str) -> Result<Vec<u8>, String> {
     let out = dir.join(format!("{}.{target}", &key[..24]));
     std::fs::write(&cl, &src).map_err(|e| e.to_string())?;
     let mut failure = String::new();
+    let mut crashed = false;
     for opt in if target == "ptx" { ["-O3", "-O1"] } else { ["-O2", "-O1"] } {
         let o = Command::new(&cc).args(["-x", "cl", opt]).args(args).arg(&cl).arg("-o").arg(&out).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
         if o.status.success() {
             failure.clear();
             break;
         }
-        failure = format!("{cc} failed for {target}: {}", String::from_utf8_lossy(&o.stderr).lines().take(8).collect::<Vec<_>>().join(" | "));
+        let err = String::from_utf8_lossy(&o.stderr);
+        crashed = err.contains("PLEASE submit a bug report") || o.status.code().is_none();
+        failure = format!("{cc} failed for {target}: {}", err.lines().take(8).collect::<Vec<_>>().join(" | "));
+    }
+    if crashed {
+        return Err(format!("no clang with a working {backend} backend ({cc} crashed on valid OpenCL; install a newer LLVM or set SSPUR_GPU_CC)"));
     }
     if !failure.is_empty() {
         return Err(failure);

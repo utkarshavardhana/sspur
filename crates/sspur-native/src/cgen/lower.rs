@@ -883,6 +883,13 @@ impl Lower<'_> {
 
 pub(super) type Lowered = (Module, CheckOutput, BTreeMap<String, String>);
 
+fn give_up(why: &str) -> Option<Lowered> {
+    if std::env::var_os("SSPUR_LOWER_DEBUG").is_some() {
+        eprintln!("lower: giving up: {why}");
+    }
+    None
+}
+
 fn ty_has_fn(t: &Ty) -> bool {
     match t {
         Ty::Fn { .. } => true,
@@ -919,7 +926,7 @@ fn reentrant(fns: &[&FnDef], check: &CheckOutput) -> HashSet<String> {
         let mut work: Vec<&str> = edges[f.name.as_str()].iter().map(String::as_str).collect();
         let mut hit = open.contains(f.name.as_str());
         while let Some(n) = work.pop() {
-            if n == f.name || open.contains(n) {
+            if n == f.name {
                 hit = true;
                 break;
             }
@@ -1008,7 +1015,7 @@ pub(super) fn lower(m: &Module, check: &CheckOutput) -> Option<Lowered> {
             }
         }
     }
-    for _ in 0..8 {
+    for _ in 0..24 {
         loop {
             let before = ok.len();
             for f in &fns {
@@ -1074,7 +1081,7 @@ pub(super) fn lower(m: &Module, check: &CheckOutput) -> Option<Lowered> {
         }
         let mut extra = Vec::new();
         for (name, text, owner) in &lw.types {
-            let Ok(tm) = parse(text) else { return None };
+            let Ok(tm) = parse(text) else { return give_up("abort type") };
             origin.insert(name.clone(), owner.clone());
             extra.extend(tm.defs);
         }
@@ -1082,16 +1089,16 @@ pub(super) fn lower(m: &Module, check: &CheckOutput) -> Option<Lowered> {
         let defs = extra;
         let lowered = Module { profile: m.profile.clone(), defs };
         let text = printer::print_module(&lowered);
-        let Ok(reparsed) = parse(&text) else { return None };
+        let Ok(reparsed) = parse(&text) else { return give_up(&text) };
         let (mut a, mut b) = (lowered.clone(), reparsed.clone());
         strip_spans(&mut a);
         strip_spans(&mut b);
         if a.defs.len() != b.defs.len() {
-            return None;
+            return give_up("def count");
         }
         let differ: Vec<&Def> = a.defs.iter().zip(&b.defs).filter(|(x, y)| x != y).map(|(x, _)| x).collect();
-        if differ.iter().any(|d| !origin.contains_key(d.name())) {
-            return None;
+        if let Some(d) = differ.iter().find(|d| !origin.contains_key(d.name())) {
+            return give_up(d.name());
         }
         let bad: Vec<String> = differ.iter().filter_map(|d| origin.get(d.name()).cloned()).collect();
         if !bad.is_empty() {
@@ -1101,11 +1108,13 @@ pub(super) fn lower(m: &Module, check: &CheckOutput) -> Option<Lowered> {
             continue;
         }
         let c2 = sspur_check::check(&reparsed);
-        let errs: Vec<String> = c2.diags.iter().filter(|d| d.is_error()).filter_map(|d| d.def.as_ref().and_then(|n| origin.get(n)).cloned()).collect();
-        if c2.has_errors() && errs.is_empty() {
-            return None;
+        let bad_ev: Vec<String> = c2.diags.iter().filter(|d| d.is_error()).filter_map(|d| d.def.as_deref()).filter(|n| n.ends_with(SUFFIX) && lw.log_only.contains(original_name(n))).map(|n| original_name(n).to_string()).collect();
+        let errs: Vec<String> = c2.diags.iter().filter(|d| d.is_error() && !d.def.as_deref().is_some_and(|n| n.ends_with(SUFFIX) && lw.log_only.contains(original_name(n)))).filter_map(|d| d.def.as_ref().and_then(|n| origin.get(n)).cloned()).collect();
+        if c2.has_errors() && errs.is_empty() && bad_ev.is_empty() {
+            return give_up(&format!("{:?}", c2.diags.iter().find(|d| d.is_error())));
         }
-        if !errs.is_empty() {
+        lw.no_ev.extend(bad_ev);
+        if c2.has_errors() {
             if std::env::var_os("SSPUR_LOWER_DEBUG").is_some() {
                 eprintln!("{text}");
                 for d in c2.diags.iter().filter(|d| d.is_error()) {
@@ -1120,5 +1129,5 @@ pub(super) fn lower(m: &Module, check: &CheckOutput) -> Option<Lowered> {
         why.retain(|n, _| !ok.contains(n));
         return Some((reparsed, c2, why));
     }
-    None
+    give_up("too many rounds")
 }

@@ -236,7 +236,7 @@ fn prec_of(e: &Expr) -> u8 {
         ExprKind::Unary(UnOp::Not, _) => 3,
         ExprKind::Unary(UnOp::Neg | UnOp::Ref | UnOp::RefMut, _) => 9,
         ExprKind::Int(n) if *n < 0 => 9,
-        ExprKind::Float(n) if *n < 0.0 => 9,
+        ExprKind::Float(n) if n.is_sign_negative() => 9,
         ExprKind::Lambda { implicit: false, .. }
         | ExprKind::If(..)
         | ExprKind::Match(..)

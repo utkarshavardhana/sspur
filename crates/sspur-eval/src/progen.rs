@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 pub struct Rng(pub u64);
 
@@ -44,6 +44,8 @@ enum T {
     Set,
     HMap,
     Clo,
+    F64,
+    Res,
 }
 
 #[derive(Clone)]
@@ -73,6 +75,9 @@ struct Cx {
     ret: Option<T>,
     no_risky: bool,
     marks: Vec<usize>,
+    moved: BTreeSet<String>,
+    res_loop: HashMap<String, u32>,
+    loops: u32,
 }
 
 const BOUNDARY: &[&str] = &[
@@ -90,6 +95,8 @@ const BOUNDARY: &[&str] = &[
     "4294967296",
 ];
 
+const FLITS: &[&str] = &["0.0", "(-0.0)", "1.5", "0.1", "2.0", "(-3.25)", "1e300", "1e-300", "0.5", "3.0", "(-1e308)", "123456789.125", "4503599627370497.0", "1e16", "0.3", "7.0"];
+
 const STRS: &[&str] = &["\"\"", "\"a\"", "\"ab\"", "\"Hello\"", "\" x y \"", "\"é\"", "\"日本\"", "\"a,b,c\"", "\"42\"", "\"-7\"", "\"zz9\""];
 
 pub struct Gen {
@@ -99,10 +106,11 @@ pub struct Gen {
     sigs: Vec<Sig>,
     n: usize,
     out: String,
+    sys: bool,
 }
 
 pub fn program(seed: u64, id: usize) -> String {
-    let mut g = Gen { r: Rng::new(seed), p: format!("p{id}"), c: format!("P{id}"), sigs: vec![], n: 0, out: String::new() };
+    let mut g = Gen { r: Rng::new(seed), p: format!("p{id}"), c: format!("P{id}"), sigs: vec![], n: 0, out: String::new(), sys: false };
     g.module();
     g.out
 }
@@ -120,6 +128,8 @@ fn ty_name(c: &str, t: T) -> String {
         T::Set => "Set[Int]".into(),
         T::HMap => "HashMap[Str, Int]".into(),
         T::Clo => "Int -> Int".into(),
+        T::F64 => "F64".into(),
+        T::Res => format!("{c}Rs"),
     }
 }
 
@@ -147,13 +157,23 @@ impl Gen {
 
     fn module(&mut self) {
         let (p, c) = (self.p.clone(), self.c.clone());
+        self.sys = self.r.chance(35);
+        if self.sys {
+            self.out.push_str("profile sys\n");
+        }
         let refine = ["_ >= 0", "_ > -100", "_ != 0", "_ >= -1000 and _ <= 1000"][self.r.below(4) as usize];
         self.out.push_str(&format!("type {c}R = {{a: Int, b: Int where {refine}}}\n"));
         self.out.push_str(&format!("type {c}S = {c}A{{x: Int}} | {c}B{{x: Int, y: Int}} | {c}C\n"));
         self.out.push_str(&format!("type {c}T = {c}Lf | {c}Nd{{l: {c}T, v: Int, r: {c}T}}\n"));
         self.out.push_str(&format!("type {c}E = {c}Bad{{c: Int}} | {c}Worse\n"));
+        self.out.push_str(&format!("type {c}G[T] = {c}Nil | {c}Cons{{h: T, t: {c}G[T]}}\n"));
+        self.out.push_str(&format!("type {c}P[A, B] = {{fst: A, snd: B}}\n"));
+        if self.sys {
+            self.out.push_str(&format!("res type {c}Rs = {{id: Int, v: Int}} drop {p}_rdrop\n"));
+        }
         self.out.push_str(&format!("effect {p}ask(x: Int) -> Int\n\n"));
         self.tree_helpers();
+        self.extra_helpers();
         self.risky();
         self.asker();
         let k = 3 + self.r.below(5);
@@ -194,6 +214,184 @@ impl Gen {
         self.sig(&format!("{p}_mkmap"), &[T::List], T::Map, &[]);
         self.out.push_str(&format!("fn {p}_mkhm(xs: List[Int]) -> HashMap[Str, Int]\n= xs.fold(hash_map(), (m, x) => m.put(\"k{{x % 5}}\", x))\n\n"));
         self.sig(&format!("{p}_mkhm"), &[T::List], T::HMap, &[]);
+    }
+
+    fn extra_helpers(&mut self) {
+        let (p, c) = (self.p.clone(), self.c.clone());
+        self.out.push_str(&format!("fn {p}_gfrom[T](xs: List[T]) -> {c}G[T]\n= xs.reverse.fold({c}Nil, (acc, x) => {c}Cons{{h: x, t: acc}})\n\n"));
+        self.out.push_str(&format!("fn {p}_gto[T](g: {c}G[T]) -> List[T]\n= match g\n  | {c}Nil => []\n  | {c}Cons{{h, t}} => [h] + {p}_gto(t)\n\n"));
+        self.out.push_str(&format!("fn {p}_glen[T](g: {c}G[T]) -> Int\n= match g\n  | {c}Nil => 0\n  | {c}Cons{{t}} => 1 + {p}_glen(t)\n\n"));
+        self.out.push_str(&format!("fn {p}_gmap[A, B](g: {c}G[A], f: A -> B) -> {c}G[B]\n= match g\n  | {c}Nil => {c}Nil\n  | {c}Cons{{h, t}} => {c}Cons{{h: f(h), t: {p}_gmap(t, f)}}\n\n"));
+        self.out.push_str(&format!("fn {p}_gnth[T](g: {c}G[T], k: Int, d: T) -> T\n= match g\n  | {c}Nil => d\n  | {c}Cons{{h, t}} => if k <= 0 then h else {p}_gnth(t, k - 1, d)\n\n"));
+        self.out.push_str(&format!("fn {p}_swap[A, B](q: {c}P[A, B]) -> {c}P[B, A]\n= {c}P{{fst: q.snd, snd: q.fst}}\n\n"));
+        self.out.push_str(&format!("fn {p}_pick[T](b: Bool, x: T, y: T) -> T\n= if b then x else y\n\n"));
+        self.out.push_str(&format!("fn {p}_gapp[A, e](x: A, f: A -> A ! e) -> A ! e\n= f(f(x))\n\n"));
+        self.out.push_str(&format!("fn {p}_lg(a: Int) -> Int ! log\n= do\n  log(\"lg {{a}}\")\n  a * 2 + 1\n\n"));
+        self.sig(&format!("{p}_lg"), &[T::Int], T::Int, &["log"]);
+        let op = ["x * 0.5 + 1.0", "x * x - 2.0", "(x + 1.0) / 3.0", "x - x * 0.25"][self.r.below(4) as usize];
+        self.out.push_str(&format!("fn {p}_fl(x: F64, k: Int) -> F64\n= if k <= 0 then x else {p}_fl({op}, k - 1)\n\n"));
+        self.sig(&format!("{p}_fl"), &[T::F64, T::Int], T::F64, &[]);
+        if self.sys {
+            self.out.push_str(&format!("fn {p}_rdrop(r: {c}Rs) -> Unit ! log\n= log(\"drop {{r.id}} {{r.v}}\")\n\n"));
+            self.out.push_str(&format!("fn {p}_rmk(id: Int, v: Int) -> {c}Rs\n= {c}Rs{{id: id, v: v}}\n\n"));
+            self.out.push_str(&format!("fn {p}_rbump(r: &mut {c}Rs, d: Int)\n= do\n  r.v := r.v + d\n  ()\n\n"));
+            self.out.push_str(&format!("fn {p}_rget(r: &{c}Rs) -> Int\n= r.v * 2 + r.id\n\n"));
+            self.out.push_str(&format!("fn {p}_rtake(r: {c}Rs) -> Int ! log\n= r.v + r.id\n\n"));
+        }
+    }
+
+    fn risky_effects(&self, cx: &mut Cx) {
+        let name = format!("{}_risky", self.p);
+        if let Some(sg) = self.sigs.iter().find(|s| s.name == name) {
+            cx.eff.extend(sg.effects.iter().cloned());
+        }
+    }
+
+    fn live_res(&self, cx: &Cx) -> Vec<String> {
+        cx.vars.iter().filter(|v| v.ty == T::Res && !cx.moved.contains(&v.name)).map(|v| v.name.clone()).collect()
+    }
+
+    fn res_stmt(&mut self, cx: &mut Cx, ind: usize) {
+        let p = self.p.clone();
+        let live = self.live_res(cx);
+        cx.eff.insert("log".into());
+        if live.is_empty() || self.r.chance(30) {
+            let name = self.fresh("r");
+            let id = self.r.range(0, 99);
+            let v = self.int(cx, 1);
+            self.line(ind, &format!("var {name} = {p}_rmk({id}, {v})"));
+            cx.vars.push(Var { name: name.clone(), ty: T::Res, mutable: true, assignable: false, index_of: None, eff: vec![] });
+            cx.res_loop.insert(name, cx.loops);
+            return;
+        }
+        let r = live[self.r.below(live.len() as u64) as usize].clone();
+        let here = cx.res_loop.get(&r).copied() == Some(cx.loops);
+        match self.r.below(5) {
+            0 => {
+                let d = self.int_atom(cx);
+                self.line(ind, &format!("{p}_rbump(&mut {r}, {d})"));
+            }
+            1 if here => {
+                let x = self.fresh("x");
+                self.line(ind, &format!("{x} = {p}_rtake({r})"));
+                cx.moved.insert(r);
+                self.bind(cx, x, T::Int, false);
+            }
+            2 if here => {
+                let b = self.boolean(cx, 1);
+                let q = self.fresh("q");
+                self.line(ind, &format!("if {b} then do"));
+                self.line(ind + 1, &format!("{q} = {p}_rtake({r})"));
+                self.line(ind + 1, &format!("log(\"took {{{q}}}\")"));
+                self.line(ind, "else do");
+                self.line(ind + 1, &format!("{p}_rbump(&mut {r}, 1)"));
+                cx.moved.insert(r);
+            }
+            3 => {
+                let id = self.r.range(100, 199);
+                let v = self.int_atom(cx);
+                self.line(ind, &format!("{r} := {p}_rmk({id}, {v})"));
+            }
+            _ => {
+                let x = self.fresh("x");
+                self.line(ind, &format!("{x} = {p}_rget(&{r})"));
+                self.bind(cx, x, T::Int, false);
+            }
+        }
+    }
+
+    fn par_stmt(&mut self, cx: &mut Cx, ind: usize) {
+        let vars: Vec<Var> = cx.vars.iter().filter(|v| !v.mutable && !matches!(v.ty, T::Clo | T::Res)).cloned().collect();
+        let mut parts = vec![];
+        let k = 2 + self.r.below(2) as usize;
+        let mut tys = vec![];
+        for i in 0..k {
+            let t = if i == 0 { T::Int } else { [T::Int, T::Int, T::Str, T::F64, T::List][self.r.below(5) as usize] };
+            let mut e = None;
+            for _ in 0..3 {
+                let mut inner = Cx { vars: vars.clone(), lambda: true, no_risky: true, ..Default::default() };
+                let x = self.expr(&mut inner, t, 2);
+                if inner.eff.iter().all(|e| e == "div") {
+                    cx.eff.extend(inner.eff);
+                    e = Some(x);
+                    break;
+                }
+            }
+            parts.push(e.unwrap_or_else(|| match t {
+                T::Str => "\"t\"".into(),
+                T::F64 => "1.5".into(),
+                T::List => "[1, 2]".into(),
+                _ => self.lit_int(),
+            }));
+            tys.push(t);
+        }
+        let names: Vec<String> = tys.iter().map(|_| self.fresh("pa")).collect();
+        self.line(ind, &format!("({}) = par({})", names.join(", "), parts.join(", ")));
+        for (n, t) in names.into_iter().zip(tys) {
+            self.bind(cx, n, t, false);
+        }
+    }
+
+    fn float(&mut self, cx: &mut Cx, d: u32) -> String {
+        if d == 0 || self.r.chance(20) {
+            return self.float_atom(cx);
+        }
+        let d1 = d - 1;
+        let p = self.p.clone();
+        match self.r.below(16) {
+            0..=4 => {
+                let op = ["+", "-", "*", "/", "+", "*", "%"][self.r.below(7) as usize];
+                let (a, b) = (self.float(cx, d1), self.float(cx, d1));
+                format!("({a} {op} {b})")
+            }
+            5 => {
+                let a = self.float(cx, d1);
+                format!("(-({a}))")
+            }
+            6 => {
+                let a = self.float(cx, d1);
+                format!("{a}.{}", ["abs", "sqrt", "abs"][self.r.below(3) as usize])
+            }
+            7 => {
+                let a = self.int(cx, d1);
+                format!("{a}.to_f64")
+            }
+            8 => {
+                let (c, a, b) = (self.boolean(cx, d1), self.float(cx, d1), self.float(cx, d1));
+                format!("(if {c} then {a} else {b})")
+            }
+            9 => {
+                let (a, b) = (self.float(cx, d1), self.float(cx, d1));
+                format!("{}({a}, {b})", if self.r.chance(50) { "min" } else { "max" })
+            }
+            10 => self.call(cx, T::F64, d1).unwrap_or_else(|| "2.5".into()),
+            11 => {
+                let (a, b) = (self.float(cx, d1), self.float(cx, d1));
+                if self.r.chance(50) { format!("[{a}, {b}, 0.25].sum") } else { format!("[{a}, {b}].fold(0.5, (s, x) => s * 0.5 + x)") }
+            }
+            12 => {
+                let (c, a, b) = (self.boolean(cx, 0), self.float(cx, d1), self.float(cx, d1));
+                format!("{p}_pick({c}, {a}, {b})")
+            }
+            13 => {
+                let (a, b, k) = (self.float(cx, d1), self.float(cx, d1), self.int_atom(cx));
+                format!("{p}_gnth({p}_gfrom([{a}, {b}]), {k}, 9.5)")
+            }
+            14 => {
+                let l = self.list(cx, d1);
+                format!("{l}.map(x => x.to_f64 * 0.5).sum")
+            }
+            _ => self.float_atom(cx),
+        }
+    }
+
+    fn float_atom(&mut self, cx: &Cx) -> String {
+        if self.r.chance(55)
+            && let Some(v) = self.var_of(cx, T::F64)
+        {
+            return v;
+        }
+        FLITS[self.r.below(FLITS.len() as u64) as usize].to_string()
     }
 
     fn risky(&mut self) {
@@ -280,7 +478,7 @@ impl Gen {
         let mut ptext = vec![];
         let mut pres = vec![];
         for i in 0..np {
-            let t = if simple || self.r.chance(55) { T::Int } else { [T::List, T::Str, T::Rec, T::Sum, T::Tree, T::Map][self.r.below(6) as usize] };
+            let t = if simple || self.r.chance(55) { T::Int } else { [T::List, T::Str, T::Rec, T::Sum, T::Tree, T::Map, T::F64][self.r.below(7) as usize] };
             let pn = ["a", "b", "c"][i].to_string();
             let mut tn = ty_name(&self.c, t);
             if t == T::Int && self.r.chance(25) {
@@ -301,7 +499,7 @@ impl Gen {
                 _ => format!("pre {a} >= 0"),
             });
         }
-        let ret = if simple { T::Int } else { [T::Int, T::Int, T::Int, T::Bool, T::Str, T::List, T::Rec, T::Tree, T::Map, T::Set, T::HMap][self.r.below(11) as usize] };
+        let ret = if simple { T::Int } else { [T::Int, T::Int, T::Int, T::Bool, T::Str, T::List, T::Rec, T::Tree, T::Map, T::Set, T::HMap, T::F64][self.r.below(12) as usize] };
         cx.ret = Some(ret);
         if ret == T::Int && self.r.chance(25) {
             pres.push(format!("post {}", ["r >= 0", "r != 0", "r > -1000000", "r >= a or r < a"][self.r.below(4) as usize]).replace(" a", &format!(" {}", ints.first().cloned().unwrap_or("0".into()))));
@@ -381,7 +579,7 @@ impl Gen {
             self.line(ind, &format!("{name} = {e}"));
             self.bind(cx, name, t, false);
         } else if k < 28 {
-            let t = [T::Int, T::Int, T::Int, T::List, T::Str, T::Tree, T::Map, T::Set, T::Rec][self.r.below(9) as usize];
+            let t = [T::Int, T::Int, T::Int, T::List, T::Str, T::Tree, T::Map, T::Set, T::Rec, T::F64][self.r.below(10) as usize];
             let e = self.expr(cx, t, 2);
             let name = self.fresh("v");
             self.line(ind, &format!("var {name} = {e}"));
@@ -399,7 +597,9 @@ impl Gen {
             self.line(ind, &format!("var {c} = 0"));
             self.line(ind, &format!("while {c} < {lim}"));
             cx.vars.push(Var { name: c.clone(), ty: T::Int, mutable: true, assignable: false, index_of: None, eff: vec![] });
+            cx.loops += 1;
             let nb = 1 + self.r.below(3) as usize; self.block(cx, ind + 1, nb, None, loop_depth + 1);
+            cx.loops -= 1;
             self.line(ind + 1, &format!("{c} := {c} + 1"));
             cx.eff.insert("div".into());
         } else if k < 68 && !assignable.is_empty() {
@@ -444,6 +644,10 @@ impl Gen {
             cx.eff.insert("log".into());
         } else if k < 90 {
             self.local_fn(cx, ind);
+        } else if k < 94 && self.sys && !cx.lambda {
+            self.res_stmt(cx, ind);
+        } else if k < 97 {
+            self.par_stmt(cx, ind);
         } else {
             let name = self.fresh("v");
             let e = self.int(cx, 2);
@@ -515,7 +719,9 @@ impl Gen {
                 self.line(ind + 1, &format!("{} = {}.drop(1)", l.name, l.name));
             }
         }
+        cx.loops += 1;
         let nb = 1 + self.r.below(3) as usize; self.block(cx, ind + 1, nb, None, loop_depth + 1);
+        cx.loops -= 1;
         cx.vars.retain(|v| v.name != i);
     }
 
@@ -523,7 +729,41 @@ impl Gen {
         let name = self.fresh("m");
         let c = self.c.clone();
         let p = self.p.clone();
-        match self.r.below(5) {
+        match self.r.below(6) {
+            5 => {
+                let lg = self.fresh("lg");
+                let m = self.fresh("s");
+                self.line(ind, &format!("var {lg} = 0"));
+                let mut inner = Cx { vars: cx.vars.clone(), ask_ok: cx.ask_ok, lambda: true, no_risky: cx.no_risky, ..Default::default() };
+                let arg = self.int(&mut inner, 1);
+                let more = self.int(&mut inner, 2);
+                inner.eff.remove("log");
+                cx.eff.extend(inner.eff);
+                self.line(ind, &format!("{name} = handle {p}_lg({arg}) + {more}"));
+                match self.r.below(4) {
+                    0 => {
+                        let e = self.int_atom(cx);
+                        let n = self.r.range(3, 8);
+                        self.line(ind + 1, &format!("| log({m}) => if {m}.len > {n} then {e} else do"));
+                        self.line(ind + 2, &format!("{lg} := {lg} + {m}.len"));
+                        self.line(ind + 2, "resume()");
+                    }
+                    1 => {
+                        let r = self.fresh("q");
+                        self.line(ind + 1, &format!("| log({m}) => do"));
+                        self.line(ind + 2, &format!("{lg} := {lg} + 1"));
+                        self.line(ind + 2, &format!("{r} = resume()"));
+                        self.line(ind + 2, &format!("{lg} := {lg} * 3 + {m}.len"));
+                        self.line(ind + 2, &format!("{r} + {m}.len"));
+                    }
+                    _ => {
+                        self.line(ind + 1, &format!("| log({m}) => do"));
+                        self.line(ind + 2, &format!("{lg} := {lg} + {m}.len + 1"));
+                        self.line(ind + 2, "resume()");
+                    }
+                }
+                cx.vars.push(Var { name: lg, ty: T::Int, mutable: true, assignable: true, index_of: None, eff: vec![] });
+            }
             0 => {
                 let s = self.expr(cx, T::Sum, 2);
                 self.line(ind, &format!("{name} = match {s}"));
@@ -561,6 +801,7 @@ impl Gen {
                 let mut inner = Cx { vars: cx.vars.clone(), ask_ok: cx.ask_ok, lambda: true, ..Default::default() };
                 let arg = self.int(&mut inner, 2);
                 let e = format!("{p}_risky({arg})");
+                self.risky_effects(&mut inner);
                 let more = self.int(&mut inner, 1);
                 inner.eff.remove(&format!("fail[{c}E]"));
                 cx.eff.extend(inner.eff);
@@ -587,10 +828,24 @@ impl Gen {
                 cx.vars.push(Var { name: q.clone(), ty: T::Int, mutable: false, assignable: false, index_of: None, eff: vec![] });
                 let e1 = self.int(cx, 1);
                 cx.vars.pop();
-                if self.r.chance(80) {
-                    self.line(ind + 1, &format!("| {p}ask({q}) => resume({e1})"));
-                } else {
-                    self.line(ind + 1, &format!("| {p}ask({q}) => {e1}"));
+                match self.r.below(10) {
+                    0..=4 => self.line(ind + 1, &format!("| {p}ask({q}) => resume({e1})")),
+                    5 | 6 => self.line(ind + 1, &format!("| {p}ask({q}) => {e1}")),
+                    7 => {
+                        let r = self.fresh("q");
+                        self.line(ind + 1, &format!("| {p}ask({q}) => do"));
+                        self.line(ind + 2, &format!("{r} = resume({e1})"));
+                        self.line(ind + 2, &format!("{r} * 2 + {q}"));
+                    }
+                    8 => {
+                        let k = self.r.range(-3, 9);
+                        self.line(ind + 1, &format!("| {p}ask({q}) => if {q} > {k} then {e1} else resume({q} + 1)"));
+                    }
+                    _ => {
+                        let k = self.r.range(-3, 9);
+                        cx.eff.insert(format!("fail[{c}E]"));
+                        self.line(ind + 1, &format!("| {p}ask({q}) => if {q} > {k} then raise {c}Bad{{c: {q}}} else resume({e1})"));
+                    }
                 }
             }
             _ => {
@@ -662,12 +917,16 @@ impl Gen {
                 let e = self.int(cx, 2);
                 format!("{n} with {} := {e}", if self.r.chance(50) { "a" } else { "b" })
             }
+            T::F64 => {
+                let e = self.float(cx, 2);
+                [format!("{n} + {e}"), format!("{n} * 0.5 + {e}"), e][self.r.below(3) as usize].clone()
+            }
             t => self.expr(cx, t, 2),
         }
     }
 
     fn any_ty(&mut self) -> T {
-        [T::Int, T::Int, T::Int, T::Bool, T::Str, T::List, T::List, T::Rec, T::Sum, T::Tree, T::Map, T::Set, T::HMap][self.r.below(13) as usize]
+        [T::Int, T::Int, T::Int, T::Bool, T::Str, T::List, T::List, T::Rec, T::Sum, T::Tree, T::Map, T::Set, T::HMap, T::F64][self.r.below(14) as usize]
     }
 
     fn expr(&mut self, cx: &mut Cx, t: T, d: u32) -> String {
@@ -683,6 +942,8 @@ impl Gen {
             T::Set => self.set(cx, d),
             T::HMap => self.hmap(cx, d),
             T::Clo => "(z => z)".into(),
+            T::F64 => self.float(cx, d),
+            T::Res => "()".into(),
         }
     }
 
@@ -731,7 +992,7 @@ impl Gen {
         }
         let d1 = d - 1;
         let p = self.p.clone();
-        match self.r.below(40) {
+        match self.r.below(46) {
             0..=7 => {
                 let op = ["+", "-", "*", "+", "-", "*", "/", "%"][self.r.below(8) as usize];
                 let (a, b) = (self.int(cx, d1), self.int(cx, d1));
@@ -822,7 +1083,7 @@ impl Gen {
             28 | 29 => self.pipeline(cx, d1),
             30 if !cx.no_risky => {
                 let a = self.int(cx, d1);
-                cx.eff.insert(format!("fail[{}E]", self.c));
+                self.risky_effects(cx);
                 format!("{p}_risky({a})")
             }
             31 => {
@@ -841,6 +1102,58 @@ impl Gen {
                     format!("{s}.pad_left(3, \"*\").len"),
                 ][self.r.below(6) as usize]
                     .clone()
+            }
+            36 | 37 => {
+                let f = self.float(cx, d1);
+                [
+                    format!("{f}.round"),
+                    format!("{f}.floor"),
+                    format!("{f}.ceil"),
+                    format!("{f}.trunc"),
+                    format!("({f}.{} * 1000.0).round", ["sin", "cos", "exp", "ln", "atan", "sqrt"][self.r.below(6) as usize]),
+                    format!("{f}.fmt({}).len", self.r.range(0, 4)),
+                    format!("\"{{{f}}}\".len"),
+                ][self.r.below(7) as usize]
+                    .clone()
+            }
+            38 => {
+                let l = self.list(cx, d1);
+                let k = self.int_atom(cx);
+                [
+                    format!("{p}_glen({p}_gfrom({l}))"),
+                    format!("{p}_gto({p}_gfrom({l})).sum"),
+                    format!("{p}_gnth({p}_gfrom({l}), {k}, -1)"),
+                ][self.r.below(3) as usize]
+                    .clone()
+            }
+            39 => {
+                let l = self.list(cx, d1);
+                let f = self.pure_lambda(cx);
+                format!("{p}_gto({p}_gmap({p}_gfrom({l}), {f})).sum")
+            }
+            40 => {
+                let (b, x, y) = (self.boolean(cx, 0), self.int(cx, d1), self.int(cx, d1));
+                format!("{p}_pick({b}, {x}, {y})")
+            }
+            41 => {
+                let (s, i) = (self.string(cx, d1), self.int(cx, d1));
+                if self.r.chance(50) { format!("{p}_swap({}P{{fst: {s}, snd: {i}}}).fst", self.c) } else { format!("{p}_glen({p}_gmap({p}_gfrom([{s}, \"b\"]), x => x.len))") }
+            }
+            42 => {
+                let (a, f) = (self.int(cx, d1), self.lambda(cx));
+                format!("{p}_gapp({a}, {f})")
+            }
+            43 if !cx.lambda => {
+                let live = self.live_res(cx);
+                if live.is_empty() {
+                    self.int_atom(cx)
+                } else {
+                    format!("{p}_rget(&{})", live[self.r.below(live.len() as u64) as usize])
+                }
+            }
+            44 => {
+                let l = self.list(cx, d1);
+                format!("{p}_glen({p}_gmap({p}_gfrom({l}), x => x.to_f64 * 1.5))")
             }
             34 | 35 => {
                 let l = self.list(cx, d1);
@@ -902,6 +1215,13 @@ impl Gen {
         format!("{x} => {b}")
     }
 
+    fn pure_lambda(&mut self, cx: &mut Cx) -> String {
+        let x = self.fresh("e");
+        let op = ["+", "*", "-", "%", "/"][self.r.below(5) as usize];
+        let k = self.int_atom(cx);
+        format!("{x} => {x} {op} {k}")
+    }
+
     fn blambda(&mut self, cx: &mut Cx) -> String {
         let x = self.fresh("e");
         cx.vars.push(Var { name: x.clone(), ty: T::Int, mutable: false, assignable: false, index_of: None, eff: vec![] });
@@ -928,7 +1248,21 @@ impl Gen {
             return format!("({a} < {b})");
         }
         let d1 = d - 1;
-        match self.r.below(12) {
+        match self.r.below(15) {
+            12 | 13 => {
+                let op = ["<", "<=", ">", ">=", "==", "!="][self.r.below(6) as usize];
+                let (a, b) = (self.float(cx, d1), self.float(cx, d1));
+                if self.r.chance(25) { format!("{a}.{}", ["is_nan", "is_finite"][self.r.below(2) as usize]) } else { format!("({a} {op} {b})") }
+            }
+            14 => {
+                let (b, x, y) = (self.boolean(cx, 0), self.boolean(cx, d1), self.boolean(cx, d1));
+                if self.r.chance(50) {
+                    format!("{}_pick({b}, {x}, {y})", self.p)
+                } else {
+                    let (l, m) = (self.list(cx, d1), self.list(cx, d1));
+                    format!("({p}_gfrom({l}) == {p}_gfrom({m}))", p = self.p)
+                }
+            }
             0..=3 => {
                 let op = ["<", "<=", ">", ">=", "==", "!="][self.r.below(6) as usize];
                 let (a, b) = (self.int(cx, d1), self.int(cx, d1));
@@ -985,7 +1319,19 @@ impl Gen {
             return STRS[self.r.below(STRS.len() as u64) as usize].to_string();
         }
         let d1 = d - 1;
-        match self.r.below(12) {
+        match self.r.below(15) {
+            12 => {
+                let f = self.float(cx, d1);
+                [format!("{f}.str"), format!("{f}.fmt({})", self.r.range(0, 4)), format!("\"f{{{f}}}\"")][self.r.below(3) as usize].clone()
+            }
+            13 => {
+                let (b, x, y) = (self.boolean(cx, 0), self.string(cx, d1), self.string(cx, d1));
+                format!("{}_pick({b}, {x}, {y})", self.p)
+            }
+            14 => {
+                let (i, s, k) = (self.int(cx, d1), self.string(cx, d1), self.int_atom(cx));
+                if self.r.chance(50) { format!("{p}_swap({c}P{{fst: {i}, snd: {s}}}).fst", p = self.p, c = self.c) } else { format!("{p}_gnth({p}_gfrom([{s}, \"q\"]), {k}, \"d\")", p = self.p) }
+            }
             0 => {
                 let v = self.int_atom(cx);
                 format!("\"n{{{v}}}\"")
@@ -1054,7 +1400,15 @@ impl Gen {
         }
         let d1 = d - 1;
         let p = self.p.clone();
-        match self.r.below(18) {
+        match self.r.below(20) {
+            18 => {
+                let (l, f) = (self.list(cx, d1), self.pure_lambda(cx));
+                format!("{p}_gto({p}_gmap({p}_gfrom({l}), {f}))")
+            }
+            19 => {
+                let (b, x, y) = (self.boolean(cx, 0), self.list(cx, d1), self.list(cx, d1));
+                format!("{p}_pick({b}, {x}, {y})")
+            }
             14 => {
                 let l = self.list(cx, d1);
                 format!("{l}.flat_map(x => [x, x + 1])")

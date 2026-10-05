@@ -1,0 +1,8 @@
+fn width() -> Int
+= (-0.0).fmt(1).len
+
+fn shown() -> Str
+= "{(-0.0).fmt(2)} {(-0.0).str} {(-(0.0)).abs}"
+
+test w = width() == 4
+test s = shown() == "-0.00 -0.0 0.0"

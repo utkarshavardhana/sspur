@@ -116,6 +116,13 @@ fn nested_if_keeps_its_else_through_print() {
 }
 
 #[test]
+fn negative_zero_receiver_keeps_its_parentheses() {
+    let src = "fn f() -> Int\n= (-0.0).fmt(1).len + (-0.0).round\n";
+    assert!(print_module(&parse(src).unwrap()).contains("(-0.0).fmt(1).len + (-0.0).round"));
+    roundtrip(src);
+}
+
+#[test]
 fn index_after_method_with_constructor_expression() {
     let src = "type S = A{x: Int} | C\nfn g(m: Map[Int, Int]) -> Int = m.keys[A{x: 3}.x]\nfn h(j: Json) -> Int = j.as[Int]\n";
     let m = parse(src).unwrap_or_else(|e| panic!("{e:?}"));

@@ -83,6 +83,21 @@ pub fn diff_module(l: &Loaded, mode: &'static str, cases: usize, seed: u64) -> R
     Ok(ModuleRun { diffs: out, funcs, cases: n, native: nn, skipped })
 }
 
+fn join(srcs: &BTreeMap<usize, String>) -> String {
+    let mut sys = false;
+    let body: Vec<&str> = srcs
+        .values()
+        .map(|s| match s.strip_prefix("profile sys\n") {
+            Some(r) => {
+                sys = true;
+                r
+            }
+            None => s.as_str(),
+        })
+        .collect();
+    format!("{}{}", if sys { "profile sys\n" } else { "" }, body.join("\n"))
+}
+
 fn prog_of(func: &str) -> Option<usize> {
     func.strip_prefix('p')?.split('_').next()?.parse().ok()
 }
@@ -96,7 +111,7 @@ pub fn run(cfg: &Cfg) -> ExitCode {
         id += cfg.group;
         let mut srcs: BTreeMap<usize, String> = ids.iter().map(|i| (*i, source(cfg.seed, *i))).collect();
         st.programs += srcs.len();
-        let mut loaded = load_src(srcs.values().cloned().collect::<Vec<_>>().join("\n"));
+        let mut loaded = load_src(join(&srcs));
         if loaded.as_ref().map_or(true, |l| l.check.has_errors()) {
             for i in &ids {
                 let bad = match load_src(srcs[i].clone()) {
@@ -111,7 +126,7 @@ pub fn run(cfg: &Cfg) -> ExitCode {
                     srcs.remove(i);
                 }
             }
-            loaded = load_src(srcs.values().cloned().collect::<Vec<_>>().join("\n"));
+            loaded = load_src(join(&srcs));
         }
         let Ok(l) = loaded else { continue };
         if srcs.is_empty() {

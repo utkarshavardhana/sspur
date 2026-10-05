@@ -1,0 +1,17 @@
+type Small = Int where _ < 100
+
+fn refined(a: Int where _ > 0) -> Small ! log
+= do
+  log("refined {a}")
+  a * 2
+
+fn quiet_refined(n: Int) -> Int
+= do
+  var seen = 0
+  r = handle refined(n) + 1
+    | log(m) => do
+      seen := seen + m.len
+      resume()
+  r + seen
+
+test ok = quiet_refined(3) == 16

@@ -2315,7 +2315,7 @@ impl<'a> Cx<'a> {
             self.inplace.insert("a0".into());
         }
         for (i, (p, t)) in f.params.iter().zip(params).enumerate() {
-            let ctx = format!("parameter '{}' of {}", p.name, f.name);
+            let ctx = format!("parameter '{}' of {}", p.name, lower::original_name(&f.name));
             s.push_str("  ");
             s.push_str(&self.alias_check(&p.ty, &ctx, &format!("a{i}"), t)?);
             if let Some(r) = &p.refine {
@@ -2349,7 +2349,7 @@ impl<'a> Cx<'a> {
         };
         writeln!(s, "  {}{rc} ret_;\n  ret_ = {body};\n  goto done_;\ndone_: ;", self.fn_decls).unwrap();
         if let Some(rt) = f.ret.as_ref().filter(|_| env.is_some() || !self.smt.ret_proved(&f.name)) {
-            let c = self.alias_check(rt, &format!("result of {}", f.name), "ret_", ret)?;
+            let c = self.alias_check(rt, &format!("result of {}", lower::original_name(&f.name)), "ret_", ret)?;
             writeln!(s, "  {c}").unwrap();
         }
         if !f.posts.is_empty() {
@@ -3232,7 +3232,7 @@ impl<'a> Cx<'a> {
             self.scopes.pop();
             write!(s, "{open}{res} = {}; goto {end}; {close}", out?).unwrap();
         }
-        let mut msg = format!("SB mb_ = {{0}}; sb_put(&mb_, {}, {}); ", c_lit(&format!("no row of rule {} matched (", f.name)), format!("no row of rule {} matched (", f.name).len());
+        let mut msg = format!("SB mb_ = {{0}}; sb_put(&mb_, {}, {}); ", c_lit(&format!("no row of rule {} matched (", lower::original_name(&f.name))), format!("no row of rule {} matched (", lower::original_name(&f.name)).len());
         for (i, (p, t)) in f.params.iter().zip(params).enumerate() {
             let sh = self.helper_show(t)?;
             let label = format!("{}{} = ", if i > 0 { ", " } else { "" }, p.name);

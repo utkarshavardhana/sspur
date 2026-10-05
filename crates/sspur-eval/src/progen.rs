@@ -338,7 +338,7 @@ impl Gen {
         }
         let d1 = d - 1;
         let p = self.p.clone();
-        match self.r.below(16) {
+        match self.r.below(17) {
             0..=4 => {
                 let op = ["+", "-", "*", "/", "+", "*", "%"][self.r.below(7) as usize];
                 let (a, b) = (self.float(cx, d1), self.float(cx, d1));
@@ -379,7 +379,19 @@ impl Gen {
             }
             14 => {
                 let l = self.list(cx, d1);
-                format!("{l}.map(x => x.to_f64 * 0.5).sum")
+                let (f, k) = (self.float_atom(cx), self.int_atom(cx));
+                [
+                    format!("{l}.map(x => x.to_f64 * 0.5).sum"),
+                    format!("{l}.map(x => x.to_f64 / 3.0 + {f}).sort.first.or(0.25)"),
+                    format!("(0..{k} % 70000).map(e => e.to_f64 * 0.1).sum"),
+                    format!("(0..{k} % 70000).map(e => (e % 7).to_f64 * {f}).filter(x => x > 1.0).sum"),
+                    format!("{l}.map(x => x.to_f64).fold({f}, (s, x) => s * 0.5 + x)"),
+                ][self.r.below(5) as usize]
+                    .clone()
+            }
+            15 => {
+                let (a, s) = (self.float(cx, d1), self.string(cx, 0));
+                format!("{p}_swap({}P{{fst: {s}, snd: {a}}}).fst", self.c)
             }
             _ => self.float_atom(cx),
         }

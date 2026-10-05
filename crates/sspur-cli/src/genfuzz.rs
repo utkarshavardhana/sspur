@@ -184,6 +184,7 @@ pub enum Want {
     Diff(Vec<&'static str>),
     Skip(String),
     Build(String),
+    Hang(Vec<String>),
 }
 
 fn interesting(src: &str, want: &Want, cases: usize, seed: u64) -> bool {
@@ -195,6 +196,24 @@ fn interesting(src: &str, want: &Want, cases: usize, seed: u64) -> bool {
         Want::Skip(s) => {
             set_mode("O2-whole");
             sspur_native::cgen::compile_release(&l.module, &l.check, "-O2").is_ok_and(|c| c.skipped.values().any(|w| w.contains(s.as_str())))
+        }
+        Want::Hang(cmd) => {
+            let path = std::env::temp_dir().join(format!("sspur-hang-{}.ssp", std::process::id()));
+            if std::fs::write(&path, src).is_err() {
+                return false;
+            }
+            let Ok(mut child) = std::process::Command::new(std::env::current_exe().unwrap()).args(cmd.iter().map(|a| if a == "FILE" { path.to_string_lossy().to_string() } else { a.clone() })).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn() else { return false };
+            for _ in 0..50 {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if let Some(st) = child.try_wait().ok().flatten() {
+                    return st.code().is_none();
+                }
+
+
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            true
         }
         Want::Build(s) => {
             set_mode("O2-whole");

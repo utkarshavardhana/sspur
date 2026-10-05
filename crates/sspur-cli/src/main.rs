@@ -71,7 +71,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto" | "--gen" | "--group" | "--keep" | "--modes" | "--reduce" | "--want-skip" | "--want-build" | "--from");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto" | "--gen" | "--group" | "--keep" | "--modes" | "--reduce" | "--want-skip" | "--want-build" | "--want-hang" | "--from");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -201,6 +201,7 @@ fn reduce_fuzz(args: &Args) -> ExitCode {
     let want = match (args.val("--want-skip"), args.val("--want-build")) {
         (Some(s), _) => genfuzz::Want::Skip(s.clone()),
         (_, Some(s)) => genfuzz::Want::Build(s.clone()),
+        _ if args.val("--want-hang").is_some() => genfuzz::Want::Hang(args.val("--want-hang").unwrap().split(' ').map(String::from).collect()),
         _ => genfuzz::Want::Diff(match args.val("--modes") {
             Some(m) => genfuzz::MODES.iter().copied().filter(|x| m.split(',').any(|y| y == *x)).collect(),
             None => genfuzz::MODES.to_vec(),

@@ -89,6 +89,9 @@ impl Interp {
                 };
                 self.depth.set(0);
                 let hits = self.native_hits.get();
+                if std::env::var_os("SSPUR_FUZZ_TRACE").is_some() {
+                    eprintln!("native {}({})", n, args.iter().map(|a| crate::value::Quoted(a).to_string()).collect::<Vec<_>>().join(", "));
+                }
                 let native = describe_result(self.call_fn(&f, args.clone()));
                 let native_log = self.output.replace(Some(vec![])).unwrap_or_default();
                 rep.cases += 1;

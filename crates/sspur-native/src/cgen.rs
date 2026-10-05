@@ -652,7 +652,7 @@ static int cmp_S_p(const void* a, const void* b) { return cmp_S(*(const Str*)a, 
 static Str str_cat(Str a, Str b) { if (!b.len) return a; if (!a.len) return b; char* p = (char*)sspur_alloc_atomic((size_t)(a.len + b.len)); memcpy(p, a.p, (size_t)a.len); memcpy(p + a.len, b.p, (size_t)b.len); return (Str){a.len + b.len, p}; }
 static int64_t utf8_len(Str s) { int64_t n = 0; for (int64_t i = 0; i < s.len; i++) if (((unsigned char)s.p[i] & 0xC0) != 0x80) n++; return n; }
 static int64_t utf8_next(Str s, int64_t i) { i++; while (i < s.len && ((unsigned char)s.p[i] & 0xC0) == 0x80) i++; return i; }
-static int64_t utf8_byte_at(Str s, int64_t k) { int64_t i = 0, c = 0; while (i < s.len && c < k) { i = utf8_next(s, i); c++; } return i; }
+static int64_t utf8_byte_at(Str s, int64_t k) { int64_t i = 0, c = 0; _Pragma("clang loop unroll(disable)") while (i < s.len && c < k) { i = utf8_next(s, i); c++; } return i; }
 static Str str_take(Str s, int64_t n) { if (n < 0) n = 0; return (Str){utf8_byte_at(s, n), s.p}; }
 static Str str_drop(Str s, int64_t n) { if (n < 0) n = 0; int64_t b = utf8_byte_at(s, n); return (Str){s.len - b, s.p + b}; }
 static int64_t str_find(Str h, Str n, int64_t from) {
@@ -781,7 +781,7 @@ static OptS_ str_char_at(Str s, int64_t k) {
     OptS_ o = {0, {0, 0}};
     if (k < 0) return o;
     int64_t i = 0, c = 0;
-    while (i < s.len && c < k) { i = utf8_next(s, i); c++; }
+    _Pragma("clang loop unroll(disable)") while (i < s.len && c < k) { i = utf8_next(s, i); c++; }
     if (i >= s.len) return o;
     o.some = 1; o.v = (Str){utf8_next(s, i) - i, s.p + i}; return o;
 }

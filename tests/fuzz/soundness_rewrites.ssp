@@ -1,0 +1,83 @@
+// Proven rewrites must keep the value, the raised error and the exact trap: unused or reordered arguments, composed maps and fused loops.
+type P = {a: Int, b: Int where _ > 0}
+
+fn first(a: Int, b: Int) -> Int
+= a
+
+fn flip(a: Int, b: Int) -> Int
+= b - a
+
+fn twice(a: Int) -> Int
+= a + a
+
+fn drops_arg(x: Int) -> Int
+= first(1, 10 / x)
+
+fn reorders(x: Int, y: Int) -> Int
+= flip(10 / x, 9223372036854775807 + y)
+
+fn dup_arg(x: Int) -> Int
+= twice(100 / x)
+
+fn ctor_map(xs: List[Int]) -> Int
+= xs.map(x => P{a: 1, b: x}).map(p => p.b).sum
+
+fn mm(xs: List[Int]) -> List[Int]
+= xs.map(x => 10 / x).map(y => 4611686018427387904 * y)
+
+fn mm_idx(xs: List[Int]) -> List[Int]
+= xs.map(x => [1, 2, 3][x]).map(y => 10 / (y - 2))
+
+fn fused_len(xs: List[Int]) -> Int
+= xs.map(x => P{a: x, b: x}.b).filter(y => y > 1).len
+
+fn fused_mixed(n: Int) -> Int
+= (0..n % 10).map(i => 10 / (i - 3)).map(j => j * 4611686018427387904).sum
+
+fn make(n: Int) -> List[Int]
+= (0..n % 8).map(i => 100 / (i - 2))
+
+fn uses_make(n: Int) -> Int
+= make(n).map(x => x * 3).sum
+
+fn fold_dead(x: Int) -> Int
+= if 2 > 3 then 10 / 0 else x
+
+fn fold_live(x: Int) -> Int
+= x * 1 + 0 + (if true then 10 / x else 0)
+
+fn probe_drops() -> Int
+= drops_arg(0)
+
+fn probe_reorders() -> Int
+= reorders(0, 1)
+
+fn probe_dup() -> Int
+= dup_arg(0)
+
+fn probe_ctor_map() -> Int
+= ctor_map([3, -1, 0])
+
+fn probe_mm() -> List[Int]
+= mm([1, 3, 0])
+
+fn probe_mm_idx() -> List[Int]
+= mm_idx([2, 1, 7])
+
+fn probe_fused_len() -> Int
+= fused_len([2, 0, -3])
+
+fn probe_fused_mixed() -> Int
+= fused_mixed(5)
+
+fn probe_uses_make() -> Int
+= uses_make(5)
+
+fn probe_fold_live() -> Int
+= fold_live(0)
+
+fn probe_ctor_sum() -> Int
+= ctor_map([9223372036854775807, 1, 0])
+
+fn probe_ctor_sum2() -> Int
+= ctor_map([9223372036854775807, 1, 2, -5])

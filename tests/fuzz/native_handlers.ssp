@@ -1,0 +1,152 @@
+// interp-ok: asks, notes, nat_up and safe_gen perform operations, so their interpreter entry points stay interpreted
+type Oops = Oops{n: Int} | Meh
+
+effect ask(x: Int) -> Int
+effect note(s: Str)
+
+fn asks(n: Int) -> Int ! ask
+= ask(n) + ask(n + 1)
+
+fn notes(n: Int) -> Int ! note
+= do
+  note("a{n}")
+  note("b{n}")
+  n
+
+fn chatty(n: Int) -> Int ! log
+= do
+  log("chatty {n}")
+  n * 2
+
+fn abort_skips_return(n: Int) -> Int
+= handle asks(n) * 100
+  | ask(x) => if x > 3 then x else resume(x)
+  | return(v) => v + 1
+
+fn raise_escapes_body_catch(n: Int) -> Int ! fail[Oops]
+= handle do
+    r = catch asks(n)
+      | Oops{n} => n * 1000
+      | Meh => -1
+    r
+  | ask(x) => if x == 2 then raise Oops{n: x} else if x == 5 then raise Meh else resume(x)
+
+fn caught_outside(n: Int) -> Int
+= catch raise_escapes_body_catch(n)
+  | Oops{n} => -n
+  | Meh => -99
+
+fn after_resume(n: Int) -> (Int, List[Str])
+= do
+  var seen = []
+  r = handle notes(n) + notes(n + 1)
+    | note(s) => do
+      k = s.len
+      seen := seen.push("pre {s}")
+      r = resume()
+      seen := seen.push("post {s} {k} {r}")
+      r + k
+    | return(v) => v * 10
+  (r, seen)
+
+fn after_resume_abort(n: Int) -> (Int, List[Str])
+= do
+  var seen = []
+  r = handle do
+      note("x")
+      note("stop")
+      n
+    | note(s) => if s == "stop" then 7 else do
+      r = resume()
+      seen := seen.push("after {s} {r}")
+      r * 2
+  (r, seen)
+
+fn captured(n: Int) -> (Int, List[Str])
+= do
+  var lines = []
+  r = handle chatty(n) + [1, 2, 3].map(x => do
+        log("item {x}")
+        x).sum
+    | log(m) => do
+      lines := lines.push(m)
+      resume()
+  (r, lines)
+
+fn nested_logs(n: Int) -> (Int, List[Str], List[Str])
+= do
+  var outer = []
+  var inner = []
+  r = handle do
+      a = chatty(n)
+      b = handle chatty(a)
+        | log(m) => do
+          inner := inner.push(m)
+          log("relay {m}")
+          resume()
+      a + b
+    | log(m) => do
+      outer := outer.push(m)
+      resume()
+  (r, outer, inner)
+
+fn host_log(n: Int) -> Int ! log
+= chatty(n) + 1
+
+fn fold_asks(xs: List[Int]) -> Int
+= handle xs.fold(0, (acc, x) => acc + ask(x))
+  | ask(x) => resume(x * x)
+
+fn shadowed(n: Int) -> Int
+= do
+  x = 5
+  handle do
+      x = 100
+      ask(1) + x
+    | ask(_) => resume(x + n)
+
+fn nat_up() -> Unit ! yield[Int], div
+= do
+  var i = 0
+  while i < 50
+    yield(i)
+    i := i + 1
+
+fn safe_gen(xs: List[Int]) -> Unit ! yield[Int]
+= do
+  for x in xs
+    catch yield(x)
+      | Oops{n} => yield(n * 1000)
+      | Meh => yield(-1)
+
+fn gen_return(n: Int) -> Int ! div
+= do
+  for i in nat_up()
+    if i * i > n then return i
+  -1
+
+fn gen_raise(xs: List[Int]) -> Int ! fail[Oops]
+= do
+  var s = 0
+  for x in safe_gen(xs)
+    if x == 3 then raise Oops{n: x}
+    s := s + x
+  s
+
+fn gen_raise_caught(xs: List[Int]) -> Int
+= catch gen_raise(xs)
+  | Oops{n} => -n
+  | Meh => 0
+
+test abort_return = abort_skips_return(1) == 301 and abort_skips_return(5) == 5
+test resumed_return = abort_skips_return(0) == 101
+test escapes = caught_outside(1) == -2 and caught_outside(4) == -99 and caught_outside(10) == 21
+test post_order = after_resume(1) == (38, ["pre a1", "pre b1", "pre a2", "pre b2", "post b2 2 30", "post a2 2 32", "post b1 2 34", "post a1 2 36"])
+test post_abort = after_resume_abort(3) == (14, ["after x 7"])
+test logs = captured(4) == (14, ["chatty 4", "item 1", "item 2", "item 3"])
+test nested = nested_logs(2) == (12, ["chatty 2", "relay chatty 4"], ["chatty 4"])
+test host = host_log(3) == 7
+test folds = fold_asks([1, 2, 3]) == 14
+test shadow = shadowed(2) == 107
+test early = gen_return(50) == 8 and gen_return(5000) == -1
+test gen_errors = gen_raise_caught([1, 2, 3, 4]) == -3 and gen_raise_caught([1, 2]) == 3

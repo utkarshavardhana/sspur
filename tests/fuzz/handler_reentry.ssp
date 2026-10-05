@@ -1,0 +1,14 @@
+// interp-ok: deep re-enters its own aborting handler, so it stays interpreted
+effect tick(x: Int) -> Int
+
+fn deep(n: Int) -> Int ! tick
+= handle (if n > 0 then deep(n - 1) else tick(0))
+  | tick(x) => if x >= 2 then x * 10 else resume(tick(x + 1))
+  | return(v) => v + n * 1000
+
+fn top(n: Int) -> Int
+= handle deep(n)
+  | tick(x) => resume(x)
+
+test nested_abort = top(3) == 3020
+test shallow = top(0) == 1

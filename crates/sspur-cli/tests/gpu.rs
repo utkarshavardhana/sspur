@@ -164,7 +164,7 @@ fn kernel_traps_are_identical_in_every_tier() {
     assert!(interp.1.contains("5 passed, 8 failed"), "{}", interp.1);
     for env in [vec![], vec![("SSPUR_GPU", "0")]] {
         let native = run(&["test"], &path, &env);
-        assert_eq!(interp.1, native.1, "{env:?}");
+        assert_eq!(interp.1, native.1, "{env:?}: native stderr: {}", native.2);
     }
     let path = suite().join("devbuf.ssp");
     let interp = run(&["test", "--interp"], &path, &[]);
@@ -173,7 +173,7 @@ fn kernel_traps_are_identical_in_every_tier() {
     assert!(interp.1.contains("4 passed, 3 failed"), "{}", interp.1);
     for env in [vec![], vec![("SSPUR_GPU", "0")]] {
         let native = run(&["test"], &path, &env);
-        assert_eq!(interp.1, native.1, "{env:?}");
+        assert_eq!(interp.1, native.1, "{env:?}: native stderr: {}", native.2);
     }
     let path = suite().join("async.ssp");
     let interp = run(&["test", "--interp"], &path, &[]);
@@ -182,7 +182,7 @@ fn kernel_traps_are_identical_in_every_tier() {
     assert!(interp.1.contains("3 passed, 2 failed"), "{}", interp.1);
     for env in [vec![], vec![("SSPUR_GPU", "0")]] {
         let native = run(&["test"], &path, &env);
-        assert_eq!(interp.1, native.1, "{env:?}");
+        assert_eq!(interp.1, native.1, "{env:?}: native stderr: {}", native.2);
     }
     let path = suite().join("shared.ssp");
     let interp = run(&["test", "--interp"], &path, &[]);
@@ -190,7 +190,7 @@ fn kernel_traps_are_identical_in_every_tier() {
     assert!(interp.1.contains("3 passed, 1 failed"), "{}", interp.1);
     for env in [vec![], vec![("SSPUR_GPU", "0")]] {
         let native = run(&["test"], &path, &env);
-        assert_eq!(interp.1, native.1, "{env:?}");
+        assert_eq!(interp.1, native.1, "{env:?}: native stderr: {}", native.2);
     }
     let path = suite().join("atomics.ssp");
     let interp = run(&["test", "--interp"], &path, &[]);

@@ -66,7 +66,7 @@ svc items
 | `plan.json` | Routes, declared rows, reachable db operations, actions, and validators |
 | `bootstrap.c` | The complete native handler |
 | `service.ssp` | The program plus the generated validators |
-| `build.sh` | Builds `bootstrap.zip` in an Amazon Linux 2023 arm64 container (clang, libcurl bundled into `lib/`) |
+| `build.sh` | Builds `bootstrap.zip` for Lambda arm64 by cross-compiling with `zig cc` against glibc 2.34 (no containers; see "First real deploy" below) |
 | `deploy.sh` | Uploads the zip and runs `aws cloudformation deploy`. sspur never runs it |
 | `local/bootstrap` | A host build, used by `deploy local` and smoke tests |
 

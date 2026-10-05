@@ -63,7 +63,7 @@ jobs:
         run: cargo clippy --release --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --release
+        run: cargo test --release --no-fail-fast
 
       - name: Corpus differential check
         env:

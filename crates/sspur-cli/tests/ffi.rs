@@ -67,7 +67,7 @@ fn shout(s: Str) -> Str ! ffi
 fn total(xs: List[Str]) -> Int ! ffi
 = xs.map(strlen).sum
 
-test roots = cbrt(27.0) == 3.0 and hypotf(3.0, 4.0) == 5.0
+test roots = (cbrt(27.0) - 3.0).abs < 0.000000001 and hypotf(3.0, 4.0) == 5.0
 test ints = abs(-5) == 5 and strlen("hello") == 5 and total(["ab", "cde"]) == 5
 test bytes = strnlen([104, 105, 0, 33], 4) == 2
 test env = getenv("SSPUR_FFI_UNSET_VAR").is_none

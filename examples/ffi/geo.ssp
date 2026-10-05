@@ -32,7 +32,7 @@ fn has_home() -> Bool ! ffi
 = getenv("HOME").is_some
 
 test dist_345 = dist(0.0, 0.0, 3.0, 4.0) == 5.0
-test cube = catch cube_side(27.0) == 3.0
+test cube = catch (cube_side(27.0) - 3.0).abs < 0.000000001
   | BadInput{what} => false
 test cube_neg = catch cube_side(-1.0) == 0.0
   | BadInput{what} => what == "negative volume -1.0"

@@ -1,0 +1,25 @@
+fn f(b: Int) -> Int
+= do
+  g = y => y - b
+  b = 1
+  g(0)
+
+fn h(b: Int) -> Int
+= do
+  fn k(y: Int) -> Int
+  = y - b
+  b = 1
+  k(0)
+
+fn outer(b: Int) -> Int
+= do
+  x = b * 2
+  r = do
+    g = y => y + x
+    x = 100
+    g(1)
+  r + x
+
+test t1 = f(10) == -10
+test t2 = h(10) == -10
+test t3 = outer(1) == 5

@@ -128,7 +128,7 @@ pub const OUT_OF_FUEL: &str = "evaluation step budget exhausted";
 
 fn pat_rebinds(p: &Pat, env: &Env) -> bool {
     match p {
-        Pat::Bind(n) => env.vars.borrow().contains_key(n.as_str()),
+        Pat::Bind(n) => env.cell(n).is_some(),
         Pat::Tuple(ps) => ps.iter().any(|p| pat_rebinds(p, env)),
         Pat::Ctor { args: CtorArgs::Positional(ps), .. } => ps.iter().any(|p| pat_rebinds(p, env)),
         Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().any(|(_, p)| pat_rebinds(p, env)),
@@ -139,7 +139,7 @@ fn pat_rebinds(p: &Pat, env: &Env) -> bool {
 fn frame_for(s: &Stmt, frames: &mut Vec<Rc<Env>>) -> Rc<Env> {
     let cur = frames.last().unwrap().clone();
     let shadows = match s {
-        Stmt::Var(n, _) => cur.vars.borrow().contains_key(n.as_str()),
+        Stmt::Var(n, _) => cur.cell(n).is_some(),
         Stmt::Let(p, _) => pat_rebinds(p, &cur),
         _ => false,
     };

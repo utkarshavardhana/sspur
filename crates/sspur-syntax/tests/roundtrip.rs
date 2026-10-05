@@ -106,6 +106,16 @@ fn nested_strings_in_interpolation() {
 }
 
 #[test]
+fn nested_if_keeps_its_else_through_print() {
+    let src = "type E = Bad\ntype S = A | B\nfn f(a: Bool, b: Bool) -> Int ! log\n= do\n  var v = 0\n  if a then do\n    if b then v := 1\n  else do\n    log(\"x\")\n  if a then do\n    if b then v := 2 else if not b then v := 3\n  else v := 4\n  v\n\nfn g(a: Bool, s: S) -> Int\n= if a then match s\n    | A => 1\n    | B => 2\n  else 3\n\nfn h(a: Bool, b: Bool) -> Int\n= if a then (if b then 1 else 2) else 3\n\nfn k(a: Bool) -> Int\n= if a then do\n    catch r()\n    | Bad => 1\n  else 2\n\nfn r() -> Int ! fail[E]\n= raise Bad\n";
+    let m = parse(src).unwrap_or_else(|e| panic!("{e:?}"));
+    let Def::Fn(f) = &m.defs[2] else { panic!() };
+    let ExprKind::Block(stmts) = &f.body.kind else { panic!() };
+    assert!(matches!(&stmts[1], Stmt::Expr(Expr { kind: ExprKind::If(_, t, Some(_)), .. }) if matches!(t.kind, ExprKind::If(_, _, None))));
+    roundtrip(src);
+}
+
+#[test]
 fn index_after_method_with_constructor_expression() {
     let src = "type S = A{x: Int} | C\nfn g(m: Map[Int, Int]) -> Int = m.keys[A{x: 3}.x]\nfn h(j: Json) -> Int = j.as[Int]\n";
     let m = parse(src).unwrap_or_else(|e| panic!("{e:?}"));

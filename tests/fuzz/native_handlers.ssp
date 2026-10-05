@@ -105,6 +105,18 @@ fn shadowed(n: Int) -> Int
       ask(1) + x
     | ask(_) => resume(x + n)
 
+fn shadow_mixed(n: Int) -> Int
+= do
+  x = 5
+  handle do
+      x = 100
+      ask(1) + x
+    | ask(_) => resume([1, 2].map(x => x * 10).sum + x + n)
+
+fn bound_lambda_only(n: Int) -> Int
+= handle [n, n + 1].map(x => x * 2).sum + asks(n)
+  | ask(q) => resume([q].map(x => x + 1).sum)
+
 fn nat_up() -> Unit ! yield[Int], div
 = do
   var i = 0
@@ -147,6 +159,6 @@ test logs = captured(4) == (14, ["chatty 4", "item 1", "item 2", "item 3"])
 test nested = nested_logs(2) == (12, ["chatty 2", "relay chatty 4"], ["chatty 4"])
 test host = host_log(3) == 7
 test folds = fold_asks([1, 2, 3]) == 14
-test shadow = shadowed(2) == 107
+test shadow = shadowed(2) == 107 and shadow_mixed(2) == 137 and bound_lambda_only(3) == 23
 test early = gen_return(50) == 8 and gen_return(5000) == -1
 test gen_errors = gen_raise_caught([1, 2, 3, 4]) == -3 and gen_raise_caught([1, 2]) == 3

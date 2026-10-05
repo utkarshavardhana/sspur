@@ -205,6 +205,98 @@ fn names(e: &Expr) -> HashSet<String> {
     out
 }
 
+fn free_in(e: &Expr, bound: &mut Vec<String>, out: &mut HashSet<String>) {
+    let mark = bound.len();
+    match &e.kind {
+        ExprKind::Name(n) => {
+            if !bound.contains(n) {
+                out.insert(n.clone());
+            }
+        }
+        ExprKind::Lambda { params, body, .. } => {
+            bound.extend(params.iter().cloned());
+            free_in(body, bound, out);
+        }
+        ExprKind::Match(x, arms) | ExprKind::Catch(x, arms) | ExprKind::Handle(x, arms) => {
+            free_in(x, bound, out);
+            for a in arms {
+                let m = bound.len();
+                let mut h = HashSet::new();
+                pat_binds(&a.pat, &mut h);
+                bound.extend(h);
+                if let Some(g) = &a.guard {
+                    free_in(g, bound, out);
+                }
+                free_in(&a.body, bound, out);
+                bound.truncate(m);
+            }
+        }
+        ExprKind::Block(stmts) => {
+            for st in stmts {
+                if let Stmt::Fn(f) = st {
+                    bound.push(f.name.clone());
+                }
+            }
+            for st in stmts {
+                match st {
+                    Stmt::Let(p, x) => {
+                        free_in(x, bound, out);
+                        let mut h = HashSet::new();
+                        pat_binds(p, &mut h);
+                        bound.extend(h);
+                    }
+                    Stmt::Var(n, x) => {
+                        free_in(x, bound, out);
+                        bound.push(n.clone());
+                    }
+                    Stmt::Assign(n, x, _) => {
+                        if !bound.contains(n) {
+                            out.insert(n.clone());
+                        }
+                        free_in(x, bound, out);
+                    }
+                    Stmt::Expr(x) => free_in(x, bound, out),
+                    Stmt::For(p, it, body) => {
+                        free_in(it, bound, out);
+                        let m = bound.len();
+                        let mut h = HashSet::new();
+                        pat_binds(p, &mut h);
+                        bound.extend(h);
+                        free_in(body, bound, out);
+                        bound.truncate(m);
+                    }
+                    Stmt::While(c, body) => {
+                        free_in(c, bound, out);
+                        free_in(body, bound, out);
+                    }
+                    Stmt::Fn(f) => {
+                        let m = bound.len();
+                        bound.extend(f.params.iter().map(|p| p.name.clone()));
+                        free_in(&f.body, bound, out);
+                        bound.truncate(m);
+                    }
+                }
+            }
+        }
+        _ => {
+            for c in sspur_syntax::visit::children(e) {
+                free_in(c, bound, out);
+            }
+        }
+    }
+    bound.truncate(mark);
+}
+
+fn arm_free(a: &Arm) -> HashSet<String> {
+    let mut bound = Vec::new();
+    let mut h = HashSet::new();
+    pat_binds(&a.pat, &mut h);
+    bound.extend(h);
+    let mut out = HashSet::new();
+    free_in(&a.body, &mut bound, &mut out);
+    out
+}
+
 fn has_return(e: &Expr) -> bool {
     let mut found = false;
     walk_expr(e, &mut |x| {
@@ -525,7 +617,7 @@ impl Lower<'_> {
             b = self.wrap_errors(b, &a.body, &ab, &mut errs)?;
             lowered.push((name.clone(), ps.clone(), b));
         }
-        let arm_names: HashSet<String> = arms.iter().flat_map(|a| names(&a.body)).collect();
+        let arm_names: HashSet<String> = arms.iter().flat_map(arm_free).collect();
         let bound = !binders(body).is_disjoint(&arm_names);
         let mut stmts = Vec::new();
         if post.is_some() {
@@ -790,7 +882,7 @@ impl Lower<'_> {
                     Ev::Inline(vec![Pat::Bind(t.clone())], ex(ExprKind::Match(Box::new(ex(ExprKind::Name(t))), arms)))
                 };
                 let ev = match ev {
-                    Ev::Inline(ps, b) if !binders(it).is_disjoint(&names(orig)) => {
+                    Ev::Inline(ps, b) if !binders(it).is_disjoint(&arm_free(&Arm { pat: p.clone(), guard: None, body: orig.clone() })) => {
                         let h = self.fresh("h");
                         let lam = self.lambda_of(&ps, &b);
                         out.push(Stmt::Let(Pat::Bind(h.clone()), lam));
@@ -1119,6 +1211,11 @@ pub(super) fn lower(m: &Module, check: &CheckOutput) -> Option<Lowered> {
                 eprintln!("{text}");
                 for d in c2.diags.iter().filter(|d| d.is_error()) {
                     eprintln!("lower: {:?}: {}", d.def, d.msg);
+                }
+            }
+            for d in c2.diags.iter().filter(|d| d.is_error()) {
+                if let Some(o) = d.def.as_ref().and_then(|n| origin.get(n)) {
+                    why.entry(o.clone()).or_insert_with(|| format!("does not check after lowering ({})", d.msg.chars().take(80).collect::<String>()));
                 }
             }
             for n in errs {

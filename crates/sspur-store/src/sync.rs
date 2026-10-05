@@ -103,8 +103,11 @@ pub fn ingest(s: &Store, b: &Json) -> Result<usize, String> {
                 }
         }
     }
-    for c in &commits {
+    for (i, c) in commits.iter().enumerate() {
         s.put_commit(c).map_err(|e| e.to_string())?;
+        if i == 0 {
+            crate::crash_point("ingest");
+        }
     }
     Ok(commits.len())
 }

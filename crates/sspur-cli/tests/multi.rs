@@ -62,6 +62,44 @@ fn a_crash_mid_commit_never_corrupts_the_codebase() {
 }
 
 #[test]
+fn crashes_at_every_write_step_of_edits_and_pulls_recover() {
+    for point in ["objects", "commit", "root", "index", "head"] {
+        let d = fresh(&format!("crash2-{point}"));
+        assert!(sspur(&d, &["edit", "-e", "fn two() -> Int\n= one() + 1"], &[]).1);
+        let (_, ok) = sspur(&d, &["edit", "-e", "fn three() -> Int\n= two() + 1"], &[("SSPUR_CRASH_AT", point)]);
+        assert!(!ok, "the process aborts at {point}");
+        let (out, ok) = sspur(&d, &["src"], &[]);
+        assert!(ok && out.contains("fn two()"), "acknowledged edit lost after a crash at {point}: {out}");
+        assert_eq!(out.contains("fn three()"), matches!(point, "index" | "head"), "after a crash at {point}: {out}");
+        assert!(sspur(&d, &["check"], &[]).1, "HEAD does not check after a crash at {point}");
+        assert!(sspur(&d, &["edit", "-e", "fn three() -> Int\n= two() + 2"], &[]).1);
+        assert!(sspur(&d, &["edit", "-e", "fn four() -> Int\n= three() + 1"], &[]).1);
+        assert!(sspur(&d, &["test", "--interp"], &[]).1);
+    }
+    for point in ["ingest", "objects", "commit", "root", "index", "head"] {
+        let a = fresh(&format!("crash-pull-a-{point}"));
+        let b = std::env::temp_dir().join(format!("sspur-multi-crash-pull-b-{point}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&b);
+        std::fs::create_dir_all(&b).unwrap();
+        assert!(sspur(&b, &["init"], &[]).1);
+        assert!(sspur(&a, &["edit", "-e", "fn two() -> Int\n= one() + 1"], &[]).1);
+        assert!(sspur(&a, &["edit", "-e", "fn three() -> Int\n= two() + 1"], &[]).1);
+        let remote = a.to_str().unwrap();
+        let (_, ok) = sspur(&b, &["sync", "pull", remote], &[("SSPUR_CRASH_AT", point)]);
+        assert!(!ok, "the pull aborts at {point}");
+        let (out, ok) = sspur(&b, &["check"], &[]);
+        assert!(ok || out.contains("no definitions") || out.contains("empty"), "HEAD does not check after a pull crash at {point}: {out}");
+        let (out, ok) = sspur(&b, &["sync", "pull", remote], &[]);
+        assert!(ok, "pull after a crash at {point}: {out}");
+        assert_eq!(sspur(&b, &["src"], &[]).0, sspur(&a, &["src"], &[]).0, "replicas differ after a pull crash at {point}");
+        assert!(sspur(&b, &["edit", "-e", "fn four() -> Int\n= three() + 1"], &[]).1);
+        assert!(sspur(&a, &["sync", "pull", b.to_str().unwrap()], &[]).1);
+        assert_eq!(sspur(&b, &["src"], &[]).0, sspur(&a, &["src"], &[]).0);
+        assert!(sspur(&a, &["check"], &[]).1 && sspur(&b, &["check"], &[]).1);
+    }
+}
+
+#[test]
 fn sync_serve_push_and_pull_over_tcp() {
     let a = fresh("sync-a");
     let b = std::env::temp_dir().join(format!("sspur-multi-sync-b-{}", std::process::id()));

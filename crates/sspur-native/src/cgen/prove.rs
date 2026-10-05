@@ -44,7 +44,7 @@ pub(super) fn raw_op(op: BinOp, a: Iv, b: Iv) -> Option<Iv> {
             (*c.iter().min().unwrap(), *c.iter().max().unwrap())
         }
         BinOp::Div => {
-            if excludes(b, 0) && (b.0 > 0 || b.1 < 0) {
+            if excludes(b, 0) && (b.0 > 0 || b.1 < 0) && b.0 != 0 && b.1 != 0 {
                 let c = [a.0 / b.0, a.0 / b.1, a.1 / b.0, a.1 / b.1];
                 (*c.iter().min().unwrap(), *c.iter().max().unwrap())
             } else {

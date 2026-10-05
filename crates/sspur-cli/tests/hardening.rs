@@ -34,8 +34,8 @@ fn fuzz_regressions_match_the_interpreter_in_every_build() {
         let src = std::fs::read_to_string(&path).unwrap();
         let (out, ok) = sspur(&["test", p], &[]);
         assert!(ok, "{p}: {out}");
-        let (out, _) = sspur(&["native", "--release", p], &[]);
-        assert!(src.contains("// interp-ok") || !out.contains("interp "), "{p}: {out}");
+        let (out, ok) = sspur(&["native", "--release", p], &[]);
+        assert!(ok && (src.contains("// interp-ok") || !out.contains("interp ")), "{p}: {out}");
         for (flags, split) in [(vec![], "1"), (vec![], "0"), (vec!["--O3"], "0")] {
             let mut args = vec!["fuzz", "--differential", p, "--edge", "--cases", "60"];
             args.extend(flags.iter().copied());

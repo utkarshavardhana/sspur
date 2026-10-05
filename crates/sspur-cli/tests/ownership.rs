@@ -64,6 +64,7 @@ fn every_sound_program_runs_identically_in_native_code() {
         let module = parse(&src).unwrap();
         let out = check(&module);
         let compiled = sspur_native::cgen::compile_release(&module, &out, "-O2").unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert!(compiled.fallback.is_none(), "{}: per-definition build failed {:?}", path.display(), compiled.fallback);
         assert!(compiled.skipped.is_empty(), "{}: not native: {:?}", path.display(), compiled.skipped);
         let run = |args: &[&str]| {
             let o = Command::new(bin).args(args).arg(&path).output().unwrap();

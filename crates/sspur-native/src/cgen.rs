@@ -794,8 +794,6 @@ static OptS_ str_last(Str s) {
 }
 "#;
 
-pub static SPLIT_FALLBACK: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-
 pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Compiled, String> {
     let opted = self::opt::optimize(m, check);
     let (m, check) = match &opted {
@@ -817,21 +815,20 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         }
     }
     let bo = flags::current();
+    let names = fn_names(&plan.fids);
+    let mut fallback = None;
     let lib = if bo.pgo != flags::Pgo::Off {
         flags::build_pgo(&src, opt, &plan.links, &bo)?
     } else if split_mode(opt) {
-        match build_split(&src, opt, &plan, bo.lto) {
+        match build_split(&src, opt, &plan, bo.lto, &names) {
             Ok(l) => l,
             Err(e) => {
-                if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
-                    eprintln!("per-definition build failed, building the whole program: {e}");
-                }
-                *SPLIT_FALLBACK.lock().unwrap() = Some(e);
-                build(&src, opt, &plan.links, bo.lto)?
+                fallback = Some(e);
+                build(&src, opt, &plan.links, bo.lto, &names)?
             }
         }
     } else {
-        build(&src, opt, &plan.links, bo.lto)?
+        build(&src, opt, &plan.links, bo.lto, &names)?
     };
     let library = unsafe { libloading::Library::new(&lib) }.map_err(|e| format!("cannot load {}: {e}", lib.display()))?;
     let mut scalar = HashMap::new();
@@ -858,7 +855,39 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         let views: Vec<[usize; 2]> = args.iter().map(|a| [a.len(), a.as_ptr() as usize]).collect();
         unsafe { set_args(views.as_ptr(), views.len() as i64) };
     }
-    Ok(assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines.into_iter().collect(), free, plan.err_types.into_iter().collect(), fids))
+    let mut c = assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines.into_iter().collect(), free, plan.err_types.into_iter().collect(), fids);
+    c.fallback = fallback;
+    Ok(c)
+}
+
+fn fn_names(fids: &HashMap<String, usize>) -> HashMap<usize, String> {
+    fids.iter().map(|(n, i)| (*i, lower::original_name(n).to_string())).collect()
+}
+
+type UnitText<'a> = &'a dyn Fn(&str) -> Option<(String, Option<String>)>;
+
+fn c_failure(stderr: &str, text_of: UnitText, names: &HashMap<usize, String>) -> String {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let Some(line) = lines.iter().find(|l| l.contains(": error: ")).or(lines.iter().find(|l| !l.trim().is_empty())) else { return "no compiler output".into() };
+    let Some(at) = line.find(": error: ") else { return line.trim().chars().take(240).collect() };
+    let msg: String = line[at + 2..].chars().take(240).collect();
+    let mut loc = line[..at].rsplitn(3, ':');
+    let (_, ln, file) = (loc.next(), loc.next().and_then(|n| n.parse::<usize>().ok()), loc.next());
+    let owner = ln.zip(file.and_then(text_of)).and_then(|(ln, (text, unit))| {
+        for l in text.lines().take(ln).collect::<Vec<_>>().into_iter().rev() {
+            if l.starts_with("#undef FIDX") {
+                break;
+            }
+            if let Some(k) = l.strip_prefix("#define FIDX ") {
+                return k.trim().parse::<usize>().ok().and_then(|k| names.get(&k).cloned());
+            }
+        }
+        unit.map(|u| lower::original_name(&u).to_string())
+    });
+    match owner {
+        Some(n) => format!("in fn {n}: {msg}"),
+        None => format!("in the runtime: {msg}"),
+    }
 }
 
 pub struct CProgram {
@@ -1183,7 +1212,7 @@ fn resolve_links(links: &[String]) -> Result<Vec<String>, String> {
     links.iter().map(|l| if l == gpu::SHIM_LINK { gpu::shim().map(|p| p.display().to_string()) } else { Ok(l.clone()) }).collect()
 }
 
-fn build(src: &str, opt: &str, links: &[String], lto: flags::Lto) -> Result<PathBuf, String> {
+fn build(src: &str, opt: &str, links: &[String], lto: flags::Lto, names: &HashMap<usize, String>) -> Result<PathBuf, String> {
     let links = resolve_links(links)?;
     let key = blake3::hash(format!("{opt}{}{}\n{src}", lto.flag().unwrap_or(""), links.iter().map(|l| format!(" {l}")).collect::<String>()).as_bytes()).to_hex().to_string();
     let dir = cache_dir();
@@ -1198,7 +1227,11 @@ fn build(src: &str, opt: &str, links: &[String], lto: flags::Lto) -> Result<Path
     let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
     let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w"]).args(lto.flag()).args(lto.linker()).arg("-o").arg(&tmp).arg(&c).args(links).args(flags::sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
-        return Err(format!("{cc} failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
+        let err = String::from_utf8_lossy(&out.stderr);
+        if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
+            eprintln!("{cc} failed: {err}");
+        }
+        return Err(c_failure(&err, &|_| Some((src.to_string(), None)), names));
     }
     std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
     Ok(lib)
@@ -1233,7 +1266,7 @@ fn split_units(src: &str, plan: &Plan) -> Vec<split::Tu> {
     split::units(src, &split::Opts { owners: &plan.owned, shared: &["enc_err"], inline_bytes: 1200, inline_max: 24, runtime, share_bytes: 400 })
 }
 
-fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto) -> Result<PathBuf, String> {
+fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashMap<usize, String>) -> Result<PathBuf, String> {
     let t0 = std::time::Instant::now();
     let links = resolve_links(&plan.links)?;
     let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
@@ -1291,8 +1324,12 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto) -> Result<Pat
                     }
                     let out = cmd.output().map_err(|e| format!("cannot run {cc}: {e}"))?;
                     if !out.status.success() {
-                        let names: Vec<&str> = batches[b].iter().map(|&i| tus[i].name.as_str()).collect();
-                        return Err(format!("{cc} failed on {} in {}: {}", names.join(" "), wd.display(), String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
+                        let err = String::from_utf8_lossy(&out.stderr);
+                        if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
+                            eprintln!("{cc} failed in {}: {err}", wd.display());
+                        }
+                        let text_of = |f: &str| batches[b].iter().find(|&&i| f.ends_with(&format!("{}.c", keys[i]))).map(|&i| (tus[i].text.clone(), Some(tus[i].name.clone()).filter(|n| n != "rt")));
+                        return Err(c_failure(&err, &text_of, names));
                     }
                     for &i in batches[b] {
                         std::fs::rename(wd.join(format!("{}.o", keys[i])), &objs[i]).map_err(|e| e.to_string())?;
@@ -1327,7 +1364,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto) -> Result<Pat
     }
     let out = link.args(["-shared", "-o"]).arg(&tmp).args(&objs).args(&links).args(flags::sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
-        return Err(format!("link failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
+        return Err(format!("link failed: {}", String::from_utf8_lossy(&out.stderr).lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(240).collect::<String>()));
     }
     if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
         eprintln!("split: linked, {:?}", t0.elapsed());

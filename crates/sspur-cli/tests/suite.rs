@@ -85,6 +85,7 @@ fn native_release_matches_interpreter_on_every_suite_program() {
             let mut native = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone());
             native.set_check(&out);
             let compiled = sspur_native::cgen::compile_release(&module, &out, "-O2").unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert!(compiled.fallback.is_none(), "{}: per-definition build failed {:?}", path.display(), compiled.fallback);
             let effectful = module.defs.iter().any(|d| matches!(d, sspur_syntax::Def::Effect(_))) || src.contains("yield");
             assert!(compiled.skipped.is_empty() || effectful, "{}: not native: {:?}", path.display(), compiled.skipped);
             native.set_native(compiled);

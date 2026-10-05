@@ -63,6 +63,8 @@ jobs:
         run: cargo clippy --release --all-targets -- -D warnings
 
       - name: Test
+        env:
+          SSPUR_STRICT_NATIVE: "1"
         run: cargo test --release --no-fail-fast
 
       - name: Generated program fuzz (interpreter vs native)
@@ -79,4 +81,5 @@ jobs:
       - name: Corpus differential check
         env:
           SSPUR_BIN: ${{ github.workspace }}/target/release/sspur
+          SSPUR_STRICT_NATIVE: "1"
         run: python3 tools/corpus_diff.py

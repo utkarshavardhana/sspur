@@ -32,6 +32,7 @@ const USAGE: &str = "usage:
   verify proves pre/post/where clauses with z3 and reports proved, counterexample, or unknown per clause
   run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
   --O3 raises the optimization level; fuzz --differential compares native against the interpreter
+  a failed native build prints one warning and falls back (--quiet hides it); --strict-native or SSPUR_STRICT_NATIVE=1 makes it an error
   sspur fuzz --gen N [--seed S] [--cases C] [--group G] [--modes O2,O2-whole,O3] [--keep DIR] [--print]  generate N random programs and compare interpreter and native
   run/test/build --pgo [--retrain] train once, then build with clang profile data; --lto off|thin|full (ADR 0024)
   sspur build --backend llvm file.ssp [-o prog]  direct LLVM IR prototype for the scalar and record subset (ADR 0024)
@@ -365,6 +366,9 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         if cmd == "build" {
             return match sspur_native::cgen::compile_release(&loaded.module, &loaded.check, if args.has("--O3") { "-O3" } else { "-O2" }) {
                 Ok(c) => {
+                    if let Some(e) = &c.fallback {
+                        native_failed(args, &format!("per-definition native build failed {e}"), "using the whole-program build");
+                    }
                     println!("built {} native functions ({}; cached under ~/.cache/sspur/native)", c.functions.len(), describe_opts(&sspur_native::cgen::flags::current()));
                     ExitCode::SUCCESS
                 }
@@ -399,6 +403,9 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         }
         "native" if args.has("--release") => match sspur_native::cgen::compile_release(&loaded.module, &loaded.check, "-O2") {
             Ok(c) => {
+                if let Some(e) = &c.fallback {
+                    native_failed(args, &format!("per-definition native build failed {e}"), "using the whole-program build");
+                }
                 for f in &c.functions {
                     println!("native  {f}");
                 }
@@ -419,6 +426,9 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         },
         "native" => match sspur_native::compile(&loaded.module) {
             Ok(c) => {
+                if let Some(e) = &c.fallback {
+                    native_failed(args, &format!("per-definition native build failed {e}"), "using the whole-program build");
+                }
                 for f in &c.functions {
                     println!("native  {f}");
                 }
@@ -654,24 +664,24 @@ fn explain_opt(l: &Loaded, all: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn strict_native(args: &Args) -> bool {
+    args.has("--strict-native") || std::env::var("SSPUR_STRICT_NATIVE").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
+fn native_failed(args: &Args, what: &str, then: &str) {
+    if strict_native(args) {
+        eprintln!("error: {what}");
+        std::process::exit(1);
+    }
+    if !args.has("--quiet") {
+        eprintln!("warning: {what}; {then}");
+    }
+}
+
 fn native_interp(l: &Loaded, args: &Args) -> Interp {
     let mut it = interp(l);
     if args.has("--interp") {
         return it;
-    }
-    if !args.has("--native") {
-        let opt = if args.has("--O3") { "-O3" } else { "-O2" };
-        match sspur_native::cgen::compile_release(&l.module, &l.check, opt) {
-            Ok(c) => {
-                c.set_max_depth(1_000_000);
-                it.set_native(c);
-                return it;
-            }
-            Err(e) => {
-                eprintln!("native build failed, interpreting: {e}");
-                return it;
-            }
-        }
     }
     if args.has("--native") {
         match sspur_native::compile(&l.module) {
@@ -679,8 +689,20 @@ fn native_interp(l: &Loaded, args: &Args) -> Interp {
                 c.set_max_depth(1_000_000);
                 it.set_native(c)
             }
-            Err(e) => eprintln!("native compilation failed, interpreting: {e}"),
+            Err(e) => native_failed(args, &format!("native compilation failed: {e}"), "interpreting"),
         }
+        return it;
+    }
+    let opt = if args.has("--O3") { "-O3" } else { "-O2" };
+    match sspur_native::cgen::compile_release(&l.module, &l.check, opt) {
+        Ok(c) => {
+            if let Some(e) = &c.fallback {
+                native_failed(args, &format!("per-definition native build failed {e}"), "using the whole-program build");
+            }
+            c.set_max_depth(1_000_000);
+            it.set_native(c);
+        }
+        Err(e) => native_failed(args, &format!("native build failed {e}"), "interpreting"),
     }
     it
 }

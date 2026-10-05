@@ -192,6 +192,7 @@ pub struct Compiled {
     max_depth: std::cell::Cell<i64>,
     pub functions: Vec<String>,
     pub skipped: BTreeMap<String, String>,
+    pub fallback: Option<String>,
     inner: Rc<Inner>,
 }
 
@@ -546,6 +547,7 @@ pub(crate) fn assemble(defs: Vec<FnDef>, ptrs: HashMap<String, (*const u8, usize
         max_depth: std::cell::Cell::new(DEFAULT_MAX_DEPTH),
         functions,
         skipped,
+        fallback: None,
         inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich: HashMap::new(), layouts: Layouts::default(), refines: HashMap::new(), free: None, err_types: HashMap::new(), fids: HashMap::new() }),
     }
 }
@@ -570,6 +572,7 @@ pub(crate) fn assemble_rich(
         max_depth: std::cell::Cell::new(DEFAULT_MAX_DEPTH),
         functions,
         skipped,
+        fallback: None,
         inner: Rc::new(Inner { _keep: keep, ptrs, defs, index, rich, layouts, refines, free: Some(free), err_types, fids }),
     }
 }

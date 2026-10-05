@@ -61,10 +61,9 @@ pub struct ModuleRun {
 
 pub fn diff_module(l: &Loaded, mode: &'static str, cases: usize, seed: u64) -> Result<ModuleRun, String> {
     let opt = set_mode(mode);
-    *sspur_native::cgen::SPLIT_FALLBACK.lock().unwrap() = None;
-    let c = sspur_native::cgen::compile_release(&l.module, &l.check, opt).map_err(|e| format!("native build failed: {}", e.chars().take(400).collect::<String>()))?;
-    if let Some(e) = sspur_native::cgen::SPLIT_FALLBACK.lock().unwrap().take() {
-        return Err(format!("per-definition build failed: {}", e.lines().take(6).collect::<Vec<_>>().join(" | ")));
+    let c = sspur_native::cgen::compile_release(&l.module, &l.check, opt).map_err(|e| format!("native build failed {e}"))?;
+    if let Some(e) = &c.fallback {
+        return Err(format!("per-definition build failed {e}"));
     }
     let skipped = c.skipped.clone();
     c.set_max_depth(1_000_000);

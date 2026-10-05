@@ -82,3 +82,43 @@ fn profile_counts_guide_inlining() {
     let after = go(&["explain-opt", "p.ssp", "--all"]);
     assert!(after.contains("run  inline\n    hot(i)") && after.contains("note  run: not inlining cold: cost: profile: never called"), "{after}");
 }
+
+#[cfg(unix)]
+#[test]
+fn failed_native_builds_warn_fall_back_and_fail_under_strict() {
+    use std::os::unix::fs::PermissionsExt;
+    if Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let d = std::env::temp_dir().join(format!("sspur-cli-fallback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("p.ssp"), "fn victim(n: Int) -> Int\n= n * 3 + 1\n\nfn other(n: Int) -> Int\n= victim(n) - 1\n\ntest t = other(2) == 6\n").unwrap();
+    let cc = d.join("cc.sh");
+    std::fs::write(&cc, "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in *.c) n=$(grep -n 'f_victim(.*) {$' \"$a\" | head -n1 | cut -d: -f1); if [ -n \"$n\" ] && { [ \"$MODE\" = all ] || echo \" $* \" | grep -q ' -c '; }; then echo \"$a:$n:1: error: injected failure\" >&2; exit 1; fi;; esac; done\nexec clang \"$@\"\n").unwrap();
+    std::fs::set_permissions(&cc, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let run = |mode: &str, extra: &[&str], strict: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_sspur"));
+        c.arg("test").arg(d.join("p.ssp")).args(extra).env("CC", &cc).env("MODE", mode).env("SSPUR_CACHE", d.join(format!("cache-{mode}"))).env_remove("SSPUR_STRICT_NATIVE").env_remove("SSPUR_SPLIT");
+        if strict {
+            c.env("SSPUR_STRICT_NATIVE", "1");
+        }
+        let o = c.output().unwrap();
+        (String::from_utf8_lossy(&o.stdout).to_string(), String::from_utf8_lossy(&o.stderr).to_string(), o.status.success())
+    };
+    let (out, err, ok) = run("split", &[], false);
+    assert!(ok && out.contains("1 passed"), "{out}{err}");
+    assert_eq!(err.trim(), "warning: per-definition native build failed in fn victim: error: injected failure; using the whole-program build");
+    let (_, err, ok) = run("split", &["--quiet"], false);
+    assert!(ok && err.is_empty(), "{err}");
+    let (out, err, ok) = run("split", &["--strict-native"], false);
+    assert!(!ok && !out.contains("passed"), "{out}");
+    assert_eq!(err.trim(), "error: per-definition native build failed in fn victim: error: injected failure");
+    let (out, err, ok) = run("all", &[], false);
+    assert!(ok && out.contains("1 passed"), "{out}{err}");
+    assert_eq!(err.trim(), "warning: native build failed in fn victim: error: injected failure; interpreting");
+    let (_, err, ok) = run("all", &[], true);
+    assert!(!ok);
+    assert_eq!(err.trim(), "error: native build failed in fn victim: error: injected failure");
+    let _ = std::fs::remove_dir_all(&d);
+}

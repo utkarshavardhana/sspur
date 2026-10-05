@@ -1,0 +1,19 @@
+// A return statement before more statements left its type unresolved, so the function fell back to the interpreter.
+// The optimizer produced the same shape by folding `if c then return x` under a proven condition.
+
+fn early(a: Int where _ > 0, b: Int) -> Int
+= do
+  if a >= -1 then return 1793
+  b
+
+fn plain(a: Int, b: Int) -> Int
+= do
+  return a
+  b
+
+fn folded(a: Int, b: Int) -> Int
+= do
+  if true then return a * 2
+  b
+
+test early_returns = early(3, 4) == 1793 and plain(1, 2) == 1 and folded(4, 0) == 8

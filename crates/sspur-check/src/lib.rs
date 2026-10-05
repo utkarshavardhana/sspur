@@ -1815,6 +1815,12 @@ impl Checker {
                     let is_last = i + 1 == stmts.len();
                     last = self.infer_stmt(s, if is_last { exp } else { None });
                     if !is_last {
+                        if let Stmt::Expr(x) = s
+                            && matches!(x.kind, ExprKind::Return(_) | ExprKind::Raise(_))
+                            && matches!(self.resolve(&last), Type::Var(_))
+                        {
+                            self.expect(&Type::unit(), &last, x.span);
+                        }
                         last = Type::unit();
                     }
                 }

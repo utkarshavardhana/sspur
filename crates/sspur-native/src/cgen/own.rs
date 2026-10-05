@@ -323,12 +323,12 @@ impl Cx<'_> {
     pub(super) fn inner_capture(&mut self, i: usize, cv: &str, outer: &HashMap<String, (String, String)>) -> String {
         match outer.get(cv) {
             Some((_, ct)) => {
-                let cell = format!("(*e_->c{i})");
+                let cell = format!("(*env_->c{i})");
                 self.mutable.insert(cell.clone());
-                self.boxed.insert(cell.clone(), (format!("e_->c{i}"), ct.clone()));
+                self.boxed.insert(cell.clone(), (format!("env_->c{i}"), ct.clone()));
                 cell
             }
-            None => format!("e_->c{i}"),
+            None => format!("env_->c{i}"),
         }
     }
 }

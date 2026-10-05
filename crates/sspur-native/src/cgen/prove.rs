@@ -94,7 +94,7 @@ fn is_cmp(op: BinOp) -> bool {
 }
 
 fn plain_var(c: &str) -> bool {
-    let c = c.strip_prefix("e_->").unwrap_or(c);
+    let c = c.strip_prefix("env_->").unwrap_or(c);
     !c.is_empty() && c.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 

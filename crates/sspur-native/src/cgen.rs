@@ -2229,7 +2229,7 @@ impl<'a> Cx<'a> {
         sig.push("Status* st".into());
         sig.push("int64_t depth".into());
         let (fname_c, env_pre, env_line) = match &env {
-            Some((es, _)) => (cname.to_string(), "void* env, ".to_string(), format!("  struct {es}* e_ = (struct {es}*)env; (void)e_;\n")),
+            Some((es, _)) => (cname.to_string(), "void* env, ".to_string(), format!("  struct {es}* env_ = (struct {es}*)env; (void)env_;\n")),
             None => (format!("f_{cname}"), String::new(), String::new()),
         };
         if cname != f.name || env.is_some() {
@@ -2546,7 +2546,7 @@ impl<'a> Cx<'a> {
         self.hit_ok = saved_hit;
         let b = b?;
         writeln!(self.protos, "static {rr} {id}(void* env, {sig}Status* st, int64_t depth);").unwrap();
-        writeln!(self.lambdas, "#define RRT {rr}\n#define FIDX {}\nstatic {rr} {id}(void* env, {sig}Status* st, int64_t depth) {{ struct {env}* e_ = (struct {env}*)env; (void)e_; return ({rr}){{{b}, 0}}; }}\n#undef RRT\n#undef FIDX", self.fidx).unwrap();
+        writeln!(self.lambdas, "#define RRT {rr}\n#define FIDX {}\nstatic {rr} {id}(void* env, {sig}Status* st, int64_t depth) {{ struct {env}* env_ = (struct {env}*)env; (void)env_; return ({rr}){{{b}, 0}}; }}\n#undef RRT\n#undef FIDX", self.fidx).unwrap();
         let fc = self.cty(ft)?;
         let mut s = format!("({{ struct {env}* ev_ = (struct {env}*)sspur_alloc(sizeof(struct {env})); ");
         for (i, (_, c, _)) in captures.iter().enumerate() {

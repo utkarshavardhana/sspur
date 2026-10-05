@@ -657,6 +657,7 @@ static Str str_take(Str s, int64_t n) { if (n < 0) n = 0; return (Str){utf8_byte
 static Str str_drop(Str s, int64_t n) { if (n < 0) n = 0; int64_t b = utf8_byte_at(s, n); return (Str){s.len - b, s.p + b}; }
 static int64_t str_find(Str h, Str n, int64_t from) {
     if (n.len == 0) return from;
+    if (from < 0 || h.len - from < n.len) return -1;
     const char* e = h.p + h.len - n.len + 1;
     for (const char* p = h.p + from; p < e;) {
         p = (const char*)memchr(p, n.p[0], (size_t)(e - p));

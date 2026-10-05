@@ -1,0 +1,22 @@
+profile sys
+
+res type Rs = {id: Int, v: Int} drop rdrop
+
+fn rdrop(r: Rs) -> Unit ! log
+= log("drop {r.id} {r.v}")
+
+fn rmk(id: Int, v: Int) -> Rs
+= Rs{id: id, v: v}
+
+fn reassign_after_local_fn(a: Int) -> Int ! log
+= do
+  var r = rmk(82, a)
+  var acc = 0
+  for i in 0..a % 3
+    fn g(k: Int) -> Int
+    = acc + k
+    acc := g(i)
+  r := rmk(110, acc)
+  acc + a
+
+test value = reassign_after_local_fn(4) == 4

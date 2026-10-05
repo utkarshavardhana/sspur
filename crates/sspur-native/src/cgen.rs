@@ -4193,6 +4193,7 @@ impl<'a> Cx<'a> {
         let saved_know = std::mem::take(&mut self.know);
         let saved_own = (self.own_fn.take(), std::mem::take(&mut self.own_spans), self.fn_has_catch);
         let saved_hits = (std::mem::take(&mut self.fn_decls), std::mem::take(&mut self.hits), self.hit_ok);
+        let saved_res = (std::mem::take(&mut self.flags), std::mem::take(&mut self.borrow_res), std::mem::take(&mut self.tail_spans), self.tail_split);
         let mut out = Ok(());
         for (f, ps, r, _, _, lname) in &infos {
             match self.function_in(f, ps, r, self.fidx, lname, Some((env.clone(), inner_scope.clone()))) {
@@ -4212,6 +4213,7 @@ impl<'a> Cx<'a> {
         self.boxed = saved_boxed;
         (self.own_fn, self.own_spans, self.fn_has_catch) = saved_own;
         (self.fn_decls, self.hits, self.hit_ok) = saved_hits;
+        (self.flags, self.borrow_res, self.tail_spans, self.tail_split) = saved_res;
         out?;
         let gv = self.fresh("gv");
         let mut s = format!("struct {env}* {gv} = (struct {env}*)sspur_alloc(sizeof(struct {env})); ");

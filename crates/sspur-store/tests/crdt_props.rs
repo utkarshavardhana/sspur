@@ -153,6 +153,76 @@ mod store_level {
         (a, b)
     }
 
+    fn settle(to: &Store, from: &Store, pick: &str) {
+        let r = sync::pull(to, &Remote::Dir(from.clone()), "s").unwrap();
+        if r.result["ok"] == json!(true) {
+            return;
+        }
+        let paths: Vec<String> = r.result["conflicts"].as_array().map(|cs| cs.iter().filter_map(|c| c["path"].as_str().map(String::from)).collect()).unwrap_or_default();
+        let ops: Vec<Json> = paths.iter().map(|p| json!({"op": "resolve", "path": p, "pick": pick})).collect();
+        let _ = to.apply(Tx { merge: true, ..Tx::new("resolver", ops) });
+    }
+
+    #[test]
+    fn random_adds_removes_and_edits_keep_every_head_checking_and_converge() {
+        for seed in 1..=6u64 {
+            let mut rng = super::Rng(seed * 0x9e37_79b9 + 7);
+            let (a, b) = pair(&format!("rand{seed}"));
+            let c = fresh(&format!("rand{seed}-c"));
+            settle(&c, &a, "theirs");
+            let rs = [a, b, c];
+            let mut alive: Vec<Vec<String>> = vec![vec![]; 3];
+            let mut k = 0;
+            for _ in 0..40 {
+                let i = rng.below(3) as usize;
+                let s = &rs[i];
+                match rng.below(8) {
+                    0..=2 => {
+                        let name = format!("u{i}_{k}");
+                        k += 1;
+                        let body = if rng.below(5) == 0 { "nope(1)".to_string() } else { format!("helper({k}) + base()") };
+                        let ok = send(s, json!([{"op": "add", "path": name, "src": format!("fn {name}() -> Int\n= {body}")}]));
+                        assert_eq!(ok, !body.starts_with("nope"), "seed {seed}: add {name}");
+                        if ok {
+                            alive[i].push(name);
+                        }
+                    }
+                    3 if !alive[i].is_empty() => {
+                        let at = rng.below(alive[i].len() as u64) as usize;
+                        let name = alive[i].remove(at);
+                        assert!(send(s, json!([{"op": "remove", "path": name}])), "seed {seed}: remove {name}");
+                    }
+                    4 => {
+                        let _ = send(s, json!([{"op": "replace", "path": "helper", "src": format!("fn helper(x: Int) -> Int\n= x + {}", rng.below(9))}]));
+                    }
+                    _ => {
+                        let j = (i + 1 + rng.below(2) as usize) % 3;
+                        settle(s, &rs[j], if rng.below(2) == 0 { "ours" } else { "theirs" });
+                    }
+                }
+                for (n, r) in rs.iter().enumerate() {
+                    assert!(head_checks(r), "seed {seed}: replica {n} HEAD does not typecheck");
+                }
+            }
+            for _ in 0..4 {
+                for i in 0..3 {
+                    for j in 0..3 {
+                        if i != j {
+                            settle(&rs[i], &rs[j], "theirs");
+                        }
+                    }
+                }
+            }
+            let srcs: Vec<String> = rs.iter().map(|r| r.load_head().unwrap().src).collect();
+            assert!(srcs.iter().all(|x| *x == srcs[0]), "seed {seed}: replicas diverged");
+            for names in &alive {
+                for n in names {
+                    assert!(srcs[0].contains(&format!("fn {n}()")), "seed {seed}: acknowledged {n} lost");
+                }
+            }
+        }
+    }
+
     #[test]
     fn removals_sync_and_survive_an_index_rebuild() {
         let (a, b) = pair("remove");

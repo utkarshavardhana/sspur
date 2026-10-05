@@ -1,0 +1,43 @@
+// Var invariants and the +1 counter rule must see assignments made by local functions.
+
+fn counter_doubled(n: Int) -> Int
+= do
+  var c = 1
+  fn dbl(k: Int) -> Int
+  = do
+    c := c * 2 + k
+    c
+  for i in 0..n % 200
+    c := c + 1
+    x = dbl(0)
+  c
+
+fn invariant_escape(xs: List[Int], n: Int) -> Int
+= do
+  var i = 0
+  fn jump(k: Int) -> Int
+  = do
+    i := i + k
+    i
+  for j in 0..n % 4
+    i := 0
+    x = jump(n)
+  if i >= 0 then xs[0] + i else 0
+
+fn bounded_var(xs: List[Int], n: Int) -> Int
+= do
+  var i = 0
+  fn set(k: Int) -> Int
+  = do
+    i := k
+    k
+  for j in 0..2
+    i := j
+  x = set(n)
+  xs[i]
+
+fn probe_counter() -> Int
+= counter_doubled(100)
+
+fn probe_bounded() -> Int
+= bounded_var([1, 2], 5)

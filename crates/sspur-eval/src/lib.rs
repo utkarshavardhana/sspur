@@ -126,6 +126,36 @@ const MAX_DEPTH: u32 = 20_000;
 const BARE_NAMES: &[&str] = &["halt", "wait_irq", "irq_enable", "timer_start", "ticks", "tick_hz", "arch"];
 pub const OUT_OF_FUEL: &str = "evaluation step budget exhausted";
 
+fn pat_rebinds(p: &Pat, env: &Env) -> bool {
+    match p {
+        Pat::Bind(n) => env.vars.borrow().contains_key(n.as_str()),
+        Pat::Tuple(ps) => ps.iter().any(|p| pat_rebinds(p, env)),
+        Pat::Ctor { args: CtorArgs::Positional(ps), .. } => ps.iter().any(|p| pat_rebinds(p, env)),
+        Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().any(|(_, p)| pat_rebinds(p, env)),
+        _ => false,
+    }
+}
+
+fn frame_for(s: &Stmt, frames: &mut Vec<Rc<Env>>) -> Rc<Env> {
+    let cur = frames.last().unwrap().clone();
+    let shadows = match s {
+        Stmt::Var(n, _) => cur.vars.borrow().contains_key(n.as_str()),
+        Stmt::Let(p, _) => pat_rebinds(p, &cur),
+        _ => false,
+    };
+    if shadows {
+        frames.push(Env::child(&cur));
+        return frames.last().unwrap().clone();
+    }
+    if let Stmt::Fn(f) = s
+        && frames.len() > 1
+        && let Some(c) = cur.cell(&f.name)
+    {
+        *c.borrow_mut() = Value::LocalFn(Rc::new((**f).clone()), cur.clone());
+    }
+    cur
+}
+
 fn ty_name(t: &Ty) -> Option<&str> {
     match t {
         Ty::Named { name, .. } => Some(name),
@@ -762,7 +792,9 @@ impl Interp {
                     }
                 }
                 let mut last = Value::Unit;
+                let mut frames = vec![env];
                 for (i, s) in stmts.iter().enumerate() {
+                    let env = frame_for(s, &mut frames);
                     let resumed = match s {
                         Stmt::Expr(x) if i + 1 == stmts.len() => return self.eval_tail(x, &env),
                         Stmt::Expr(x) => is_resume(x).map(|a| (Pat::Wild, a)),
@@ -844,8 +876,10 @@ impl Interp {
                 return trap(format!("pattern {} did not match {x}", printer::pat(&p.pat)));
             }
             x = Value::Unit;
+            let mut frames = vec![inner];
             for s in &p.rest {
-                x = self.exec(s, &inner)?;
+                let cur = frame_for(s, &mut frames);
+                x = self.exec(s, &cur)?;
             }
         }
         Ok(x)
@@ -1087,13 +1121,22 @@ impl Interp {
                     }
                 }
                 let mut last = Value::Unit;
-                let r = (|| {
-                    for s in stmts {
-                        last = self.exec(s, &env)?;
+                let mut frames = vec![env];
+                let mut r = Ok(());
+                for s in stmts {
+                    let cur = frame_for(s, &mut frames);
+                    match self.exec(s, &cur) {
+                        Ok(v) => last = v,
+                        Err(c) => {
+                            r = Err(c);
+                            break;
+                        }
                     }
-                    Ok(())
-                })();
-                self.release(&env, r).map(|_| last)
+                }
+                for f in frames.iter().rev() {
+                    r = self.release(f, r);
+                }
+                r.map(|_| last)
             }
             ExprKind::Record { ctor, fields } => {
                 let owner = match ctor {

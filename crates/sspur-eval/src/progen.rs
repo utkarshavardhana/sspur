@@ -72,6 +72,7 @@ struct Cx {
     lambda: bool,
     ret: Option<T>,
     no_risky: bool,
+    marks: Vec<usize>,
 }
 
 const BOUNDARY: &[&str] = &[
@@ -338,6 +339,7 @@ impl Gen {
 
     fn block(&mut self, cx: &mut Cx, ind: usize, n: usize, ret: Option<T>, loop_depth: u32) {
         let mark = cx.vars.len();
+        cx.marks.push(mark);
         let start = self.out.len();
         for _ in 0..n {
             self.stmt(cx, ind, loop_depth);
@@ -351,6 +353,7 @@ impl Gen {
             cx.eff.insert("log".into());
         }
         cx.vars.truncate(mark);
+        cx.marks.pop();
     }
 
     fn bind(&mut self, cx: &mut Cx, name: String, ty: T, mutable: bool) {
@@ -364,7 +367,17 @@ impl Gen {
             let t = self.any_ty();
             let e = self.expr(cx, t, 3);
             let shadow = cx.vars.iter().filter(|v| v.ty == t && !v.mutable).map(|v| v.name.clone()).collect::<Vec<_>>();
-            let name = if !shadow.is_empty() && self.r.chance(25) { shadow[self.r.below(shadow.len() as u64) as usize].clone() } else { self.fresh("x") };
+            let mark = cx.marks.last().copied().unwrap_or(0);
+            let local: Vec<String> = cx.vars[mark..].iter().filter(|v| !v.mutable && v.ty != t && !cx.vars[..mark].iter().any(|o| o.name == v.name)).map(|v| v.name.clone()).collect();
+            let name = if !shadow.is_empty() && self.r.chance(25) {
+                shadow[self.r.below(shadow.len() as u64) as usize].clone()
+            } else if !local.is_empty() && self.r.chance(15) {
+                let n = local[self.r.below(local.len() as u64) as usize].clone();
+                cx.vars.retain(|v| v.name != n);
+                n
+            } else {
+                self.fresh("x")
+            };
             self.line(ind, &format!("{name} = {e}"));
             self.bind(cx, name, t, false);
         } else if k < 28 {
@@ -404,8 +417,9 @@ impl Gen {
         } else if k < 74 {
             self.multi(cx, ind);
         } else if k < 79 {
-            let ints: Vec<Var> = cx.vars.iter().filter(|v| v.mutable && v.ty == T::Int).cloned().collect();
-            if let Some(v) = ints.first() {
+            let ints: Vec<Var> = cx.vars.iter().filter(|v| v.ty == T::Int && (v.mutable || self.r.chance(50))).cloned().collect();
+            if !ints.is_empty() {
+                let v = &ints[self.r.below(ints.len() as u64) as usize];
                 let f = self.fresh("f");
                 let x = self.fresh("y");
                 let op = ["+", "*", "-", "%"][self.r.below(4) as usize];
@@ -717,7 +731,7 @@ impl Gen {
         }
         let d1 = d - 1;
         let p = self.p.clone();
-        match self.r.below(36) {
+        match self.r.below(40) {
             0..=7 => {
                 let op = ["+", "-", "*", "+", "-", "*", "/", "%"][self.r.below(8) as usize];
                 let (a, b) = (self.int(cx, d1), self.int(cx, d1));
@@ -814,6 +828,35 @@ impl Gen {
             31 => {
                 let sm = self.sum(cx, d1);
                 format!("{sm}.str.len")
+            }
+            32 | 33 => {
+                let s = self.string(cx, d1);
+                let k = self.int_atom(cx);
+                [
+                    format!("{s}.split(\",\").len"),
+                    format!("{s}.index_of(\"a\").or(-1)"),
+                    format!("{s}.byte({k})"),
+                    format!("{s}.words.len"),
+                    format!("{s}.chars.len"),
+                    format!("{s}.pad_left(3, \"*\").len"),
+                ][self.r.below(6) as usize]
+                    .clone()
+            }
+            34 | 35 => {
+                let l = self.list(cx, d1);
+                let k = self.int_atom(cx);
+                let f = self.lambda(cx);
+                [
+                    format!("{l}.sort_by({f}).first.or(0)"),
+                    format!("{l}.enumerate.map(p => p.0 * p.1).sum"),
+                    format!("{l}.windows(2).len"),
+                    format!("{l}.index_of({k}).or(-1)"),
+                    format!("{l}.counts.len"),
+                    format!("{l}.last.or(7)"),
+                    format!("{l}.zip({l}.reverse).map(p => p.0 - p.1).sum"),
+                    format!("{l}.chunks({k} % 4 + 1).len"),
+                ][self.r.below(8) as usize]
+                    .clone()
             }
             _ => self.int_atom(cx),
         }
@@ -942,7 +985,7 @@ impl Gen {
             return STRS[self.r.below(STRS.len() as u64) as usize].to_string();
         }
         let d1 = d - 1;
-        match self.r.below(10) {
+        match self.r.below(12) {
             0 => {
                 let v = self.int_atom(cx);
                 format!("\"n{{{v}}}\"")
@@ -983,6 +1026,17 @@ impl Gen {
                 let (a, k) = (self.string(cx, d1), self.r.range(0, 3));
                 format!("{a}.repeat({k})")
             }
+            9 => {
+                let (a, k) = (self.string(cx, d1), self.int_atom(cx));
+                [
+                    format!("{a}.split(\",\").join(\"-\")"),
+                    format!("{a}.chars.reverse.join(\"\")"),
+                    format!("{a}.get({k}).or(\"?\")"),
+                    format!("{a}.pad_right(4, \"ab\")"),
+                    format!("{a}.words.join(\"_\")"),
+                ][self.r.below(5) as usize]
+                    .clone()
+            }
             _ => self.call(cx, T::Str, d1).unwrap_or_else(|| "\"s\"".into()),
         }
     }
@@ -1000,7 +1054,24 @@ impl Gen {
         }
         let d1 = d - 1;
         let p = self.p.clone();
-        match self.r.below(14) {
+        match self.r.below(18) {
+            14 => {
+                let l = self.list(cx, d1);
+                format!("{l}.flat_map(x => [x, x + 1])")
+            }
+            15 => {
+                let (l, f) = (self.list(cx, d1), self.blambda(cx));
+                format!("{l}.{}({f})", ["take_while", "drop_while", "filter"][self.r.below(3) as usize])
+            }
+            16 => {
+                let (l, k) = (self.list(cx, d1), self.int_atom(cx));
+                format!("{l}.{}", [format!("rotate({k})"), format!("slice(1, {k})"), "unique.sort".to_string()][self.r.below(3) as usize])
+            }
+            17 => {
+                let l = self.list(cx, d1);
+                let f = self.lambda(cx);
+                format!("{l}.sort_by({f})")
+            }
             0 | 1 => {
                 let (l, f) = (self.list(cx, d1), self.lambda(cx));
                 format!("{l}.map({f})")

@@ -116,6 +116,14 @@ fn nested_if_keeps_its_else_through_print() {
 }
 
 #[test]
+fn nested_if_inside_interpolation_stays_on_one_line() {
+    let src = "fn f(a: Bool, b: Bool) -> Str\n= \"{if a then (if b then 1 else 2) else 3} {g(if a then (if b then 4) else 5)}\"\n\nfn g(x: Unit) -> Int\n= 1\n";
+    let printed = print_module(&parse(src).unwrap());
+    assert!(printed.contains("\"{if a then (if b then 1 else 2) else 3}"), "{printed}");
+    roundtrip(src);
+}
+
+#[test]
 fn negative_zero_receiver_keeps_its_parentheses() {
     let src = "fn f() -> Int\n= (-0.0).fmt(1).len + (-0.0).round\n";
     assert!(print_module(&parse(src).unwrap()).contains("(-0.0).fmt(1).len + (-0.0).round"));

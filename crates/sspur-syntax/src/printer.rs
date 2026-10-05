@@ -364,6 +364,9 @@ pub fn expr(e: &Expr, ind: usize) -> String {
         ExprKind::If(c, t, Some(f)) if matches!(&t.kind, ExprKind::Block(st) if !matches!(st.as_slice(), [Stmt::Assign(..)])) => {
             format!("if {} then {}\n{}else {}", expr(c, ind), branch(t, ind + 2), pad(ind + 2), branch(f, ind + 2))
         }
+        ExprKind::If(c, t, Some(f)) if matches!(t.kind, ExprKind::If(..) | ExprKind::Lambda { .. }) && !expr(t, ind + 4).contains('\n') => {
+            format!("if {} then ({}) else {}", expr(c, ind), expr(t, ind + 4), branch(f, ind))
+        }
         ExprKind::If(c, t, Some(f)) if matches!(t.kind, ExprKind::If(..) | ExprKind::Match(..) | ExprKind::Catch(..) | ExprKind::Handle(..) | ExprKind::Lambda { .. }) => {
             format!("if {} then do\n{}{}\n{}else {}", expr(c, ind), pad(ind + 4), expr(t, ind + 4), pad(ind + 2), branch(f, ind + 2))
         }

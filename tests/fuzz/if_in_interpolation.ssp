@@ -1,0 +1,15 @@
+fn shown(a: Int, b: Int) -> Str ! log
+= do
+  log("{if a > 0 then (if b > 0 then a else b) else 11} {"x"}")
+  "{if a > b then (if b > 0 then 1 else 2) else 3}"
+
+fn captured(a: Int, b: Int) -> Int
+= do
+  var n = 0
+  s = handle shown(a, b)
+    | log(m) => do
+      n := n + m.len
+      resume()
+  n + s.len
+
+test t = captured(1, 2) == 4 and shown(3, 1) == "1"

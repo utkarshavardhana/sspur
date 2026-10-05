@@ -2772,6 +2772,7 @@ impl Checker {
                 let t = self.infer(&xs[0], None);
                 let elem = self.fresh();
                 self.expect(&Type::list(elem.clone()), &t, xs[0].span);
+                self.chan_checks.push((elem.clone(), xs[0].span));
                 let lt = self.resolve(&t);
                 self.pending_types.push((expr_key(it), lt));
                 self.task(body.span, |c| {

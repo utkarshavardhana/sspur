@@ -168,7 +168,7 @@ Verified: `examples/bare/ticks.ssp` (a timer handler counting into a static `Int
 
 ## Not yet
 
-Direct IR beyond the prototype subset, debug info, BOLT-style layout, `intr.*` intrinsics, asm operands other than general registers (fixed registers, memory operands, `inout`), boards beyond MPS2 AN386 and a board description format, the PLIC, SMP, MMU setup, nested interrupt priorities, statics of records, and arrays in `app` code.
+Direct IR beyond the prototype subset, debug info, BOLT-style layout, `intr.*` intrinsics, asm operands other than general registers (fixed registers, memory operands, `inout`), boards beyond MPS2 AN386 and a board description format, the PLIC, SMP beyond aarch64-qemu (ADR 0017 update), MMU setup, nested interrupt priorities, statics of records, and arrays in `app` code.
 
 ## Verification summary
 

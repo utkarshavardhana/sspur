@@ -48,11 +48,11 @@ Most languages are designed around a human at a keyboard. SSPUR starts from a di
 - Errors as typed effects (`raise`, `catch`), with exhaustiveness checking
 - Structured concurrency with `par`, `Atomic[Int]`, and channels, with data races rejected by the type checker
 - A `sys` profile with owned resources, borrows, deterministic cleanup, and raw pointers behind `unsafe`
-- A `bare` profile with no runtime for bare-metal code, memory-mapped I/O, interrupt handlers, fixed arrays, static state with atomic access, and inline asm, for QEMU riscv64 and aarch64 and Cortex-M4 firmware
+- A `bare` profile with no runtime for bare-metal code, memory-mapped I/O, interrupt handlers, fixed arrays, static state with atomic access, inline asm, `F64` on the Arm targets (hardware on aarch64, software double precision on Cortex-M4) and a second aarch64 core, for QEMU riscv64 and aarch64 and Cortex-M4 firmware
 
 **Standard library**
 - Collections: `List`, `Map`, `Set`, `HashMap`, `HashSet`, `Heap`, `Bits`, `FlatMap`, `MdSpan`, deques, lazy `View` pipelines, and a broad set of list algorithms
-- Text: Unicode strings with locale-independent casing and case folding, formatting specifiers, a string builder, and a backtracking-free `Regex`
+- Text: Unicode strings with locale-independent casing and case folding, explicit `Locale` values for six locales (bundled collation, number and date rules), formatting specifiers, a string builder, and a backtracking-free `Regex`
 - Numbers: checked and wrapping integer arithmetic, the full `<cmath>` set, `BigInt`, fixed-point `Dec`, `Complex`, seeded random distributions and a splittable `Rng`
 - System: files, streaming `File` handles and directories, stdin, time, calendars and IANA time zones (`Time`, `Duration`, `Zone`), environment, and child processes, each behind its own effect
 - `json.encode` and `json.decode[T]` for any data type
@@ -190,7 +190,7 @@ More examples:
 | [`examples/crud/`](examples/crud) | A CRUD HTTP service, with `sspur deploy plan` and `sspur deploy local` |
 | [`examples/ffi/`](examples/ffi) | Calling libc and libm, and calling SSPUR from C |
 | [`examples/packages/`](examples/packages) | A text library and an app that depends on it by path, with its lockfile |
-| [`examples/bare/`](examples/bare) | Bare-metal hello world, a timer interrupt, inline asm, and statics shared with an interrupt handler on QEMU riscv64 and aarch64 and a Cortex-M4 (MPS2 AN386) |
+| [`examples/bare/`](examples/bare) | Bare-metal hello world, a timer interrupt, inline asm, statics shared with an interrupt handler, floats and two cores on QEMU riscv64 and aarch64 and a Cortex-M4 (MPS2 AN386) |
 | [`tests/programs/`](tests/programs) | 47 runnable programs covering every language feature and library area |
 
 ## Using SSPUR with AI agents
@@ -239,7 +239,7 @@ SSPUR is at version 0.2 and under active development. The language and tools are
 | 3. Agent loop: codebase, transactions, queries, MCP, effect handlers | Done |
 | 4. Native compiler, `sys` profile, ownership, concurrency, SMT contracts | Done |
 | 5. Bare-metal profile, SIMD, C interop, LLVM, PGO and LTO, inline asm, embedded | Done: C through clang stays the production path (a direct LLVM IR prototype was measured at 0.98x to 1.04x, ADR 0024), opt-in PGO and explicit LTO, inline asm, a Cortex-M4 firmware target, fixed arrays and static state shared with interrupt handlers; real boards beyond QEMU and a board description format remain |
-| 6. Deployment, migrations, hot swap, replay, GPU kernels, standard library | Mostly done: 22 of 23 C++ library areas covered, locale partial by decision; first real AWS deploy verified end to end |
+| 6. Deployment, migrations, hot swap, replay, GPU kernels, standard library | Mostly done: all 23 C++ library areas covered (locale for six bundled locales); first real AWS deploy verified end to end |
 | 7. Multi-agent sync, replica sync, global build cache, proven rewrites, cost-driven optimization | Done: 100 concurrent agents with no lost work, per-definition native objects, proven rewrites with `sspur explain-opt`, cost-driven inlining and fusion; an authenticated sync server remains |
 
 See the [roadmap](docs/roadmap.md) for details and exit criteria.

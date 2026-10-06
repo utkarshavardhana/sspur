@@ -9,11 +9,11 @@ The method-by-method list is in the [Builtins section of the language reference]
 | Area | What is there |
 |---|---|
 | Collections | `List` (also the deque), `Map` and `Set` (ordered, persistent), `HashMap` and `HashSet`, `Heap`, `Bits`, `FlatMap`, `MdSpan`, lazy `View` pipelines, and list algorithms: sorting, binary search, grouping, windows, permutations and more |
-| Text | Unicode strings with locale-independent casing and case folding, Python-style format specifiers (`x.format(">10,.2f")`), `str_buf()` for building strings, and `Regex`, a Pike VM that runs in linear time |
-| Numbers | `Int` (checked 64-bit; overflow traps), wrapping, checked and saturating arithmetic, `F64` and `F32` with the `<cmath>` functions, `BigInt`, fixed-point `Dec` for money, `Complex`, and seeded random numbers: distributions and a splittable `Rng` |
+| Text | Unicode strings with locale-independent casing and case folding, explicit `Locale` values (en-US, en-GB, de-DE, fr-FR, ja-JP, hi-IN) for collation and number and date formatting from bundled rules, Python-style format specifiers (`x.format(">10,.2f")`), `str_buf()` for building strings, and `Regex`, a Pike VM that runs in linear time |
+| Numbers | `Int` (checked 64-bit; overflow traps), wrapping, checked and saturating arithmetic, `F64` and `F32` with the `<cmath>` functions, `BigInt`, fixed-point `Dec` for money, exact `Ratio`, `Complex`, `valarray`-style elementwise pipelines, and seeded random numbers: distributions and a splittable `Rng` |
 | Time | `Time` and `Duration` in milliseconds, calendar math, ISO 8601, and IANA time zones through `Zone` |
 | Data | `json.encode(v)` and `json.decode[T](s)` for any data type, with readable decode errors (`lines[0].qty: expected Int, found a string`) |
-| Files and processes | `fs` (files, streaming `File` handles, directories), `io` (stdin, stderr), `time`, `env` and `proc` (child processes), each its own effect |
+| Files and processes | `fs` (files, streaming `File` handles, directories, copies, symlinks and permission bits), `io` (stdin, stderr), `time`, `env` and `proc` (child processes), each its own effect |
 | Concurrency | `for x in par(xs)`, `Atomic[Int]` and channels under the `conc` effect, with data races rejected by the checker |
 
 ## Errors and absence

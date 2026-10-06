@@ -1,0 +1,58 @@
+fn h_o(fs: List[(Str, J)]) -> J
+= JObj{fields: fs}
+
+fn h_s(s: Str) -> J
+= JStr{s}
+
+fn h_n(n: Int) -> J
+= JNum{n}
+
+fn h_a(xs: List[J]) -> J
+= JArr{items: xs}
+
+fn h_m(t: J, p: J) -> Str
+= render(merge(t, p))
+
+fn h_cfg() -> J
+= h_o([("name", h_s("app")), ("servers", h_a([h_o([("host", h_s("a"))]), h_o([("host", h_s("b"))])])), ("db", h_o([("pool", h_n(5))]))])
+
+fn h_req(j: J, paths: List[Str]) -> Str
+= catch do
+    require(j, paths)
+    "ok"
+  | MissingKey{path} => "missing " + path
+  | _ => "other"
+
+test hidden_rfc_replace = h_m(h_o([("a", h_s("b"))]), h_o([("a", h_s("c"))])) == "\{\"a\":\"c\"}"
+
+test hidden_rfc_add = h_m(h_o([("a", h_s("b"))]), h_o([("b", h_s("c"))])) == "\{\"a\":\"b\",\"b\":\"c\"}"
+
+test hidden_rfc_remove = h_m(h_o([("a", h_s("b"))]), h_o([("a", JNull)])) == "\{}" and h_m(h_o([("a", h_s("b")), ("b", h_s("c"))]), h_o([("a", JNull)])) == "\{\"b\":\"c\"}"
+
+test hidden_rfc_array_replaced = h_m(h_o([("a", h_a([h_s("b")]))]), h_o([("a", h_s("c"))])) == "\{\"a\":\"c\"}" and h_m(h_o([("a", h_s("c"))]), h_o([("a", h_a([h_s("b")]))])) == "\{\"a\":[\"b\"]}"
+
+test hidden_rfc_nested = h_m(h_o([("a", h_o([("b", h_s("c"))]))]), h_o([("a", h_o([("b", h_s("d")), ("c", JNull)]))])) == "\{\"a\":\{\"b\":\"d\"}}"
+
+test hidden_rfc_array_of_objects = h_m(h_o([("a", h_a([h_o([("b", h_s("c"))])]))]), h_o([("a", h_a([h_n(1)]))])) == "\{\"a\":[1]}"
+
+test hidden_rfc_non_object_patch = h_m(h_a([h_s("a"), h_s("b")]), h_a([h_s("c"), h_s("d")])) == "[\"c\",\"d\"]" and h_m(h_o([("a", h_s("b"))]), h_a([h_s("c")])) == "[\"c\"]" and h_m(h_o([("a", h_s("foo"))]), JNull) == "null" and h_m(h_o([("a", h_s("foo"))]), h_s("bar")) == "\"bar\""
+
+test hidden_rfc_keep_target_null = h_m(h_o([("e", JNull)]), h_o([("a", h_n(1))])) == "\{\"e\":null,\"a\":1}"
+
+test hidden_rfc_non_object_target = h_m(h_a([h_n(1), h_n(2)]), h_o([("a", h_s("b")), ("c", JNull)])) == "\{\"a\":\"b\"}"
+
+test hidden_rfc_deep_new = h_m(h_o([]), h_o([("a", h_o([("bb", h_o([("ccc", JNull)]))]))])) == "\{\"a\":\{\"bb\":\{}}}"
+
+test hidden_key_order = h_m(h_o([("a", h_n(1)), ("b", h_n(2)), ("c", h_n(3))]), h_o([("b", h_n(9)), ("d", h_n(4))])) == "\{\"a\":1,\"b\":9,\"c\":3,\"d\":4}"
+
+test hidden_defaults_merge = h_m(defaults(), h_o([("port", h_n(9090)), ("db", h_o([("pool", h_n(10)), ("user", h_s("u"))]))])) == "\{\"name\":\"app\",\"port\":9090,\"db\":\{\"host\":\"localhost\",\"pool\":10,\"user\":\"u\"},\"tags\":[\"a\"]}"
+
+test hidden_escape = render(h_s("say \"hi\" \\ bye")) == "\"say \\\"hi\\\" \\\\ bye\"" and render(h_o([("k\"q", h_n(1))])) == "\{\"k\\\"q\":1}"
+
+test hidden_path_index = get_path(h_cfg(), "servers.1.host") == some(h_s("b")) and get_path(h_cfg(), "servers.0") == some(h_o([("host", h_s("a"))]))
+
+test hidden_path_missing = get_path(h_cfg(), "servers.5.host") == none and get_path(h_cfg(), "servers.x") == none and get_path(h_cfg(), "name.first") == none and get_path(h_cfg(), "db.pool") == some(h_n(5))
+
+test hidden_merge_all = render(merge_all(defaults(), [])) == render(defaults()) and render(merge_all(h_o([("a", h_n(1))]), [h_o([("a", h_n(2)), ("b", h_n(3))]), h_o([("b", JNull)])])) == "\{\"a\":2}"
+
+test hidden_require = h_req(h_cfg(), ["name", "db.pool", "servers.1.host"]) == "ok" and h_req(h_cfg(), ["name", "db.user", "x"]) == "missing db.user" and h_req(h_cfg(), []) == "ok"

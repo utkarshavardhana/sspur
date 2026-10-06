@@ -95,5 +95,137 @@
    "Add skipped(lines): the lines that ingest skips, in order.",
    "Add tests for the new behavior."],
   "sspur": "fn parse_line(line: Str) -> Opt[Event]; type EventErr = BadJson{text: Str}; fn to_json(evs: List[Event]) -> Str; fn from_json(s: Str) -> List[Event] ! fail[EventErr]; fn redact(e: Event) -> Event; fn skipped(lines: List[Str]) -> List[Str]",
-  "python": "parse_line(line) -> Optional[Event]; class EventErr(Exception); class BadJson(EventErr) with attribute text; to_json(evs) -> str; from_json(s) -> List[Event]; redact(e) -> Event; skipped(lines) -> List[str]"}
+  "python": "parse_line(line) -> Optional[Event]; class EventErr(Exception); class BadJson(EventErr) with attribute text; to_json(evs) -> str; from_json(s) -> List[Event]; redact(e) -> Event; skipped(lines) -> List[str]"},
+ {
+  "id": "b1_lru",
+  "set": "b",
+  "source": "LeetCode 146 (LRU Cache)",
+  "title": "LRU cache: capacity, eviction, recency and hit counters",
+  "steps": [
+   "new_cache(cap) must raise BadCapacity(cap) if cap < 1.",
+   "put must keep at most cap entries: putting a new key into a full cache first evicts the least recently used entry. Putting a key that is already present replaces its value, makes it the most recently used, and evicts nothing. keys(c) lists the keys from least to most recently used.",
+   "A lookup is a use. Change lookup(c, key) to return a pair (the value or none, the updated cache): a hit makes key the most recently used, a miss leaves the order unchanged. get_or(c, key, default) likewise returns the pair (the value or default, the updated cache). Update the callers and the tests.",
+   "Add hit and miss counters to Cache: fields hits and misses (Int, 0 in a new cache). lookup and get_or add 1 to hits on a hit and 1 to misses on a miss; no other function changes them.",
+   "Add peek(c, key) that returns the value (or none) without changing the order or the counters.",
+   "Add resize(c, cap) that sets the capacity and evicts least recently used entries until at most cap remain. It raises BadCapacity(cap) if cap < 1.",
+   "Add at least one test for each new or changed function."
+  ],
+  "sspur": "fn new_cache(cap: Int) -> Cache ! fail[CacheErr]; fn lookup(c: Cache, key: Str) -> (Opt[Int], Cache); fn get_or(c: Cache, key: Str, default: Int) -> (Int, Cache); Cache has fields cap, hits, misses: Int; fn peek(c: Cache, key: Str) -> Opt[Int]; fn resize(c: Cache, cap: Int) -> Cache ! fail[CacheErr]; put, keys, size and describe keep their signatures",
+  "python": "new_cache(cap) -> Cache (raises BadCapacity); lookup(c, key) -> Tuple[Optional[int], Cache]; get_or(c, key, default) -> Tuple[int, Cache]; Cache has attributes cap, hits, misses; peek(c, key) -> Optional[int]; resize(c, cap) -> Cache; put, keys, size and describe keep their signatures"
+ },
+ {
+  "id": "b2_calc",
+  "set": "b",
+  "source": "LeetCode 224 and 227 (Basic Calculator I and II)",
+  "title": "Calculator: precedence, parentheses, unary minus and syntax errors",
+  "steps": [
+   "Support `*` and `/` with higher precedence than `+` and `-`. All four operators are left associative. `/` is integer division that truncates toward zero (`7 / 2` is 3, `-7 / 2` is -3).",
+   "Division by zero raises DivByZero.",
+   "Support parentheses.",
+   "Support unary minus at the start, after an operator, and after an opening parenthesis: `-3`, `2 * -3`, `-(1 + 2)`.",
+   "Any other malformed input raises BadSyntax: an empty or blank string, a missing operand (`1 +`, `* 2`), two numbers in a row (`1 2`), unbalanced parentheses (`(1 + 2`, `1 + 2)`), or empty parentheses `()`. BadChar is still raised for any character other than digits, spaces and `+ - * / ( )`.",
+   "show_result shows the new errors as `<input> = error: division by zero` and `<input> = error: syntax`.",
+   "Extend the existing tokenizer and evaluator (no built-in expression evaluator), and add tests for each step."
+  ],
+  "sspur": "DivByZero and BadSyntax are new variants of CalcErr with no fields; fn calc(s: Str) -> Int ! fail[CalcErr]; fn show_result(s: Str) -> Str (either may also declare div)",
+  "python": "class DivByZero(CalcErr) and class BadSyntax(CalcErr), no attributes; calc(s) -> int; show_result(s) -> str"
+ },
+ {
+  "id": "b3_payroll",
+  "set": "b",
+  "source": "The AWK Programming Language, chapter 1 (emp.data pay report), as CSV",
+  "title": "Payroll CSV: header and blank lines, validation with line numbers, overtime, sorted report",
+  "steps": [
+   "parse skips blank lines (empty after trimming) and skips the first line if it is the header `name,rate,hours` (after trimming). Spaces around each field are trimmed.",
+   "Validation: parse raises BadRow(line) if a row does not have exactly 3 fields, and BadNumber(line, field) if the rate or the hours is not a non-negative integer (field is \"rate\" or \"hours\"; the rate is checked first). line is the 1-based line number in the text, counting the header and blank lines.",
+   "Overtime: hours above 40 are paid at time and a half, so pay = rate * hours up to 40 hours, plus rate * 3 * (hours - 40) / 2 (integer division) when hours > 40.",
+   "report lists the rows by pay descending, ties by name ascending, one `name: pay` line each, then a last line `total: <sum of pay>`. report of no rows is `total: 0`.",
+   "Add validate(text) that returns a message for every bad line instead of stopping at the first, in line order: `line 2: expected 3 fields`, `line 3: bad rate` or `line 5: bad hours`. It returns an empty list if the text is valid.",
+   "Add tests for each step."
+  ],
+  "sspur": "type CsvErr = BadRow{line: Int} | BadNumber{line: Int, field: Str}; fn parse(text: Str) -> List[Row] ! fail[CsvErr]; fn pay(r: Row) -> Int; fn report(rows: List[Row]) -> Str; fn validate(text: Str) -> List[Str]; Row and sample are unchanged",
+  "python": "class CsvErr(Exception); class BadRow(CsvErr) with attribute line; class BadNumber(CsvErr) with attributes line and field; parse(text) -> List[Row]; pay(r) -> int; report(rows) -> str; validate(text) -> List[str]; Row and sample are unchanged"
+ },
+ {
+  "id": "b4_ratelimit",
+  "set": "b",
+  "source": "Token bucket algorithm (Wikipedia, \"Token bucket\"), fixed-window counter",
+  "title": "Rate limiter: fix the window, add a token bucket, clock checks, retry time and per-key buckets",
+  "steps": [
+   "Bug: allow lets limit + 1 requests through in a window; it must allow at most limit.",
+   "Add a token bucket. new_bucket(capacity, rate, now) returns a full bucket (tokens = capacity, last = now); rate is tokens added per second, times are whole seconds. take(b, now, n), n >= 1, first refills (tokens = min(capacity, tokens + (now - last) * rate), last = now); then if tokens >= n it removes n tokens and returns (true, bucket), otherwise it returns (false, the refilled bucket).",
+   "Clocks must not go backwards. Add an error type LimitErr with a variant ClockSkew(last, now): take raises ClockSkew(b.last, now) if now < b.last, and allow raises ClockSkew(w.start, now) if now < w.start. Update run_requests and the tests.",
+   "Add retry_after(b, now, n): how many whole seconds from now until take would succeed for n tokens (0 if it would succeed now), that is the ceiling of (n - refilled tokens) / rate. It raises a new LimitErr variant TooLarge(n, capacity) if n > capacity, and ClockSkew like take.",
+   "Add per-key limiting: a Keyed limiter has capacity, rate and buckets (a list of (key, bucket) pairs). new_keyed(capacity, rate) has no buckets. take_key(k, key, now) takes 1 token from that key's bucket, creating a full bucket at now for a new key, and returns (allowed, updated limiter).",
+   "Add tests for each step."
+  ],
+  "sspur": "fn allow(w: Window, now: Int) -> (Bool, Window) ! fail[LimitErr]; fn run_requests(w: Window, times: List[Int]) -> List[Bool] ! fail[LimitErr]; type Bucket = {capacity: Int, rate: Int, tokens: Int, last: Int}; fn new_bucket(capacity: Int, rate: Int, now: Int) -> Bucket; fn take(b: Bucket, now: Int, n: Int) -> (Bool, Bucket) ! fail[LimitErr]; type LimitErr = ClockSkew{last: Int, now: Int} | TooLarge{n: Int, capacity: Int}; fn retry_after(b: Bucket, now: Int, n: Int) -> Int ! fail[LimitErr]; type Keyed = {capacity: Int, rate: Int, buckets: List[(Str, Bucket)]}; fn new_keyed(capacity: Int, rate: Int) -> Keyed; fn take_key(k: Keyed, key: Str, now: Int) -> (Bool, Keyed) ! fail[LimitErr]",
+  "python": "allow(w, now) -> Tuple[bool, Window]; run_requests(w, times) -> List[bool]; @dataclass(frozen=True) Bucket(capacity, rate, tokens, last); new_bucket(capacity, rate, now) -> Bucket; take(b, now, n) -> Tuple[bool, Bucket]; class LimitErr(Exception); class ClockSkew(LimitErr) with attributes last, now; class TooLarge(LimitErr) with attributes n, capacity; retry_after(b, now, n) -> int; @dataclass(frozen=True) Keyed(capacity, rate, buckets) with buckets a list of (key, Bucket) pairs; new_keyed(capacity, rate) -> Keyed; take_key(k, key, now) -> Tuple[bool, Keyed]"
+ },
+ {
+  "id": "b5_deps",
+  "set": "b",
+  "source": "Topological sort: depth-first post-order and Kahn's algorithm (LeetCode 210, Course Schedule II), as a package resolver",
+  "title": "Dependency resolver: duplicates, missing packages, cycles, a full install order and reverse dependencies",
+  "steps": [
+   "Bug: install_order lists shared dependencies more than once. Each package must appear once, at its first position (depth first, dependencies in the order they are listed, a package after all of its dependencies).",
+   "If a package lists a dependency that is not in the registry, raise Missing(pkg, dep), where pkg is the package that lists it. An unknown target still raises Unknown(name).",
+   "Cycles: when install_order reaches a package that is already on the current dependency chain, raise Cycle(path), where path is the chain from that package's first occurrence to the end, followed by that package again: a -> b -> c -> a gives [a, b, c, a], and a package that depends on itself gives [a, a].",
+   "plan reports the new errors as `error: <pkg> needs missing <dep>` and `error: cycle a -> b -> a` (the path joined with ` -> `).",
+   "Add full_order(reg), an install order for every package in the registry: repeatedly install the alphabetically smallest package whose dependencies are all installed. If packages remain but none can be installed, raise Stuck(names) with the remaining names sorted.",
+   "Add dependents(reg, name): the packages that depend on name directly or transitively, sorted, without name itself. Raise Unknown(name) if name is not in the registry.",
+   "Add tests for each step."
+  ],
+  "sspur": "type DepErr = Unknown{name: Str} | Missing{pkg: Str, dep: Str} | Cycle{path: List[Str]} | Stuck{names: List[Str]}; fn install_order(reg: List[Pkg], target: Str) -> List[Str] ! fail[DepErr]; fn plan(reg: List[Pkg], target: Str) -> Str; fn full_order(reg: List[Pkg]) -> List[Str] ! fail[DepErr]; fn dependents(reg: List[Pkg], name: Str) -> List[Str] ! fail[DepErr]; Pkg and registry are unchanged",
+  "python": "class Missing(DepErr) with attributes pkg, dep; class Cycle(DepErr) with attribute path (a list); class Stuck(DepErr) with attribute names (a list); install_order(reg, target) -> List[str]; plan(reg, target) -> str; full_order(reg) -> List[str]; dependents(reg, name) -> List[str]; Pkg, Unknown and registry are unchanged"
+ },
+ {
+  "id": "b6_adventure",
+  "set": "b",
+  "source": "Colossal Cave Adventure style two-word parser and room state machine",
+  "title": "Text adventure: forgiving parser, sorted descriptions, items, a locked door and a score",
+  "steps": [
+   "Commands are case-insensitive, and leading, trailing and repeated spaces are ignored (`  GO   East ` works). Anything else that is not a valid command, including an empty command, gets \"I don't understand.\"",
+   "look lists the exits alphabetically and, if the room has items, adds ` Items: ` and the items sorted and comma separated, before a final period: \"You are in the kitchen. Exits: west. Items: bread, key.\"",
+   "Add the commands `take ITEM` (\"Taken.\", moving it from the room to the inventory, or \"There is no ITEM here.\"), `drop ITEM` (\"Dropped.\", moving it into the current room, or \"You don't have ITEM.\") and `inventory` (\"You carry: bread, key.\" sorted, or \"You carry nothing.\").",
+   "Locked door: add a field `locked` (the list of directions that need the key) as the LAST field of Room. The hall's north exit is locked and no other. Going through a locked exit without \"key\" in the inventory says \"The door is locked.\" and does not move or count as a move; with the key it works like any exit.",
+   "Add score(g): 10 points per item carried, plus 25 if the player is in the vault.",
+   "Update the existing tests and add tests for each step."
+  ],
+  "sspur": "type Room = {name: Str, exits: List[(Str, Str)], items: List[Str], locked: List[Str]}; fn score(g: Game) -> Int; Game, world, new_game, step, run and play keep their signatures",
+  "python": "Room(name, exits, items, locked) with locked a list of directions as the 4th field; score(g) -> int; Game, world, new_game, step, run and play keep their signatures"
+ },
+ {
+  "id": "b7_ledger",
+  "set": "b",
+  "source": "Double-entry bookkeeping invariants (every transaction's debits equal its credits; the trial balance sums to zero)",
+  "title": "Double-entry ledger: transaction invariants, no negative assets, trial balance, reversals and history",
+  "steps": [
+   "add_txn enforces the invariants, checking in this order: at least 2 postings, else TooFewPostings(id); every account known, else UnknownAccount(name) (as now); the amounts sum to 0, else Unbalanced(id, diff) where diff is the sum; the id is not already used in the ledger, else DuplicateId(id).",
+   "Asset accounts (names starting with \"assets:\") may never go below 0: if a transaction would leave one negative, add_txn raises Overdrawn(account, balance) with the balance it would have (the first such account in posting order). This is checked last.",
+   "trial_balance lists only accounts with a non-zero balance, sorted by account name.",
+   "Add reverse(l, id, new_id): adds a new transaction with id new_id, memo \"reverse <id>\" and the postings of transaction id with every amount negated, in the same order. It raises UnknownTxn(id) if there is no such transaction. The add_txn rules apply to the new transaction.",
+   "Add history(l, account): for each transaction that touches the account, in ledger order, the pair (transaction id, the account's balance after that transaction).",
+   "Add tests for each step."
+  ],
+  "sspur": "type LedgerErr = UnknownAccount{name: Str} | Unbalanced{id: Int, diff: Int} | TooFewPostings{id: Int} | DuplicateId{id: Int} | Overdrawn{account: Str, balance: Int} | UnknownTxn{id: Int}; fn add_txn(l: Ledger, t: Txn) -> Ledger ! fail[LedgerErr]; fn trial_balance(l: Ledger) -> List[(Str, Int)]; fn reverse(l: Ledger, id: Int, new_id: Int) -> Ledger ! fail[LedgerErr]; fn history(l: Ledger, account: Str) -> List[(Int, Int)]; Posting, Txn, Ledger, p, balance and sample are unchanged",
+  "python": "class Unbalanced(LedgerErr) with attributes id, diff; class TooFewPostings(LedgerErr) with attribute id; class DuplicateId(LedgerErr) with attribute id; class Overdrawn(LedgerErr) with attributes account, balance; class UnknownTxn(LedgerErr) with attribute id; add_txn(l, t) -> Ledger; trial_balance(l) -> List[Tuple[str, int]]; reverse(l, id, new_id) -> Ledger; history(l, account) -> List[Tuple[int, int]]; Posting, Txn, Ledger, UnknownAccount, p, balance and sample are unchanged"
+ },
+ {
+  "id": "b8_merge",
+  "set": "b",
+  "source": "RFC 7396 (JSON Merge Patch), including its Appendix A examples",
+  "title": "JSON config merger: RFC 7396 merge patch, key order, escaping, array paths, merge_all and required keys",
+  "steps": [
+   "merge(target, patch) must follow RFC 7396 (JSON Merge Patch). If patch is an object: start from target (or from an empty object if target is not an object), and for each key of patch, a null value removes the key, and any other value sets the key to merge(the target's value for that key, or null if absent, the patch value). If patch is not an object, the result is patch. Arrays are replaced, not merged.",
+   "Key order: keys already in the target keep their position; new keys are appended in patch order.",
+   "render escapes `\"` as `\\\"` and `\\` as `\\\\` in strings and in keys.",
+   "get_path also indexes arrays: a path segment that is a non-negative integer selects that element of an array (`servers.1.host`). Anything that does not exist gives nothing.",
+   "Add merge_all(base, patches) that applies the patches to base from left to right.",
+   "Add an error type ConfigErr with a variant MissingKey(path), and require(j, paths) that raises MissingKey for the first path in the list that get_path cannot find.",
+   "Add tests for each step."
+  ],
+  "sspur": "fn merge(target: J, patch: J) -> J; fn render(j: J) -> Str; fn get_path(j: J, path: Str) -> Opt[J]; fn merge_all(base: J, patches: List[J]) -> J; type ConfigErr = MissingKey{path: Str}; fn require(j: J, paths: List[Str]) -> Unit ! fail[ConfigErr]; J and defaults are unchanged",
+  "python": "merge(target, patch) -> J; render(j) -> str; get_path(j, path) -> the value, or None if missing; merge_all(base, patches) -> J; class ConfigErr(Exception); class MissingKey(ConfigErr) with attribute path; require(j, paths) -> None; JSON values stay plain None/bool/int/str/list/dict; defaults is unchanged"
+ }
 ]

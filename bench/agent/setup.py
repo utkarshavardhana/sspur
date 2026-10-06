@@ -1,9 +1,10 @@
 """Create fresh work directories and print one agent prompt per (language, task).
 
-  python3 setup.py <work_root> [--v1] [--tmo] [--new]   -> <work_root>/{sspur,python}/<task>/ and <work_root>/prompts.json
+  python3 setup.py <work_root> [--v1] [--tmo] [--new] [--b]   -> <work_root>/{sspur,python}/<task>/ and <work_root>/prompts.json
 
 --v1 uses the SSPUR instructions of the first run (q + apply tx.json); the default uses `edit`.
 --new sets up only the tasks marked "new" (a9, outside the 8-task comparison).
+--b sets up only the independently specified tasks (b1 to b8, "set": "b").
 --tmo (run 4 on) runs ./sspur and pytest under a 300 s timeout ($TMO, default ~/code/sspur-tools/tmo).
 """
 import json, os, shutil, subprocess, sys
@@ -40,8 +41,8 @@ PY_INTRO = """You are working on a small Python 3.9 codebase. Working directory:
 - All code is in app.py, with its tests at the bottom. Run them with `cd {dir} && LC_ALL=en_US.UTF-8 python3 -m pytest -q app.py`."""
 
 
-def main(root, v1=False, tmo=False, new=False):
-    tasks = [t for t in json.load(open(os.path.join(HERE, "tasks.json"))) if t.get("new", False) == new]
+def main(root, v1=False, tmo=False, new=False, b=False):
+    tasks = [t for t in json.load(open(os.path.join(HERE, "tasks.json"))) if t.get("new", False) == new and (t.get("set", "a") == "b") == b]
     prompts = []
     for lang in ("sspur", "python"):
         for t in tasks:
@@ -74,4 +75,4 @@ def main(root, v1=False, tmo=False, new=False):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], "--v1" in sys.argv[2:], "--tmo" in sys.argv[2:], "--new" in sys.argv[2:])
+    main(sys.argv[1], "--v1" in sys.argv[2:], "--tmo" in sys.argv[2:], "--new" in sys.argv[2:], "--b" in sys.argv[2:])

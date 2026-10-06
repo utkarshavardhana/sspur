@@ -1,0 +1,74 @@
+type Window = {limit: Int, size: Int, start: Int, count: Int}
+type Bucket = {capacity: Int, rate: Int, tokens: Int, last: Int}
+type Keyed = {capacity: Int, rate: Int, buckets: List[(Str, Bucket)]}
+type LimitErr = ClockSkew{last: Int, now: Int} | TooLarge{n: Int, capacity: Int}
+
+fn new_window(limit: Int, size: Int) -> Window
+= Window{limit, size, start: 0, count: 0}
+
+fn allow(w: Window, now: Int) -> (Bool, Window) ! fail[LimitErr]
+= do
+  if now < w.start then raise ClockSkew{last: w.start, now}
+  w2 = if now >= w.start + w.size then w with start := now, count := 0 else w
+  if w2.count < w2.limit then (true, w2 with count := w2.count + 1) else (false, w2)
+
+fn run_requests(w: Window, times: List[Int]) -> List[Bool] ! fail[LimitErr]
+= do
+  var cur = w
+  var out = []
+  for t in times
+    (ok, next) = allow(cur, t)
+    out := out.push(ok)
+    cur := next
+  out
+
+fn new_bucket(capacity: Int, rate: Int, now: Int) -> Bucket
+= Bucket{capacity, rate, tokens: capacity, last: now}
+
+fn refill(b: Bucket, now: Int) -> Bucket ! fail[LimitErr]
+= if now < b.last then raise ClockSkew{last: b.last, now} else b with tokens := min(b.capacity, b.tokens + (now - b.last) * b.rate), last := now
+
+fn take(b: Bucket, now: Int, n: Int) -> (Bool, Bucket) ! fail[LimitErr]
+= do
+  r = refill(b, now)
+  if r.tokens >= n then (true, r with tokens := r.tokens - n) else (false, r)
+
+fn retry_after(b: Bucket, now: Int, n: Int) -> Int ! fail[LimitErr]
+= do
+  if n > b.capacity then raise TooLarge{n, capacity: b.capacity}
+  r = refill(b, now)
+  if r.tokens >= n then 0 else (n - r.tokens + r.rate - 1) / r.rate
+
+fn new_keyed(capacity: Int, rate: Int) -> Keyed
+= Keyed{capacity, rate, buckets: []}
+
+fn take_key(k: Keyed, key: Str, now: Int) -> (Bool, Keyed) ! fail[LimitErr]
+= do
+  b = k.buckets.find(_.0 == key).map(_.1).or(new_bucket(k.capacity, k.rate, now))
+  (ok, b2) = take(b, now, 1)
+  (ok, k with buckets := k.buckets.filter(_.0 != key).push((key, b2)))
+
+fn main() -> Unit ! log
+= log(catch run_requests(new_window(3, 10), [0, 1, 2, 3, 12]).map(_.str).join(" ")
+  | _ => "clock skew")
+
+test first_allowed = catch allow(new_window(3, 10), 0).0
+  | _ => false
+
+test counts = catch allow(new_window(3, 10), 0).1.count == 1
+  | _ => false
+
+test new_window_resets = catch run_requests(new_window(1, 10), [0, 10]).last == some(true)
+  | _ => false
+
+test limit_holds = catch run_requests(new_window(1, 10), [0, 1]) == [true, false]
+  | _ => false
+
+test bucket_take = catch take(new_bucket(2, 1, 0), 0, 3).0 == false
+  | _ => false
+
+test retry = catch retry_after(take(new_bucket(4, 2, 0), 0, 4).1, 0, 3) == 2
+  | _ => false
+
+test keyed = catch take_key(new_keyed(1, 1), "a", 0).0
+  | _ => false

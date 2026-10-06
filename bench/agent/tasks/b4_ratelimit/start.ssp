@@ -1,0 +1,28 @@
+type Window = {limit: Int, size: Int, start: Int, count: Int}
+
+fn new_window(limit: Int, size: Int) -> Window
+= Window{limit, size, start: 0, count: 0}
+
+fn allow(w: Window, now: Int) -> (Bool, Window)
+= do
+  w2 = if now >= w.start + w.size then w with start := now, count := 0 else w
+  if w2.count <= w2.limit then (true, w2 with count := w2.count + 1) else (false, w2)
+
+fn run_requests(w: Window, times: List[Int]) -> List[Bool]
+= do
+  var cur = w
+  var out = []
+  for t in times
+    (ok, next) = allow(cur, t)
+    out := out.push(ok)
+    cur := next
+  out
+
+fn main() -> Unit ! log
+= log(run_requests(new_window(3, 10), [0, 1, 2, 3, 12]).map(_.str).join(" "))
+
+test first_allowed = allow(new_window(3, 10), 0).0
+
+test counts = allow(new_window(3, 10), 0).1.count == 1
+
+test new_window_resets = run_requests(new_window(1, 10), [0, 10]).last == some(true)

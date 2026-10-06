@@ -1,0 +1,58 @@
+fn h_add(l: Ledger, id: Int, ps: List[Posting]) -> Str
+= catch "ok {add_txn(l, Txn{id, memo: "t", postings: ps}).txns.len}"
+  | UnknownAccount{name} => "unknown {name}"
+  | Unbalanced{id, diff} => "unbalanced {id} {diff}"
+  | TooFewPostings{id} => "few {id}"
+  | DuplicateId{id} => "dup {id}"
+  | Overdrawn{account, balance} => "overdrawn {account} {balance}"
+  | _ => "other"
+
+fn h_sample_add(id: Int, ps: List[Posting]) -> Str
+= catch h_add(sample(), id, ps)
+  | _ => "sample failed"
+
+fn h_rev(id: Int, new_id: Int) -> Str
+= catch "ok {balance(reverse(sample(), id, new_id), "assets:bank")}"
+  | UnknownTxn{id} => "no txn {id}"
+  | DuplicateId{id} => "dup {id}"
+  | Overdrawn{account, balance} => "overdrawn {account} {balance}"
+  | _ => "other"
+
+test hidden_sample = catch balance(sample(), "assets:bank") == 970 and sample().txns.len == 2
+  | _ => false
+
+test hidden_unbalanced = h_add(new_ledger(), 1, [p("assets:bank", 10), p("equity:owner", -9)]) == "unbalanced 1 1" and h_add(new_ledger(), 4, [p("assets:bank", 5), p("equity:owner", -8)]) == "unbalanced 4 -3"
+
+test hidden_too_few = h_add(new_ledger(), 1, [p("assets:bank", 0)]) == "few 1" and h_add(new_ledger(), 2, []) == "few 2"
+
+test hidden_unknown = h_add(new_ledger(), 1, [p("assets:nope", 5), p("equity:owner", -5)]) == "unknown assets:nope"
+
+test hidden_check_order = h_add(new_ledger(), 1, [p("zzz", 5)]) == "few 1" and h_add(new_ledger(), 1, [p("zzz", 5), p("equity:owner", -1)]) == "unknown zzz"
+
+test hidden_duplicate = h_sample_add(2, [p("expenses:food", 5), p("assets:bank", -5)]) == "dup 2"
+
+test hidden_overdrawn = h_sample_add(3, [p("expenses:food", 2000), p("assets:bank", -2000)]) == "overdrawn assets:bank -1030"
+
+test hidden_overdrawn_cash = h_sample_add(3, [p("assets:cash", -1), p("assets:bank", 1)]) == "overdrawn assets:cash -1"
+
+test hidden_exact_zero = h_sample_add(3, [p("expenses:food", 970), p("assets:bank", -970)]) == "ok 3"
+
+test hidden_other_negative = h_sample_add(3, [p("assets:cash", 50), p("income:salary", -50)]) == "ok 3"
+
+test hidden_trial = catch trial_balance(sample()) == [("assets:bank", 970), ("equity:owner", -1000), ("expenses:food", 30)]
+  | _ => false
+
+test hidden_trial_empty = trial_balance(new_ledger()) == []
+
+test hidden_reverse = h_rev(2, 3) == "ok 1000"
+
+test hidden_reverse_txn = catch reverse(sample(), 2, 3).txns.last == some(Txn{id: 3, memo: "reverse 2", postings: [p("expenses:food", -30), p("assets:bank", 30)]}) and trial_balance(reverse(sample(), 2, 3)) == [("assets:bank", 1000), ("equity:owner", -1000)]
+  | _ => false
+
+test hidden_reverse_errors = h_rev(9, 3) == "no txn 9" and h_rev(2, 1) == "dup 1" and h_rev(1, 3) == "overdrawn assets:bank -30"
+
+test hidden_history = catch history(sample(), "assets:bank") == [(1, 1000), (2, 970)] and history(sample(), "expenses:food") == [(2, 30)] and history(sample(), "assets:cash") == []
+  | _ => false
+
+test hidden_history_net = catch history(add_txn(sample(), Txn{id: 7, memo: "x", postings: [p("assets:bank", 5), p("assets:bank", 5), p("equity:owner", -10)]}), "assets:bank") == [(1, 1000), (2, 970), (7, 980)]
+  | _ => false

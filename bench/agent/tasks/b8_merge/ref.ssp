@@ -1,0 +1,75 @@
+type J = JNull | JBool{b: Bool} | JNum{n: Int} | JStr{s: Str} | JArr{items: List[J]} | JObj{fields: List[(Str, J)]}
+type ConfigErr = MissingKey{path: Str}
+
+fn quote(s: Str) -> Str
+= "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+fn render(j: J) -> Str
+= match j
+  | JNull => "null"
+  | JBool{b} => if b then "true" else "false"
+  | JNum{n} => n.str
+  | JStr{s} => quote(s)
+  | JArr{items} => "[" + items.map(render).join(",") + "]"
+  | JObj{fields} => "\{" + fields.map(f => quote(f.0) + ":" + render(f.1)).join(",") + "}"
+
+fn get_field(j: J, key: Str) -> Opt[J]
+= match j
+  | JObj{fields} => fields.find(_.0 == key).map(_.1)
+  | JArr{items} => index(items, key)
+  | _ => none
+
+fn index(items: List[J], key: Str) -> Opt[J]
+= match key.to_int
+  | some(i) if i >= 0 => items.get(i)
+  | _ => none
+
+fn get_path(j: J, path: Str) -> Opt[J]
+= do
+  var cur = some(j)
+  for k in path.split(".")
+    cur := match cur
+      | some(v) => get_field(v, k)
+      | none => none
+  cur
+
+fn merge(target: J, patch: J) -> J
+= match patch
+  | JObj{fields: p} => do
+    var out = match target
+      | JObj{fields} => fields
+      | _ => []
+    for f in p
+      old = out.find(_.0 == f.0).map(_.1).or(JNull)
+      out := if f.1 == JNull then out.filter(_.0 != f.0)
+        else if out.any(_.0 == f.0) then out.map(g => if g.0 == f.0 then (g.0, merge(old, f.1)) else g)
+        else out.push((f.0, merge(JNull, f.1)))
+    JObj{fields: out}
+  | _ => patch
+
+fn merge_all(base: J, patches: List[J]) -> J
+= patches.fold(base, (acc, p) => merge(acc, p))
+
+fn require(j: J, paths: List[Str]) -> Unit ! fail[ConfigErr]
+= do
+  for path in paths
+    if get_path(j, path).is_none then raise MissingKey{path}
+
+fn defaults() -> J
+= JObj{fields: [("name", JStr{s: "app"}), ("port", JNum{n: 8080}), ("db", JObj{fields: [("host", JStr{s: "localhost"}), ("pool", JNum{n: 5})]}), ("tags", JArr{items: [JStr{s: "a"}]})]}
+
+fn main() -> Unit ! log
+= log(render(merge(defaults(), JObj{fields: [("port", JNum{n: 9090})]})))
+
+test renders = render(JObj{fields: [("a", JArr{items: [JNum{n: 1}, JBool{b: true}, JNull]})]}) == "\{\"a\":[1,true,null]}"
+
+test path = get_path(defaults(), "db.pool") == some(JNum{n: 5}) and get_path(defaults(), "db.user") == none
+
+test merges_top_level = get_path(merge(defaults(), JObj{fields: [("name", JStr{s: "web"})]}), "name") == some(JStr{s: "web"})
+
+test keeps_order = render(merge(defaults(), JObj{fields: [("port", JNum{n: 1}), ("tags", JNull)]})) == "\{\"name\":\"app\",\"port\":1,\"db\":\{\"host\":\"localhost\",\"pool\":5}}"
+
+test required = catch do
+    require(defaults(), ["db.host", "db.port"])
+    false
+  | MissingKey{path} => path == "db.port"

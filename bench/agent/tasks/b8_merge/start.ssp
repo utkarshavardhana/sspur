@@ -1,0 +1,41 @@
+type J = JNull | JBool{b: Bool} | JNum{n: Int} | JStr{s: Str} | JArr{items: List[J]} | JObj{fields: List[(Str, J)]}
+
+fn render(j: J) -> Str
+= match j
+  | JNull => "null"
+  | JBool{b} => if b then "true" else "false"
+  | JNum{n} => n.str
+  | JStr{s} => "\"" + s + "\""
+  | JArr{items} => "[" + items.map(render).join(",") + "]"
+  | JObj{fields} => "\{" + fields.map(f => "\"" + f.0 + "\":" + render(f.1)).join(",") + "}"
+
+fn get_field(j: J, key: Str) -> Opt[J]
+= match j
+  | JObj{fields} => fields.find(_.0 == key).map(_.1)
+  | _ => none
+
+fn get_path(j: J, path: Str) -> Opt[J]
+= do
+  var cur = some(j)
+  for k in path.split(".")
+    cur := match cur
+      | some(v) => get_field(v, k)
+      | none => none
+  cur
+
+fn merge(target: J, patch: J) -> J
+= match (target, patch)
+  | (JObj{fields: t}, JObj{fields: p}) => JObj{fields: t.filter(f => get_field(patch, f.0).is_none) + p}
+  | _ => patch
+
+fn defaults() -> J
+= JObj{fields: [("name", JStr{s: "app"}), ("port", JNum{n: 8080}), ("db", JObj{fields: [("host", JStr{s: "localhost"}), ("pool", JNum{n: 5})]}), ("tags", JArr{items: [JStr{s: "a"}]})]}
+
+fn main() -> Unit ! log
+= log(render(merge(defaults(), JObj{fields: [("port", JNum{n: 9090})]})))
+
+test renders = render(JObj{fields: [("a", JArr{items: [JNum{n: 1}, JBool{b: true}, JNull]})]}) == "\{\"a\":[1,true,null]}"
+
+test path = get_path(defaults(), "db.pool") == some(JNum{n: 5}) and get_path(defaults(), "db.user") == none
+
+test merges_top_level = get_path(merge(defaults(), JObj{fields: [("name", JStr{s: "web"})]}), "name") == some(JStr{s: "web"})

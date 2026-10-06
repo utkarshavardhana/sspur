@@ -1,0 +1,54 @@
+type Room = {name: Str, exits: List[(Str, Str)], items: List[Str]}
+type Game = {room: Str, rooms: List[Room], inventory: List[Str], moves: Int}
+
+fn world() -> List[Room]
+= [Room{name: "hall", exits: [("north", "vault"), ("east", "kitchen")], items: []}, Room{name: "kitchen", exits: [("west", "hall")], items: ["key", "bread"]}, Room{name: "vault", exits: [("south", "hall")], items: ["gold"]}]
+
+fn new_game() -> Game
+= Game{room: "hall", rooms: world(), inventory: [], moves: 0}
+
+fn current(g: Game) -> Room
+= g.rooms.find(_.name == g.room).get
+
+fn look(g: Game) -> Str
+= "You are in the {current(g).name}. Exits: " + current(g).exits.map(_.0).join(", ") + "."
+
+fn go(g: Game, dir: Str) -> (Game, Str)
+= match current(g).exits.find(_.0 == dir)
+  | some(e) => do
+    g2 = g with room := e.1, moves := g.moves + 1
+    (g2, look(g2))
+  | none => (g, "You can't go that way.")
+
+fn step(g: Game, cmd: Str) -> (Game, Str)
+= do
+  w = cmd.split(" ")
+  if w[0] == "look" then (g, look(g))
+  else if w[0] == "go" and w.len == 2 then go(g, w[1])
+  else (g, "I don't understand.")
+
+fn run(cmds: List[Str]) -> (Game, List[Str])
+= do
+  var g = new_game()
+  var out = []
+  for c in cmds
+    (g2, msg) = step(g, c)
+    g := g2
+    out := out.push(msg)
+  (g, out)
+
+fn play(cmds: List[Str]) -> List[Str]
+= run(cmds).1
+
+fn main() -> Unit ! log
+= do
+  for line in play(["look", "go east", "go west"])
+    log(line)
+
+test starts_in_hall = play(["look"]) == ["You are in the hall. Exits: north, east."]
+
+test walks = play(["go east", "go west"]).last == some("You are in the hall. Exits: north, east.")
+
+test blocked = play(["go up"]) == ["You can't go that way."]
+
+test counts_moves = run(["go east", "go west"]).0.moves == 2

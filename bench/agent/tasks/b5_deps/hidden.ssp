@@ -1,0 +1,55 @@
+fn h_order(reg: List[Pkg], target: Str) -> Str
+= catch install_order(reg, target).join(",")
+  | Unknown{name} => "unknown {name}"
+  | Missing{pkg, dep} => "missing {pkg} {dep}"
+  | Cycle{path} => "cycle " + path.join(",")
+  | _ => "other"
+
+fn h_full(reg: List[Pkg]) -> Str
+= catch full_order(reg).join(",")
+  | Stuck{names} => "stuck " + names.join(",")
+  | _ => "other"
+
+fn h_deps(reg: List[Pkg], name: Str) -> Str
+= catch dependents(reg, name).join(",")
+  | Unknown{name} => "unknown {name}"
+  | _ => "other"
+
+fn h_diamond() -> List[Pkg]
+= [Pkg{name: "a", deps: ["b", "c"]}, Pkg{name: "b", deps: ["d"]}, Pkg{name: "c", deps: ["d"]}, Pkg{name: "d", deps: []}]
+
+test hidden_once = h_order(registry(), "app") == "http,log,web,db,app"
+
+test hidden_leaf = h_order(registry(), "log") == "log"
+
+test hidden_diamond = h_order(h_diamond(), "a") == "d,b,c,a"
+
+test hidden_unknown = h_order(registry(), "zzz") == "unknown zzz"
+
+test hidden_missing = h_order([Pkg{name: "a", deps: ["b"]}, Pkg{name: "b", deps: ["x"]}], "a") == "missing b x"
+
+test hidden_cycle = h_order([Pkg{name: "a", deps: ["b"]}, Pkg{name: "b", deps: ["c"]}, Pkg{name: "c", deps: ["a"]}], "a") == "cycle a,b,c,a"
+
+test hidden_self_cycle = h_order([Pkg{name: "a", deps: ["a"]}], "a") == "cycle a,a"
+
+test hidden_deep_cycle = h_order([Pkg{name: "top", deps: ["b"]}, Pkg{name: "b", deps: ["c"]}, Pkg{name: "c", deps: ["b"]}], "top") == "cycle b,c,b"
+
+test hidden_full = h_full(registry()) == "http,log,db,web,app"
+
+test hidden_full_diamond = h_full(h_diamond()) == "d,b,c,a"
+
+test hidden_full_stuck = h_full([Pkg{name: "a", deps: ["b"]}, Pkg{name: "b", deps: ["a"]}, Pkg{name: "c", deps: []}]) == "stuck a,b"
+
+test hidden_full_missing = h_full([Pkg{name: "a", deps: ["x"]}, Pkg{name: "b", deps: []}]) == "stuck a"
+
+test hidden_full_empty = h_full([]) == ""
+
+test hidden_dependents = h_deps(registry(), "log") == "app,db,web" and h_deps(registry(), "http") == "app,web"
+
+test hidden_dependents_none = h_deps(registry(), "app") == "" and h_deps(h_diamond(), "d") == "a,b,c"
+
+test hidden_dependents_unknown = h_deps(registry(), "zzz") == "unknown zzz"
+
+test hidden_plan = plan(registry(), "app") == "http -> log -> web -> db -> app"
+
+test hidden_plan_errors = plan([Pkg{name: "a", deps: ["b"]}, Pkg{name: "b", deps: ["x"]}], "a") == "error: b needs missing x" and plan([Pkg{name: "a", deps: ["b"]}, Pkg{name: "b", deps: ["a"]}], "a") == "error: cycle a -> b -> a"

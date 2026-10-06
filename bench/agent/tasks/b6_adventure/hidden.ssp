@@ -1,0 +1,39 @@
+fn h_hall() -> Str
+= "You are in the hall. Exits: east, north."
+
+fn h_kitchen() -> Str
+= "You are in the kitchen. Exits: west. Items: bread, key."
+
+test hidden_look_sorted = play(["look"]) == [h_hall()]
+
+test hidden_items_shown = play(["go east"]) == [h_kitchen()]
+
+test hidden_case_spaces = play(["  GO   East ", "LOOK", "Look  "]) == [h_kitchen(), h_kitchen(), h_kitchen()]
+
+test hidden_unknown = play(["dance", "", "go", "go east west"]) == ["I don't understand.", "I don't understand.", "I don't understand.", "I don't understand."]
+
+test hidden_no_exit = play(["go west"]) == ["You can't go that way."]
+
+test hidden_take = play(["go east", "take key", "look"]) == [h_kitchen(), "Taken.", "You are in the kitchen. Exits: west. Items: bread."]
+
+test hidden_take_case = play(["go east", "TAKE Key", "inventory"]).drop(1) == ["Taken.", "You carry: key."]
+
+test hidden_take_missing = play(["take key"]) == ["There is no key here."]
+
+test hidden_inventory_empty = play(["inventory"]) == ["You carry nothing."]
+
+test hidden_inventory_sorted = play(["go east", "take key", "take bread", "inventory"]).last == some("You carry: bread, key.")
+
+test hidden_drop = play(["go east", "take key", "go west", "drop key", "look", "inventory"]).drop(2) == [h_hall(), "Dropped.", "You are in the hall. Exits: east, north. Items: key.", "You carry nothing."]
+
+test hidden_drop_missing = play(["drop gold"]) == ["You don't have gold."]
+
+test hidden_locked = play(["go north"]) == ["The door is locked."] and run(["go north"]).0.room == "hall"
+
+test hidden_unlocked = play(["go east", "take key", "go west", "go north"]).last == some("You are in the vault. Exits: south. Items: gold.")
+
+test hidden_moves = run(["go east", "go up", "go west", "go north"]).0.moves == 2
+
+test hidden_world_locked = world().map(_.locked) == [["north"], [], []]
+
+test hidden_score = score(new_game()) == 0 and score(run(["go east", "take key", "take bread"]).0) == 20 and score(run(["go east", "take key", "go west", "go north", "take gold"]).0) == 45

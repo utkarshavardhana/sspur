@@ -1,0 +1,41 @@
+type Posting = {account: Str, amount: Int}
+type Txn = {id: Int, memo: Str, postings: List[Posting]}
+type Ledger = {accounts: List[Str], txns: List[Txn]}
+type LedgerErr = UnknownAccount{name: Str}
+
+fn chart() -> List[Str]
+= ["income:salary", "assets:bank", "expenses:food", "assets:cash", "equity:owner"]
+
+fn new_ledger() -> Ledger
+= Ledger{accounts: chart(), txns: []}
+
+fn p(account: Str, amount: Int) -> Posting
+= Posting{account, amount}
+
+fn add_txn(l: Ledger, t: Txn) -> Ledger ! fail[LedgerErr]
+= do
+  for x in t.postings
+    if not l.accounts.contains(x.account) then raise UnknownAccount{name: x.account}
+  l with txns := l.txns.push(t)
+
+fn balance(l: Ledger, account: Str) -> Int
+= l.txns.flat_map(_.postings).filter(_.account == account).map(_.amount).sum
+
+fn trial_balance(l: Ledger) -> List[(Str, Int)]
+= l.accounts.map(a => (a, balance(l, a)))
+
+fn sample() -> Ledger ! fail[LedgerErr]
+= add_txn(add_txn(new_ledger(), Txn{id: 1, memo: "open", postings: [p("assets:bank", 1000), p("equity:owner", -1000)]}), Txn{id: 2, memo: "lunch", postings: [p("expenses:food", 30), p("assets:bank", -30)]})
+
+fn main() -> Unit ! log
+= log(catch trial_balance(sample()).map(e => "{e.0} {e.1}").join("\n")
+  | UnknownAccount{name} => "unknown account {name}")
+
+test bank = catch balance(sample(), "assets:bank") == 970
+  | _ => false
+
+test unknown = catch add_txn(new_ledger(), Txn{id: 1, memo: "x", postings: [p("assets:gold", 5), p("equity:owner", -5)]}).txns.len == 0
+  | UnknownAccount{name} => name == "assets:gold"
+
+test trial_sums_to_zero = catch trial_balance(sample()).map(_.1).sum == 0
+  | _ => false

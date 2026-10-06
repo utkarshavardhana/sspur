@@ -1,0 +1,68 @@
+type Pkg = {name: Str, deps: List[Str]}
+type DepErr = Unknown{name: Str} | Missing{pkg: Str, dep: Str} | Cycle{path: List[Str]} | Stuck{names: List[Str]}
+
+fn registry() -> List[Pkg]
+= [Pkg{name: "app", deps: ["web", "db"]}, Pkg{name: "web", deps: ["http", "log"]}, Pkg{name: "db", deps: ["log"]}, Pkg{name: "http", deps: []}, Pkg{name: "log", deps: []}]
+
+fn find_pkg(reg: List[Pkg], name: Str) -> Pkg ! fail[DepErr]
+= reg.find(_.name == name).ok_or(Unknown{name})
+
+fn visit(reg: List[Pkg], name: Str, chain: List[Str], done: List[Str]) -> List[Str] ! fail[DepErr]
+= if done.contains(name) then done
+  else match chain.index_of(name)
+    | some(i) => raise Cycle{path: chain.drop(i).push(name)}
+    | none => do
+      p = find_pkg(reg, name)
+      var acc = done
+      for d in p.deps
+        if reg.find(_.name == d).is_none then raise Missing{pkg: name, dep: d}
+        acc := visit(reg, d, chain.push(name), acc)
+      acc.push(name)
+
+fn install_order(reg: List[Pkg], target: Str) -> List[Str] ! fail[DepErr]
+= visit(reg, target, [], [])
+
+fn plan(reg: List[Pkg], target: Str) -> Str
+= catch install_order(reg, target).join(" -> ")
+  | Unknown{name} => "error: unknown package {name}"
+  | Missing{pkg, dep} => "error: {pkg} needs missing {dep}"
+  | Cycle{path} => "error: cycle " + path.join(" -> ")
+  | Stuck{names} => "error: stuck"
+
+fn full_order(reg: List[Pkg]) -> List[Str] ! fail[DepErr]
+= do
+  var done = []
+  for _i in 0..reg.len
+    ready = reg.filter(p => not done.contains(p.name) and p.deps.all(d => done.contains(d))).map(_.name).sort
+    if not ready.is_empty then done := done.push(ready[0])
+  if done.len < reg.len then raise Stuck{names: reg.map(_.name).filter(n => not done.contains(n)).sort}
+  done
+
+fn dependents(reg: List[Pkg], name: Str) -> List[Str] ! fail[DepErr]
+= do
+  find_pkg(reg, name)
+  var found = [name]
+  for _i in 0..reg.len
+    found := found + reg.filter(p => not found.contains(p.name) and p.deps.any(d => found.contains(d))).map(_.name)
+  found.drop(1).sort
+
+fn main() -> Unit ! log
+= log(plan(registry(), "app"))
+
+test leaf = catch install_order(registry(), "http") == ["http"]
+  | _ => false
+
+test db_first_log = catch install_order(registry(), "db") == ["log", "db"]
+  | _ => false
+
+test unknown = plan(registry(), "nope") == "error: unknown package nope"
+
+test once = plan(registry(), "app") == "http -> log -> web -> db -> app"
+
+test cycle = plan([Pkg{name: "a", deps: ["a"]}], "a") == "error: cycle a -> a"
+
+test full = catch full_order(registry()) == ["http", "log", "db", "web", "app"]
+  | _ => false
+
+test deps_of_log = catch dependents(registry(), "log") == ["app", "db", "web"]
+  | _ => false

@@ -79,6 +79,40 @@ All changes are in the CLI and the spec. The language is unchanged.
 
 Run 2 used a heredoc (`./sspur edit --test <<'EOF'`). The sandbox refused that command in 6 of 8 runs: it treats `{a, b}` inside the heredoc (any record literal with two fields) as possible brace expansion and won't verify the command. Each refusal cost a retry plus a Write call to put the input in a file. Run 3's spec recommends one single-quoted `-e` argument instead, which passed in 7 of 8 runs (a8 was refused once, apparently because of a `#` inside a string).
 
+## Results, run 7
+
+### Where s1_shop's tokens go (diagnosis)
+
+Every input token of the run 6 SSPUR transcript and the run 5 Python transcript (the cells behind the 1.33x), attributed to what put it in the context. A piece that enters the context before call j is re-read by calls j to N, so it is counted once per call that reads it. The per-call input is exact (API usage); each increase from one call to the next is split between the agent's previous output and the tool results it got, in proportion to their cl100k counts. After the first tool result the harness adds about 3.8k tokens of its own on both sides (the same jump appears in every transcript); that is counted as harness. Script: the attribution follows `tokens.py`, one bucket per source.
+
+| Where the tokens went | SSPUR (run 6) | Python (run 5) | SSPUR minus Python |
+|---|---|---|---|
+| Harness context (system prompt, tool schemas, harness additions), once per call | 177,434 (6 calls) | 146,860 (5 calls) | **+30,574** |
+| Task prompt, re-read every call | 4,122 | 2,540 | +1,582 |
+| Spec (read in call 1, re-read by calls 2 to 6) | 12,121 | 0 | **+12,121** |
+| Search output (`q`, `grep`, `sed`), re-read | 17,908 | 6,714 | **+11,194** |
+| Edit and test output, re-read | 320 | 942 | -622 |
+| The agent's own commands and text, re-read | 3,078 | 3,989 | -911 |
+| Output tokens, all calls | 965 | 1,303 | -338 |
+| Total | 215,948 | 162,348 | +53,600 |
+
+Per call (input is exact; tool output in cl100k tokens):
+
+| Call | SSPUR: what it ran | Input | Tool output | Python: what it ran | Input | Tool output |
+|---|---|---|---|---|---|---|
+| 1 | `spec` | 27,101 | 1,798 | `grep -rn` for the five names and `19` | 26,848 | 609 |
+| 2 | `q grep ship_fee`, `q find` with `^Warehouse` (unsupported then, so it printed nothing), `q grep tax_rate` (44 near-identical `*_tax` callers) | 33,384 | 1,075 | `sed -n` on two files, two greps | 31,558 | 719 |
+| 3 | `q body` of five, `q find 'restock\|active'` (88 signatures), two greps | 35,626 | 1,122 | Python heredoc patching the files, crashed on the locale | 32,954 | 241 |
+| 4 | `q callers ship_fee`, `q grep '19'`, `q grep 'money('`, `q find warehouse` | 37,794 | 980 | the same patch with `LC_ALL`, then pytest | 34,473 | 111 |
+| 5 | `q body` of three, then one `edit --test` with all four changes and five tests | 39,935 | 199 | DONE | 35,212 | |
+| 6 | DONE | 41,143 | | | | |
+
+So the 53.6k gap is:
+- **57%: one more call.** SSPUR spends its first call reading only the spec; Python's first call is already a search. Every call re-reads about 30k of harness context.
+- **23%: the spec**, 1,798 cl100k tokens (about 2.4k Claude tokens) re-read by 5 later calls.
+- **21%: exploration in three rounds instead of two**, with broad answers that stay in the context: `q grep tax_rate` returned all 44 callers with their lines (about 900 tokens), `q find 'restock|active'` 88 signatures. What the agent was looking for in rounds 2 and 3 is what `q pack` gives (the bodies, the record type, the callers, the tests), but `q pack` takes one name and the agent had five.
+- Not a cost: `edit --test` on 187 tests printed two lines (the `ok` line and `187 passed, 0 failed`, 199 tokens with the `q body` before it); there were no rejections in run 6 (run 5 had one, 65 tokens); re-reading bodies just before the edit cost about 70 tokens. Running only the affected tests or capping failure output would save nothing measurable on this task.
+
 ## Results, run 6
 
 Run 6 reruns only the cells that the changes in this round target, with the same harness, prompts and method as run 5 (one fresh `general-purpose` subagent per cell, model override `haiku` or `sonnet`, strictly one at a time, `setup.py --tmo`, no retries). The Python cells are run 5's. Compiler frozen at `647355f`. Run directory: `runs/2026-10-06-r6-agent-packaging/`.

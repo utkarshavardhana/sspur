@@ -2,14 +2,14 @@ fn r(n: Int, d: Int) -> Ratio
 = ratio(n, d)
 
 fn harmonic(n: Int) -> Ratio
-= (1..n + 1).fold(ratio(0, 1), (acc, k) => acc.add(ratio(1, k)))
+= (1..n % 64 + 1).fold(ratio(0, 1), (acc, k) => acc.add(ratio(1, k)))
 
 fn egyptian(x: Ratio, limit: Int) -> List[Int] ! div
 = do
   var rest = x
   var out = []
   var k = 0
-  while rest.sign > 0 and k < limit
+  while rest.sign > 0 and k < min(limit, 6)
     d = rest.inv.ceil
     out := out.push(d.to_int.or(0))
     rest := rest.sub(ratio_big(big(1), d))

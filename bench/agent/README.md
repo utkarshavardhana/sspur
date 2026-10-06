@@ -2,7 +2,14 @@
 
 This measures the Phase 3 exit criterion: an agent completes multi-step feature tasks using SSPUR (CLI ops only) with fewer total tokens than the same agent using Python.
 
-**Latest result (run 4, 2026-10-04, Sonnet 5.5): still met, after a spec fix.** With the agent spec as it stood after Phases 4 to 7 (1,799 tokens), SSPUR regressed to **1.24x** Python's total tokens (median 0.80x), although both languages still passed all 95 hidden tests. The spec had lost rules the tasks need. After restoring them (spec now 1,782 tokens) and rerunning the 4 affected SSPUR cells against the same Python cells, SSPUR used **0.70x** (median **0.61x**, range 0.42x to 1.35x), 26 API calls against 38, and both sides were again 95/95. SSPUR was cheaper on 6 of 8 tasks.
+**Latest result (run 5, 2026-10-06): the claim holds for Sonnet 5.5 and Opus 5.5, not for Haiku 4.5, and not on the one large codebase tried.** Details in [Results, run 5](#results-run-5).
+- Opus 5.5, the 8 tasks: SSPUR used **0.76x** Python's total tokens (median 0.76x), 28 API calls against 38, 95/95 hidden tests on both sides.
+- Haiku 4.5, the 8 tasks: **2.31x** (median 1.22x), 150 calls against 93. SSPUR passed 95/95 and Python 84/95. After a spec fix and 3 SSPUR reruns: 1.21x (median 0.97x).
+- Sonnet 5.5, 8 new tasks taken from neutral sources (LeetCode 146, 224 and 227, RFC 7396, the AWK book, ...): **0.74x** (median 0.60x), 141/141 on both sides; 0.66x after the spec fix (one cell rerun).
+- Sonnet 5.5, one codebase of 1,117 definitions with four targeted changes: **1.34x** (6 calls against 5), 10/10 on both sides.
+- The optional regex and JSON task (a9) costs more in SSPUR for every model tried: Opus 1.69x (1.37x after the fix), Haiku 43x (5.2x after the fix, still failing 1 of 17 hidden tests).
+
+**Run 4 (2026-10-04, Sonnet 5.5): still met, after a spec fix.** With the agent spec as it stood after Phases 4 to 7 (1,799 tokens), SSPUR regressed to **1.24x** Python's total tokens (median 0.80x), although both languages still passed all 95 hidden tests. The spec had lost rules the tasks need. After restoring them (spec now 1,782 tokens) and rerunning the 4 affected SSPUR cells against the same Python cells, SSPUR used **0.70x** (median **0.61x**, range 0.42x to 1.35x), 26 API calls against 38, and both sides were again 95/95. SSPUR was cheaper on 6 of 8 tasks.
 
 | Run | SSPUR interface | Hidden tests SSPUR / Py | Calls SSPUR / Py | Total SSPUR / Py |
 |---|---|---|---|---|
@@ -11,6 +18,9 @@ This measures the Phase 3 exit criterion: an agent completes multi-step feature 
 | 3 | same, `edit --test -e '...'` | 95/95 / 95/95 | 27 / 46 | **0.59x** (median 0.60x) |
 | 4 | 1.8k-token spec after Phases 4 to 7 | 95/95 / 95/95 | 42 / 38 | **1.24x** (median 0.80x) |
 | 4, spec fix | 1.78k-token spec, 4 SSPUR cells rerun | 95/95 / 95/95 | 26 / 38 | **0.70x** (median 0.61x) |
+| 5, Opus 5.5 | spec at `cfc9ace` (1,798 tokens) | 95/95 / 95/95 | 28 / 38 | **0.76x** (median 0.76x) |
+| 5, Haiku 4.5 | same | 95/95 / 84/95 | 150 / 93 | **2.31x** (median 1.22x) |
+| 5, Haiku 4.5, spec fix | spec at `4b75361` (1,798 tokens), 3 SSPUR cells rerun | 95/95 / 84/95 | 98 / 93 | **1.21x** (median 0.97x) |
 
 Python's side was identical in all runs; its totals were 1.27M, 1.20M, 1.48M and 1.22M. Against Python's cheapest run, SSPUR run 3 is 0.73x and run 4 after the fix is 0.71x.
 
@@ -32,6 +42,8 @@ An optional 9th task (`a9_events`: regex, JSON encode and decode, `Res` handling
 | a8_config | harden a parser four ways, add two typed getters with new error variants |
 
 | a9_events (new in run 4, optional) | replace a split parser with a regex, add JSON export and import with a new error, email redaction, and the lines `ingest` skips (it logs them through the `log` effect) |
+
+Run 5 added 8 tasks from neutral sources, b1 to b8 (`"set": "b"` in `tasks.json`, set up with `setup.py --b`, 141 hidden tests per language), and one large generated codebase, `tasks/s1_shop/` (its own `gen.py`, `setup_scale.py` and `score_scale.py`). Both are described under [Results, run 5](#results-run-5).
 
 Hidden tests (`tasks/<id>/hidden.ssp`, `hidden.py`, 95 per language for a1 to a8, 17 more for a9) are equivalent across languages. a9 is marked `"new": true` in `tasks.json`; `setup.py` skips it unless `--new` is given, so the 8-task totals stay comparable. `ref.ssp` and `ref.py` are the author's solutions. `python3 score.py ref` checks that every reference passes its hidden tests and every starting codebase fails them.
 
@@ -64,6 +76,157 @@ All changes are in the CLI and the spec. The language is unchanged.
 - The MCP server gained `sspur_edit`, and its tools return the same compact text (`json: true` for the old format).
 
 Run 2 used a heredoc (`./sspur edit --test <<'EOF'`). The sandbox refused that command in 6 of 8 runs: it treats `{a, b}` inside the heredoc (any record literal with two fields) as possible brace expansion and won't verify the command. Each refusal cost a retry plus a Write call to put the input in a file. Run 3's spec recommends one single-quoted `-e` argument instead, which passed in 7 of 8 runs (a8 was refused once, apparently because of a `#` inside a string).
+
+## Results, run 5
+
+Run 5 (2026-10-06) widens the evaluation in three ways: two more models on the same tasks, 8 new tasks specified from neutral sources, and one large codebase.
+
+Setup, as in run 4 unless stated:
+- Compiler frozen at `cfc9ace` (the spec there is 1,798 tokens: run 4's fixed spec plus the a9 fix and the ADR 0026 Packages line; that commit also shortened the CLI line's "if the shell refuses that command, write a file" sentence to "Or save them to FILE"). The spec fix below was rebuilt at `4b75361`; only `docs/agent-spec.md` changed.
+- One fresh Claude Code `general-purpose` subagent per (model, language, task) cell, chosen with the Agent tool's model override (`haiku`, `opus`, `sonnet`), run strictly one at a time, with `setup.py --tmo` prompts. No retries, except one cell that the API aborted (below).
+- New cells: Haiku 4.5 and Opus 5.5 on a1 to a8 and a9, both languages; Sonnet 5.5 on b1 to b8 and s1, both languages. The Sonnet a1 to a8 numbers are run 4's (after its spec fix); Sonnet was not rerun on them.
+- `net` subtracts each model's own no-op context: Sonnet 25,750 (as before), Opus 26,100, Haiku 19,100 (measured with a one-line no-op subagent per model; Haiku's harness context is smaller). `tokens.py` takes it from `BASE`.
+- Runs: `runs/2026-10-06-{haiku,opus}` (a1 to a8), `-{haiku,opus}-a9`, `-sonnet-b`, `-sonnet-scale`, and the spec-fix reruns in `-haiku-spec-fix`, `-haiku-a9-spec-fix`, `-opus-a9-spec-fix`, `-sonnet-b-spec-fix`.
+
+### Per model, the 8 tasks
+
+| Model | Hidden tests SSPUR / Py | Calls SSPUR / Py | Total SSPUR | Total Py | SSPUR / Py | Median | SSPUR cheaper on |
+|---|---|---|---|---|---|---|---|
+| Sonnet 5.5 (run 4, after its fix) | 95/95 / 95/95 | 26 / 38 | 854,818 | 1,221,650 | **0.70x** | 0.61x | 6 of 8 |
+| Opus 5.5 | 95/95 / 95/95 | 28 / 38 | 928,412 | 1,226,632 | **0.76x** | 0.76x | 6 of 8 |
+| Haiku 4.5 | 95/95 / 84/95 | 150 / 93 | 5,597,074 | 2,423,178 | **2.31x** | 1.22x | 3 of 8 |
+| Haiku 4.5, after the spec fix (a1, a2, a6 rerun) | 95/95 / 84/95 | 98 / 93 | 2,940,839 | 2,423,178 | **1.21x** | 0.97x | 4 of 8 |
+
+Opus 5.5:
+
+| Task | Hidden tests SSPUR / Py | API calls SSPUR / Py | Total tokens SSPUR | Total tokens Py | SSPUR / Py | Net of fixed overhead SSPUR / Py | Tool I/O SSPUR / Py |
+|---|---|---|---|---|---|---|---|
+| a1_inventory | 12/12 / 12/12 | 3 / 5 | 96,750 | 159,457 | 0.61x | 18,450 / 28,957 | 3,080 / 2,479 |
+| a2_wordstats | 11/11 / 11/11 | 3 / 4 | 96,588 | 126,550 | 0.76x | 18,288 / 22,150 | 2,949 / 2,620 |
+| a3_bank | 13/13 / 13/13 | 3 / 5 | 98,916 | 166,337 | 0.59x | 20,616 / 35,837 | 3,749 / 3,397 |
+| a4_calc | 13/13 / 13/13 | 3 / 4 | 98,672 | 128,982 | 0.77x | 20,372 / 24,582 | 3,809 / 2,644 |
+| a5_orders | 11/11 / 11/11 | 4 / 5 | 133,181 | 161,067 | 0.83x | 28,781 / 30,567 | 3,223 / 2,953 |
+| a6_todo | 11/11 / 11/11 | 4 / 4 | 133,417 | 127,159 | 1.05x | 29,017 / 22,759 | 3,284 / 2,273 |
+| a7_grades | 11/11 / 11/11 | 3 / 6 | 96,469 | 194,216 | 0.50x | 18,169 / 37,616 | 2,900 / 2,754 |
+| a8_config | 13/13 / 13/13 | 5 / 5 | 174,419 | 162,864 | 1.07x | 43,919 / 32,364 | 4,641 / 3,434 |
+| **Total** | 95/95 / 95/95 | 28 / 38 | **928,412** | **1,226,632** | **0.76x** | 197,612 / 234,832 (0.84x) | 27,635 / 22,554 (1.23x) |
+
+Haiku 4.5 (a1, a2 and a6 after the spec fix are in the next table):
+
+| Task | Hidden tests SSPUR / Py | API calls SSPUR / Py | Total tokens SSPUR | Total tokens Py | SSPUR / Py | Net of fixed overhead SSPUR / Py | Tool I/O SSPUR / Py |
+|---|---|---|---|---|---|---|---|
+| a1_inventory | 12/12 / 12/12 | 25 / 9 | 823,869 | 224,454 | 3.67x | 346,369 / 52,554 | 11,724 / 4,339 |
+| a2_wordstats | 11/11 / 11/11 | 20 / 15 | 607,521 | 398,489 | 1.52x | 225,521 / 111,989 | 9,149 / 5,678 |
+| a3_bank | 13/13 / 13/13 | 7 / 14 | 191,307 | 368,525 | 0.52x | 57,607 / 101,125 | 6,614 / 6,120 |
+| a4_calc | 13/13 / 13/13 | 10 / 16 | 293,576 | 445,218 | 0.66x | 102,576 / 139,618 | 8,270 / 7,738 |
+| a5_orders | 11/11 / 11/11 | 6 / 9 | 154,479 | 228,196 | 0.68x | 39,879 / 56,296 | 4,368 / 4,646 |
+| a6_todo | 11/11 / 11/11 | 61 / 10 | 2,916,444 | 251,737 | 11.59x | 1,751,344 / 60,737 | 27,687 / 4,327 |
+| a7_grades | 11/11 / 11/11 | 11 / 9 | 307,487 | 223,114 | 1.38x | 97,387 / 51,214 | 7,493 / 4,128 |
+| a8_config | 13/13 / 2/13 | 10 / 11 | 302,391 | 283,445 | 1.07x | 111,391 / 73,345 | 10,610 / 5,766 |
+| **Total** | 95/95 / 84/95 | 150 / 93 | **5,597,074** | **2,423,178** | **2.31x** | 2,732,074 / 646,878 (4.22x) | 85,915 / 42,742 (2.01x) |
+
+Haiku's one Python failure (a8, 2/13) is a logic error: it changed the entry separator from `;` to a newline.
+
+### The 9th task (a9, regex and JSON)
+
+| Model and spec | Hidden tests SSPUR / Py | API calls SSPUR / Py | Total tokens SSPUR | Total tokens Py | SSPUR / Py |
+|---|---|---|---|---|---|
+| Sonnet 5.5, run 4 (`69e0d69`) | 17/17 / 17/17 | 3 / 4 | 97,834 | 130,948 | 0.75x |
+| Opus 5.5, `cfc9ace` | 17/17 / 17/17 | 6 / 4 | 223,320 | 132,415 | 1.69x |
+| Opus 5.5, `4b75361` (spec fix) | 17/17 / 17/17 | 5 / 4 | 181,477 | 132,415 | 1.37x |
+| Haiku 4.5, `cfc9ace` | 15/17 / 17/17 | 113 / 8 | 9,121,401 | 210,644 | 43.30x |
+| Haiku 4.5, `4b75361` (spec fix) | 16/17 / 17/17 | 33 / 8 | 1,091,558 | 210,644 | 5.18x |
+
+Haiku's first SSPUR attempt parsed JSON by hand instead of with `json.decode` and rejected JSON with spaces; the rerun used `json.decode` but its `to_json` did not escape quotes. Opus spent its extra calls reading `spec --full` for regex escapes and re-running `check` and `test` after an `edit --test` that had already passed.
+
+### Independently specified tasks (b1 to b8)
+
+The designer's tasks could favour the language. These 8 tasks are ports of well-known exercises and specs. They were written for this run by the same model family that designed the language (Opus 5.5), but each starts from a public source, and for each task the hidden tests were written from the task text before either reference solution. Each starting codebase exists in both languages with the same functions, behavior and visible tests (30 to 60 lines); `python3 score.py ref` checks that both references pass and both starts fail.
+
+| Task | Source | What changes | Hidden tests |
+|---|---|---|---|
+| b1_lru | LeetCode 146 (LRU Cache) | capacity check with a new error, eviction, a signature change (lookup returns the updated cache) through callers, two counter fields, peek, resize | 21 |
+| b2_calc | LeetCode 224 and 227 (Basic Calculator) | precedence, left associativity, truncating division, parentheses, unary minus, two new errors, rendering | 17 |
+| b3_payroll | The AWK Programming Language, ch. 1 (emp.data), as CSV | header and blank lines, trimming, errors with line numbers, overtime, sorted report with a total, collect-all validation | 17 |
+| b4_ratelimit | Token bucket (Wikipedia), fixed window | an off-by-one, a token bucket, a clock-skew error that makes two functions fallible, retry time, per-key buckets | 17 |
+| b5_deps | Topological sort, Kahn's algorithm (LeetCode 210) | duplicates, missing packages, cycle paths, error rendering, a full order with a stuck error, reverse dependencies | 18 |
+| b6_adventure | Colossal Cave style two-word parser | a forgiving parser, sorted descriptions, take/drop/inventory, a record field added everywhere for a locked door, a score | 17 |
+| b7_ledger | Double-entry bookkeeping invariants | four ordered invariants, no negative asset accounts, a filtered sorted trial balance, reversals, running history | 17 |
+| b8_merge | RFC 7396 (JSON Merge Patch), with its Appendix A examples | recursive merge patch, key order, string escaping, array paths, merge_all, a required-keys error | 17 |
+
+Sonnet 5.5 (run `runs/2026-10-06-sonnet-b/`):
+
+| Task | Hidden tests SSPUR / Py | API calls SSPUR / Py | Total tokens SSPUR | Total tokens Py | SSPUR / Py | Net of fixed overhead SSPUR / Py | Tool I/O SSPUR / Py |
+|---|---|---|---|---|---|---|---|
+| b1_lru | 21/21 / 21/21 | 3 / 6 | 98,884 | 197,563 | 0.50x | 21,634 / 43,063 | 3,527 / 3,372 |
+| b2_calc | 17/17 / 17/17 | 3 / 5 | 99,962 | 163,264 | 0.61x | 22,712 / 34,514 | 3,963 / 3,300 |
+| b3_payroll | 17/17 / 17/17 | 5 / 6 | 175,819 | 198,721 | 0.88x | 47,069 / 44,221 | 4,798 / 3,743 |
+| b4_ratelimit | 17/17 / 17/17 | 4 / 7 | 138,746 | 242,533 | 0.57x | 35,746 / 62,283 | 4,052 / 4,258 |
+| b5_deps | 18/18 / 18/18 | 4 / 5 | 136,944 | 163,507 | 0.84x | 33,944 / 34,757 | 3,707 / 3,219 |
+| b6_adventure | 17/17 / 17/17 | 3 / 7 | 99,684 | 247,687 | 0.40x | 22,434 / 67,437 | 4,068 / 6,844 |
+| b7_ledger | 17/17 / 17/17 | 3 / 5 | 99,662 | 168,589 | 0.59x | 22,412 / 39,839 | 3,744 / 4,344 |
+| b8_merge | 17/17 / 17/17 | 7 / 4 | 268,082 | 130,148 | 2.06x | 87,832 / 27,148 | 8,542 / 3,543 |
+| **Total** | 141/141 / 141/141 | 32 / 45 | **1,117,783** | **1,512,012** | **0.74x** | 293,783 / 353,262 (0.83x) | 36,401 / 32,623 (1.12x) |
+
+Median 0.60x, cheaper on 7 of 8. With b8 rerun on the fixed spec (4 calls, 141,274 tokens, 1.09x), the total is **0.66x** (median 0.60x, 29 calls against 45). This is close to the designer's tasks with the same model (0.70x, median 0.61x), so on this evidence the run 3 and 4 results were not an artifact of who wrote the tasks.
+
+The API aborted the SSPUR b6 cell twice with "Output blocked by content filtering policy" right after the agent read the spec and code (call 2, nothing edited); the third attempt in the same untouched directory is the one counted (`excluded.txt`). The Python b6 cell ran once.
+
+### Large codebase (s1_shop)
+
+`tasks/s1_shop/gen.py` generates one shop application in both languages: a common module (money formatting, tax rates, shipping fees) and 44 domain modules (customer, invoice, warehouse, ...) of one record type and 20 functions each, plus 182 tests. That is 1,117 definitions in SSPUR (one store, 31k cl100k tokens of source) and 935 functions and classes plus 182 test functions in Python (a `shop/` package of 45 modules and `tests/`, 36k tokens). The task makes four targeted changes: the EU tax rate, a money formatting bug, a new parameter on `ship_fee` with its 3 callers in three modules plus a new express function, and a new `warehouse_restock_all`. Both prompts say the codebase is large and say how to search it: `q list | grep`, `q body`, `q callers` and `q pack` for SSPUR, `grep -rn` for Python. Hidden tests: 10 per language (`hidden.ssp`, `hidden.py`, `score_scale.py`).
+
+| Task | Hidden tests SSPUR / Py | API calls SSPUR / Py | Total tokens SSPUR | Total tokens Py | SSPUR / Py | Net of fixed overhead SSPUR / Py | Tool I/O SSPUR / Py |
+|---|---|---|---|---|---|---|---|
+| s1_shop | 10/10 / 10/10 | 6 / 5 | 217,181 | 162,362 | **1.34x** | 62,681 / 33,612 | 5,495 / 2,997 |
+
+Neither agent read the whole codebase; both read under 6k tokens of tool output. Where the tokens went:
+- SSPUR: the spec (1,798), one combined query (`q list | grep -iE "ship|money|tax_rate|restock|warehouse|express"`, then `callers` and `body`) that returned 2,045 tokens, a second query of 144, one `edit --test` with all four changes and five tests, which was rejected because a test called `len(x)` instead of `x.len`, the corrected edit, and a `test` run.
+- Python: `grep -rn "ship_fee\|def money\|def tax_rate\|..."` (609 tokens), `sed -n` on the two files it needed plus another grep (719), a Python heredoc that patched the files and crashed on the locale, and the same patch with `LC_ALL` set.
+- `q list` prints one signature per line, but all 182 test names on a single `tests:` line, so any grep pattern that matches a test name returns all of them; here that line and the 44 `*_restock` signatures were most of the 2,045 tokens. A Python `grep "def name"` returns exactly the lines asked for.
+- `q pack` was not used. At this size targeted search costs about the same in both languages, so the fixed costs decide: the spec carried through every later call and one extra call.
+- One run per side; a 1-call difference is within the noise seen elsewhere. What it does show is that the query surface gives no advantage over grep here, so the claim that SSPUR wins on large codebases is not supported yet.
+
+### Spec fix
+
+From the transcripts, five rules were missing or too easy to miss. `docs/agent-spec.md` (`4b75361`) now says:
+- effect rows are comma-separated, with an example `! fail[E], log` (Haiku a6 wrote `! log fail[TaskErr]` three times);
+- a bare `Ctor` pattern ignores the fields (Haiku a6 wrote `NotFound{_}`);
+- a `match` nested inside an arm takes the arms below it, so use a helper fn (Sonnet b8 lost two edits to it; writing the b8 reference solution hit it too);
+- a literal `{` is `\{`, with a JSON example; the escapes are `\n \t \" \\ \{`; regex `\d` is written `"\\d"` (Haiku a9 had 23 edits rejected for an unescaped `{` in JSON text, and `\[` and `\r` escapes);
+- `&& || !` are not operators (Haiku used them in a1 and a2).
+
+To stay under 1.8k tokens (1,798 before and after), the C, sys, bare and GPU line became a pointer to `spec --full`, and `sync` and `deploy` left the CLI line. The affected SSPUR cells were rerun against the same Python cells:
+
+| Cell | Before: calls, total, ratio | After: calls, total, ratio | Hidden tests before / after |
+|---|---|---|---|
+| Sonnet b8_merge | 7, 268,082, 2.06x | 4, 141,274, 1.09x | 17/17 / 17/17 |
+| Opus a9_events | 6, 223,320, 1.69x | 5, 181,477, 1.37x | 17/17 / 17/17 |
+| Haiku a1_inventory | 25, 823,869, 3.67x | 24, 775,681, 3.46x | 12/12 / 12/12 |
+| Haiku a2_wordstats | 20, 607,521, 1.52x | 22, 696,585, 1.75x | 11/11 / 11/11 |
+| Haiku a6_todo | 61, 2,916,444, 11.59x | 8, 219,333, 0.87x | 11/11 / 11/11 |
+| Haiku a9_events | 113, 9,121,401, 43.30x | 33, 1,091,558, 5.18x | 15/17 / 16/17 |
+
+- Sonnet b8 put the array index in a helper fn on the first try. Opus a9 still read `spec --full` once, for the regex syntax.
+- Haiku a1 and a2 did not change: Haiku wrote `&&` and `!` again although the spec now says they are not operators, and then edited one definition per call. Haiku a6 and a9 improved a lot, but single Haiku runs vary widely (a6 went from 61 calls to 8), so most of that may be noise. Haiku a9 still fails one hidden test.
+- Cells that were already at the 3-call minimum were not rerun on the new spec, so a regression there would not show.
+
+### Where SSPUR wins and loses, from the transcripts
+
+- **Wins come from one edit.** When the agent follows the spec's path (read spec and code, one `edit --test` with every definition and test, done), a task takes 3 calls; Python agents take 4 to 7 (read, several targeted edits, run pytest, sometimes fix). Opus used 3 calls on 5 of 8 tasks and Sonnet on 4 of 8 new tasks. SSPUR agents read more (the 1.8k spec) and write about as much, so tool I/O is 1.0x to 1.3x for Sonnet and Opus; the savings are the calls not made, each of which re-reads the 19k to 26k harness context.
+- **Losses come from calls spent on the language.** Every SSPUR loss above 1.1x is a run of rejected edits: syntax from other languages (`&&`, `!`, `len(x)`, `.compare`, `.head`, `max_by`, `NotFound{_}`), string escaping in JSON and regex text, the nested `match`, the `catch do` block layout, `while` needing `div`, and effects that ripple to callers (b3: `main` had to declare `fail[CsvErr]`). Python agents mostly fail on logic, which costs a pytest run, not a rejected edit.
+- **Haiku 4.5 does not take the one-edit path.** After one rejected edit it falls back to one definition per `edit` call, then runs `check` and `src` to confirm (a1: 25 calls, 13 of them single-definition edits). It also ignored rules the spec states. On Python it takes 8 to 16 calls. The spec-only evaluation (`bench/eval/`) already showed Haiku writing much less valid SSPUR than Sonnet and Opus; here that cost multiplies through the agent loop.
+- **Data-format tasks are the weak spot for every model.** a9 (regex, JSON) and b8 (JSON merge) are SSPUR's worst tasks for Sonnet and Opus too. Python's `re`, `json` and dicts are known to the model; in SSPUR the agent must learn regex and JSON APIs and string escaping from a 1.8k-token spec, and b8's Python start uses plain dicts while SSPUR has an explicit JSON sum type.
+- **Sandbox friction is unchanged.** Opus a8 and the Sonnet b8 rerun each lost a call to a refused heredoc, then wrote a file and ran `edit --test FILE`. Haiku a9 also ran `find .` from the worktree root once (outside its directory; it found nothing relevant), and some agents wrote scratch files in `/tmp`.
+- **Compiler issues found:** the native build fails on b8's recursive JSON type (`field has incomplete type 'L_T2_Z_S_J'`) and falls back to the interpreter; the non-exhaustive-match hint suggests `JBool{..}`, which is not valid pattern syntax; `q list` puts every test on one line.
+
+### Caveats
+
+- One run per cell. Python's own totals moved by up to 24% between identical runs before, and Haiku varies far more (a6: 61 calls, then 8).
+- The new tasks have neutral sources but were written by the same model family as the language, and one model (Sonnet) ran them. The scale task is one task, generated and repetitive (44 copies of one domain template), which makes grep unusually effective for both sides.
+- The spec-fix totals mix rerun cells with first-run cells, and the rerun cells were chosen because they did badly, so they had room to improve on a second try.
+- Only SSPUR cells were rerun; Python cells were run once per model.
+- Totals include the harness's per-call context, which differs by model (19.1k for Haiku, about 26k for Sonnet and Opus); the net and tool I/O columns remove it.
 
 ## Results, run 4
 
@@ -245,6 +408,12 @@ python3 bench/agent/setup.py /tmp/sspur-agent-r1     # writes prompts.json (--v1
 python3 bench/agent/score.py run /tmp/sspur-agent-r1
 python3 bench/agent/tokens.py /tmp/sspur-agent-r1/agents.json /tmp/sspur-agent-r1/tokens.json
 python3 bench/agent/report.py /tmp/sspur-agent-r1
+# run 5: the new tasks and the large codebase
+python3 bench/agent/setup.py /tmp/sspur-agent-b --tmo --b
+python3 bench/agent/tasks/s1_shop/score_scale.py ref
+python3 bench/agent/tasks/s1_shop/setup_scale.py /tmp/sspur-agent-s
+python3 bench/agent/tasks/s1_shop/score_scale.py ssp FINAL.ssp   # or: score_scale.py py WORK_DIR
+BASE=19100 python3 bench/agent/tokens.py agents.json tokens.json   # BASE = the model's no-op context, for the net column
 ```
 
 `tokens.py` needs `tiktoken`. Set `LC_ALL=en_US.UTF-8` if Python fails with a locale error.

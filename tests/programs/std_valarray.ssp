@@ -1,0 +1,47 @@
+fn add(xs: List[F64], ys: List[F64]) -> List[F64]
+= xs.view.zip(ys.view).map(p => p.0 + p.1).to_list
+
+fn mul(xs: List[F64], ys: List[F64]) -> List[F64]
+= xs.view.zip(ys.view).map(p => p.0 * p.1).to_list
+
+fn axpy(a: F64, xs: List[F64], ys: List[F64]) -> List[F64]
+= xs.view.zip(ys.view).map(p => a * p.0 + p.1).to_list
+
+fn scale(k: Int, xs: List[Int]) -> List[Int]
+= xs.map(x => k * x)
+
+fn dot(xs: List[F64], ys: List[F64]) -> F64
+= xs.view.zip(ys.view).map(p => p.0 * p.1).fold(0.0, (acc, x) => acc + x)
+
+fn norm2(xs: List[F64]) -> F64
+= xs.map(x => x * x).sum.sqrt
+
+fn mask(xs: List[Int], keep: List[Bool]) -> List[Int]
+= xs.view.zip(keep.view).filter(p => p.1).map(p => p.0).to_list
+
+fn gather(xs: List[Int], idx: List[Int]) -> List[Int]
+= idx.map(i => xs[i])
+
+fn shift(xs: List[Int], k: Int) -> List[Int]
+= xs.drop(k).concat(range(0, k, 1).map(i => 0 * i))
+
+fn stride(xs: List[Int], start: Int, size: Int, step: Int) -> List[Int]
+= range(0, size, 1).map(i => xs[start + i * step])
+
+fn column(xs: List[Int], cols: Int, c: Int) -> List[Int]
+= mdspan(xs, [xs.len / cols, cols]).transpose.sub(c).to_list
+
+fn apply_abs(xs: List[F64]) -> List[F64]
+= xs.map(x => x.abs)
+
+fn compare(xs: List[Int], ys: List[Int]) -> List[Bool]
+= xs.view.zip(ys.view).map(p => p.0 < p.1).to_list
+
+test elementwise = add([1.0, 2.0, 3.0], [0.5, 0.25, 0.125]) == [1.5, 2.25, 3.125] and mul([1.0, 2.0, 3.0], [2.0, 2.0, 0.5]) == [2.0, 4.0, 1.5] and axpy(2.0, [1.0, 2.0], [10.0, 20.0]) == [12.0, 24.0]
+test broadcast = scale(3, [1, -2, 5]) == [3, -6, 15] and [1, 2, 3].map(x => x + 10) == [11, 12, 13]
+test reductions = [3, 9, -4, 2].sum == 10 and [3, 9, -4, 2].min == some(-4) and [3, 9, -4, 2].max == some(9) and dot([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]) == 32.0 and norm2([3.0, 4.0]) == 5.0
+test masks = mask([1, 2, 3, 4, 5], [true, false, true, false, true]) == [1, 3, 5] and [1, 2, 3, 4, 5].filter(x => x % 2 == 0) == [2, 4]
+test indirect = gather([10, 20, 30, 40], [3, 0, 0, 2]) == [40, 10, 10, 30]
+test shifts = shift([1, 2, 3, 4], 1) == [2, 3, 4, 0] and [1, 2, 3, 4].rotate(1) == [2, 3, 4, 1]
+test slices = stride([0, 1, 2, 3, 4, 5, 6, 7, 8], 1, 3, 3) == [1, 4, 7] and column([1, 2, 3, 4, 5, 6], 3, 1) == [2, 5] and [0, 1, 2, 3, 4].slice(1, 4) == [1, 2, 3]
+test apply = apply_abs([-1.5, 2.0, -0.0]) == [1.5, 2.0, 0.0] and compare([1, 5, 3], [2, 4, 3]) == [true, false, false]

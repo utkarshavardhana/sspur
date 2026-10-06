@@ -21,10 +21,10 @@ cl100k, so treat output counts as +-15%. Output is about 1% of the totals.
   read, wrote  cl100k tokens of all tool results the agent read, and of all tool inputs and
              text it wrote. Independent of the harness, and the cleanest language comparison.
 """
-import json, sys
+import json, os, sys
 import tiktoken
 
-BASE = 25_750  # no-op subagent context (system prompt + tools + one-line prompt), measured 2026-10-03
+BASE = int(os.environ.get("BASE", 25_750))  # no-op subagent context (system prompt + tools + one-line prompt), Sonnet, measured 2026-10-03; set BASE for other models
 ENC = tiktoken.get_encoding("cl100k_base")
 
 

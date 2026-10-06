@@ -1,0 +1,18 @@
+[
+ {
+  "lang": "sspur",
+  "task": "a9_events",
+  "passed": 15,
+  "total": 17,
+  "ok": false,
+  "msg": "FAIL  hidden_from_json: unhandled error: BadJson{text: \"[{\\\"ts\\\": 9, \\\"level\\\": \\\"INFO\\\", \\\"msg\\\": \\\"hi\\\"}]\"}"
+ },
+ {
+  "lang": "python",
+  "task": "a9_events",
+  "passed": 17,
+  "total": 17,
+  "ok": true,
+  "msg": ""
+ }
+]

@@ -1,0 +1,70 @@
+type InvErr = UnknownSku{sku: Str} | OutOfStock{sku: Str, wanted: Int, have: Int} | DuplicateSku{sku: Str}
+
+type Item = {sku: Str, name: Str, qty: Int where _ >= 0, price: Int where _ >= 0}
+
+fn add_item(inv: List[Item], item: Item) -> List[Item] ! fail[InvErr]
+= if find_item(inv, item.sku).is_some then raise DuplicateSku{sku: item.sku} else inv.push(item)
+
+fn describe(i: Item) -> Str
+= "{i.sku} {i.name} x{i.qty} @ {i.price}"
+
+fn find_item(inv: List[Item], sku: Str) -> Opt[Item]
+= inv.find(_.sku == sku)
+
+fn low_stock(inv: List[Item], threshold: Int) -> List[Str]
+= inv.filter(_.qty < threshold).map(_.sku).sort
+
+fn main() -> Unit ! log
+= log(report(sample()))
+
+fn remove_stock(inv: List[Item], sku: Str, n: Int where _ > 0) -> List[Item] ! fail[InvErr]
+= do
+  it = find_item(inv, sku).ok_or(UnknownSku{sku: sku})
+  if n > it.qty then raise OutOfStock{sku: sku, wanted: n, have: it.qty}
+  inv.map(i => if i.sku == sku then i with qty := i.qty - n else i)
+
+fn report(inv: List[Item]) -> Str
+= inv.map(describe).join("\n")
+
+fn restock(inv: List[Item], sku: Str, n: Int where _ > 0) -> List[Item] ! fail[InvErr]
+= if find_item(inv, sku).is_none then raise UnknownSku{sku: sku} else inv.map(i => if i.sku == sku then i with qty := i.qty + n else i)
+
+fn sample() -> List[Item]
+= [Item{sku: "c3", name: "cable", qty: 7, price: 12}, Item{sku: "b2", name: "bolt", qty: 40, price: 3}, Item{sku: "a1", name: "anchor", qty: 2, price: 250}]
+
+fn total_value(inv: List[Item]) -> Int
+= inv.map(i => i.qty * i.price).sum
+
+test add_item_appends = catch add_item(sample(), Item{sku: "d4", name: "drill", qty: 1, price: 99}).map(_.sku) == ["c3", "b2", "a1", "d4"]
+| _ => false
+
+test add_item_dup = catch add_item(sample(), Item{sku: "b2", name: "x", qty: 1, price: 1}).len == 0
+| DuplicateSku{sku} => sku == "b2"
+| _ => false
+
+test describe_one = describe(Item{sku: "x", name: "nut", qty: 1, price: 2}) == "x nut x1 @ 2"
+
+test low_stock_sorted = low_stock(sample(), 10) == ["a1", "c3"]
+
+test remove_stock_dec = catch remove_stock(sample(), "b2", 5).map(_.qty) == [7, 35, 2]
+| _ => false
+
+test remove_stock_exact = catch remove_stock(sample(), "a1", 2).map(_.qty) == [7, 40, 0]
+| _ => false
+
+test remove_stock_short = catch remove_stock(sample(), "a1", 3).len == 0
+| OutOfStock{sku, wanted, have} => sku == "a1" and wanted == 3 and have == 2
+| _ => false
+
+test remove_stock_unknown = catch remove_stock(sample(), "zz", 1).len == 0
+| UnknownSku{sku} => sku == "zz"
+| _ => false
+
+test restock_adds = catch find_item(restock(sample(), "a1", 3), "a1").map(_.qty) == some(5)
+| _ => false
+
+test restock_unknown = catch restock(sample(), "zz", 1).len == 0
+| UnknownSku{sku} => sku == "zz"
+| _ => false
+
+test total_value_sum = total_value(sample()) == 7 * 12 + 40 * 3 + 2 * 250

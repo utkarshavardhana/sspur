@@ -1,0 +1,50 @@
+fn fmt_pair(p: (Str, Int)) -> Str
+= "{p.0}={p.1}"
+
+fn longest_word(text: Str) -> Opt[Str]
+= words_of(text, []).sort_by(-_.len).first
+
+fn main() -> Unit ! log
+= log(summary("The cat and the hat. The end!", []))
+
+fn summary(text: Str, stop: List[Str]) -> Str
+= do
+  n = words_of(text, stop).len
+  d = word_freq(text, stop).len
+  "{n} words, {d} distinct, top: {top_line(text, 3, stop)}"
+
+fn top_k(text: Str, k: Int where _ >= 0, stop: List[Str]) -> List[(Str, Int)]
+= word_freq(text, stop).sort_by((-_.1, _.0)).take(k)
+
+fn top_line(text: Str, k: Int where _ >= 0, stop: List[Str]) -> Str
+= top_k(text, k, stop).map(fmt_pair).join(" ")
+
+fn word_freq(text: Str, stop: List[Str]) -> List[(Str, Int)]
+= words_of(text, stop).counts
+
+fn words_of(text: Str, stop: List[Str]) -> List[Str]
+= text.lower.words.filter(w => not stop.contains(w))
+
+test freq_basic = word_freq("a b a", []) == [("a", 2), ("b", 1)]
+
+test freq_stop = word_freq("a b a c", ["a"]) == [("b", 1), ("c", 1)]
+
+test longest_basic = longest_word("a Hello there") == some("hello")
+
+test longest_none = longest_word(" ... !") == none
+
+test longest_tie = longest_word("ab cd ef") == some("ab")
+
+test summary_basic = summary("b a b", []) == "3 words, 2 distinct, top: b=2 a=1"
+
+test summary_stop = summary("The cat and the hat", ["the", "and"]) == "2 words, 2 distinct, top: cat=1 hat=1"
+
+test top_line_stop = top_line("The cat the hat", 2, ["the"]) == "cat=1 hat=1"
+
+test top_one = top_k("x y y z", 1, []) == [("y", 2)]
+
+test top_stop = top_k("x y y z z z", 2, ["z"]) == [("y", 2), ("x", 1)]
+
+test top_ties = top_k("c b a b c a d", 4, []) == [("a", 2), ("b", 2), ("c", 2), ("d", 1)]
+
+test words_stop = words_of("The cat AND the hat", ["the", "and"]) == ["cat", "hat"]

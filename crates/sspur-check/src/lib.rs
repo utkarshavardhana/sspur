@@ -85,6 +85,11 @@ impl CheckOutput {
     }
 }
 
+/// A syntax error as a diagnostic, with a fix hint taken from the source when there is one.
+pub fn syntax_diag_in(src: &str, e: &SyntaxError) -> Diag {
+    Diag { hint: sspur_syntax::syntax_hint(src, e), ..syntax_diag(e) }
+}
+
 pub fn syntax_diag(e: &SyntaxError) -> Diag {
     Diag {
         code: e.code.to_string(),
@@ -433,6 +438,40 @@ fn suggest<'a>(name: &str, candidates: impl Iterator<Item = &'a String>) -> Opti
         .filter(|(d, c)| *d <= 2.max(name.len() / 3) && *d < c.len())
         .min()
         .map(|(_, c)| format!("did you mean '{c}'?"))
+}
+
+/// Methods from other languages, with the SSPUR spelling.
+fn method_alias(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "head" => "'.first' (an Opt)",
+        "tail" => "'.drop(1)'",
+        "length" | "size" | "count" => "'.len'",
+        "to_string" | "to_str" | "toString" | "string" => "'.str'",
+        "compare" | "cmp" | "compare_to" | "compareTo" | "localeCompare" => "'<', '==' and '>' (they order Str too), or 'sort_with(cmp)'",
+        "max_by" | "max_by_key" => "'.sort_by(key).last' (an Opt)",
+        "min_by" | "min_by_key" => "'.sort_by(key).first' (an Opt)",
+        "append" | "add" | "push_back" => "'.push(x)' for one element, '+' or '.concat(ys)' for a list",
+        "extend" => "'.concat(ys)' or '+'",
+        "includes" | "contains_key" | "has_key" => "'.contains(x)' on a List or Str, '.has(k)' on a Map",
+        "startswith" | "startsWith" => "'.starts_with'",
+        "endswith" | "endsWith" => "'.ends_with'",
+        "strip" | "trim_space" => "'.trim'",
+        "to_lower" | "lowercase" | "to_lowercase" | "toLowerCase" => "'.lower'",
+        "to_upper" | "uppercase" | "to_uppercase" | "toUpperCase" => "'.upper'",
+        "sorted" => "'.sort' or '.sort_by(key)'",
+        "reversed" => "'.reverse'",
+        "unwrap" | "unwrap_or" | "get_or" | "or_else" | "unwrap_or_default" => "'.or(default)', or match some(x) / none",
+        "split_whitespace" => "'.words'",
+        "sum_by" => "'.map(f).sum'",
+        "flatten" => "'.flat_map(x => x)'",
+        "each" | "for_each" | "forEach" => "a 'for x in xs' loop",
+        "nth" | "at" => "'.get(i)' (an Opt) or 'xs[i]'",
+        "index" | "find_index" | "position" => "'.index_of(x)' (an Opt)",
+        "parse" | "parse_int" | "to_i" => "'.to_int' (an Opt)",
+        "insert" | "set" => "'.put(k, v)' on a Map, '.add(x)' on a Set",
+        "entries" => "'.items'",
+        _ => return None,
+    })
 }
 
 fn irrefutable(p: &Pat) -> bool {
@@ -996,7 +1035,12 @@ impl Checker {
         let saved_clause = std::mem::replace(&mut self.clause_depth, 0);
         let saved_task = std::mem::replace(&mut self.task_depth, 0);
         let t = self.infer(&f.body, Some(&scheme.ret));
+        let before = self.diags.len();
         self.expect(&scheme.ret, &t, f.body.span);
+        if f.ret.is_none() && self.diags.len() > before {
+            let found = self.resolve(&t);
+            self.diags[before].hint = Some(format!("declare the return type: 'fn {}(..) -> {found}'", f.name));
+        }
         let frame = self.frames.pop().unwrap();
         let frame = self.norm_frame(frame);
         self.scopes.pop();
@@ -1236,7 +1280,17 @@ impl Checker {
     fn expect(&mut self, exp: &Type, act: &Type, span: Span) {
         if !self.unify(exp, act) {
             let (e, a) = (self.resolve(exp), self.resolve(act));
-            self.err("E_TYPE_MISMATCH", span, format!("expected {e}, found {a}"));
+            let (es, as_) = (e.to_string(), a.to_string());
+            let hint = match (es.as_str(), as_.as_str()) {
+                ("Str", "Int" | "F64" | "Bool" | "BigInt" | "Dec") => Some("convert with '.str', or interpolate: \"n={n}\"".to_string()),
+                ("F64", "Int") => Some("convert with '.to_f64'".to_string()),
+                ("Bool", o) if o.starts_with("Opt[") => Some("test an Opt with '.is_some' or '.is_none'".to_string()),
+                (x, o) if o == format!("Opt[{x}]") => Some("unwrap the Opt: '.or(default)', or match some(v) / none".to_string()),
+                (o, x) if o == format!("Opt[{x}]") => Some("wrap the value: 'some(x)'".to_string()),
+                (x, r) if r.starts_with(&format!("Res[{x},")) => Some("unwrap the Res with '.get' (needs fail[E]) or '.or(default)'".to_string()),
+                _ => None,
+            };
+            self.push_diag("E_TYPE_MISMATCH", "error", span, format!("expected {e}, found {a}"), hint, vec![]);
         }
     }
 
@@ -1397,8 +1451,16 @@ impl Checker {
             Some(s) => self.call_scheme(&s, name, Some((rt, recv.span)), args, span),
             None => {
                 let candidates: Vec<String> = self.methods.keys().filter(|(c, _)| *c == con).map(|(_, m)| m.clone()).collect();
-                let hint = suggest(name, candidates.iter());
-                self.push_diag("E_UNKNOWN_METHOD", "error", span, format!("no method '{name}' on {rr}"), hint, vec![]);
+                let fields: Vec<String> = match self.types.get(&con) {
+                    Some(TypeInfo { kind: TypeKind::Record(fs), .. }) => fs.iter().map(|(f, _)| f.clone()).collect(),
+                    _ => vec![],
+                };
+                let hint = method_alias(name)
+                    .map(|a| format!("write {a}"))
+                    .or_else(|| suggest(name, candidates.iter().chain(fields.iter())))
+                    .or_else(|| (!fields.is_empty()).then(|| format!("{con} has fields {}", fields.join(", "))));
+                let what = if fields.is_empty() { "method" } else { "field or method" };
+                self.push_diag("E_UNKNOWN_METHOD", "error", span, format!("no {what} '{name}' on {rr}"), hint, vec![]);
                 for a in args {
                     self.infer(a, None);
                 }
@@ -1787,10 +1849,15 @@ impl Checker {
             ExprKind::Match(s, arms) => {
                 let st = self.infer(s, None);
                 let out = exp.cloned().unwrap_or_else(|| self.fresh());
+                let before = self.diags.len();
                 self.check_arms(&st, arms, &out);
+                if arms.last().is_some_and(|a| matches!(a.body.kind, ExprKind::Match(..))) && self.diags[before..].iter().any(Diag::is_error) {
+                    let i = self.diags[before..].iter().position(Diag::is_error).unwrap() + before;
+                    self.diags[i].hint = Some("a match inside an arm takes every arm below it; move the inner match into a helper fn".into());
+                }
                 let missing = self.missing_cases(&st, arms);
                 if !missing.is_empty() {
-                    let arms_hint = missing.iter().map(|m| format!("| {m} => ?")).collect::<Vec<_>>().join(" ");
+                    let arms_hint = missing.iter().map(|m| format!("| {} => ?", m.strip_suffix("{..}").unwrap_or(m))).collect::<Vec<_>>().join(" ");
                     self.push_diag("E_NONEXHAUSTIVE", "error", e.span, format!("match does not cover: {}", missing.join(", ")), Some(format!("add {arms_hint}")), vec![]);
                 }
                 self.resolve(&out)
@@ -2057,7 +2124,19 @@ impl Checker {
             return Type::Fn(params, Box::new(ret), row);
         }
         let locals: Vec<String> = self.scopes.iter().flat_map(|s| s.keys().cloned()).collect();
-        let hint = suggest(n, locals.iter().chain(self.fns.keys()).chain(self.globals.keys()).chain(self.ctors.keys()));
+        let foreign = match n {
+            "True" | "False" | "None" => Some(format!("write '{}'", n.to_ascii_lowercase())),
+            "Some" | "Ok" | "Err" => Some(format!("write '{}(x)'", n.to_ascii_lowercase())),
+            "null" | "nil" | "Nil" | "Nothing" => Some("write 'none' (an Opt)".to_string()),
+            "Just" => Some("write 'some(x)'".to_string()),
+            "assert" | "assert_eq" | "expect" => Some("a test is a Bool expression: 'test t = f(1) == 2'".to_string()),
+            "print" | "println" | "puts" | "console" => Some("write 'log(s)' and declare '! log'".to_string()),
+            "throw" => Some("write 'raise Ctor{..}' and declare '! fail[E]'".to_string()),
+            "self" | "this" => Some("no 'self': a method is a fn whose first parameter is the receiver".to_string()),
+            _ if self.methods.keys().any(|(_, m)| m == n) => Some(format!("'{n}' is a method: write 'x.{n}' for '{n}(x)', and 'x.{n}(a)' for '{n}(x, a)'")),
+            _ => None,
+        };
+        let hint = foreign.or_else(|| suggest(n, locals.iter().chain(self.fns.keys()).chain(self.globals.keys()).chain(self.ctors.keys())));
         self.push_diag("E_UNKNOWN_NAME", "error", span, format!("unknown name '{n}'"), hint, vec![]);
         self.fresh()
     }

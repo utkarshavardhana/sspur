@@ -1,7 +1,7 @@
 use crate::{fingerprint, unique_tmp, Loaded};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
-use sspur_check::{check_skipping, syntax_diag, Diag};
+use sspur_check::{check_skipping, Diag};
 use sspur_hash::{hash_module_with, Resolution};
 use sspur_syntax::*;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -131,7 +131,7 @@ pub fn def_ranges(m: &Module, src: &str) -> Vec<(usize, u32, u32)> {
 /// codebase sharing the cache) are not checked again. The result is only good for validation:
 /// diagnostics, signatures and hashes are complete, expression tables are not.
 pub fn load_src_cached(src: String) -> Result<Loaded, Vec<Diag>> {
-    let module = parse(&src).map_err(|e| vec![syntax_diag(&e)])?;
+    let module = parse(&src).map_err(|e| vec![sspur_check::syntax_diag_in(&src, &e)])?;
     Ok(check_cached(src, module, None))
 }
 

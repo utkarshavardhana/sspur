@@ -264,7 +264,7 @@ fn init(file: Option<&String>, name: Option<&String>, json: bool) -> ExitCode {
     };
     let module = match sspur_syntax::parse(&src) {
         Ok(m) => m,
-        Err(e) => return fail_diags(&src, path, &[sspur_check::syntax_diag(&e)], false),
+        Err(e) => return fail_diags(&src, path, &[sspur_check::syntax_diag_in(&src, &e)], false),
     };
     let ops: Vec<Json> = module.defs.iter().map(|d| json!({"op": "add", "path": d.name(), "src": sspur_syntax::printer::print_def(d)})).collect();
     let n = ops.len();

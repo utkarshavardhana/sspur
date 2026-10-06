@@ -83,6 +83,20 @@ fn unknown_name_suggests() {
 }
 
 #[test]
+fn foreign_spellings_get_exact_hints() {
+    let hint = |src: &str| diags(src).into_iter().find(|d| d.severity == "error").and_then(|d| d.hint).unwrap_or_default();
+    assert_eq!(hint("fn f(xs: List[Int]) -> Int\n= len(xs)"), "'len' is a method: write 'x.len' for 'len(x)', and 'x.len(a)' for 'len(x, a)'");
+    assert_eq!(hint("fn f() -> Opt[Int]\n= None"), "write 'none'");
+    assert_eq!(hint("fn f() -> Opt[Int]\n= Some(1)"), "write 'some(x)'");
+    assert_eq!(hint("fn f(xs: List[Int]) -> Opt[Int]\n= xs.head"), "write '.first' (an Opt)");
+    assert_eq!(hint("type P = {qty: Int, name: Str}\nfn f(p: P) -> Int\n= p.quantity"), "P has fields qty, name");
+    assert_eq!(hint("fn f(n: Int) -> Str\n= \"n=\" + n"), "convert with '.str', or interpolate: \"n={n}\"");
+    assert_eq!(hint("fn f(n: Int)\n= n + 1"), "declare the return type: 'fn f(..) -> Int'");
+    assert_eq!(hint("type E = A{x: Int} | B{y: Int}\nfn f(e: E) -> Int\n= match e\n  | A{x} => x"), "add | B => ?");
+    assert!(hint("fn f(e: Opt[Int], b: Bool) -> Int\n= match e\n  | some(x) => match b\n    | true => x\n    | false => 0\n  | none => 1").contains("helper fn"));
+}
+
+#[test]
 fn records_and_fields() {
     let ok = "type P = {x: Int, y: Int}\nfn f() -> Int\n= do\n  p = {x: 1, y: 2}\n  p.x + p.y";
     assert!(codes(ok).is_empty(), "{:?}", diags(ok));

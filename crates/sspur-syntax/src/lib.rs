@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod ffi;
+pub mod hints;
 pub mod lexer;
 pub mod link;
 pub mod parser;
@@ -8,6 +9,7 @@ pub mod rename;
 pub mod visit;
 
 pub use ast::*;
+pub use hints::{parse_all, syntax_hint};
 pub use parser::{parse, parse_expr};
 pub use printer::print_module;
 

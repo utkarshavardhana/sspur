@@ -256,7 +256,7 @@ fn join_texts(mut parts: Vec<(u8, String, String)>) -> String {
 }
 
 pub fn load_src(src: String) -> Result<Loaded, Vec<Diag>> {
-    let module = parse(&src).map_err(|e| vec![syntax_diag(&e)])?;
+    let module = parse(&src).map_err(|e| vec![sspur_check::syntax_diag_in(&src, &e)])?;
     Ok(check_full(src, module))
 }
 
@@ -1238,7 +1238,7 @@ fn str_field<'a>(op: &'a Json, key: &str) -> Result<&'a str, OpErr> {
 }
 
 fn parse_one(src: &str, path: &str) -> Result<Def, OpErr> {
-    let m = parse(src).map_err(|e| (e.code.to_string(), format!("in src for '{path}': {}", e.msg), None))?;
+    let m = parse(src).map_err(|e| (e.code.to_string(), format!("in src for '{path}': {}", e.msg), sspur_syntax::syntax_hint(src, &e)))?;
     if m.defs.len() != 1 {
         return op_err("E_OP_SRC", format!("src for '{path}' must contain exactly one definition, found {}", m.defs.len()));
     }

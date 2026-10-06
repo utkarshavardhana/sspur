@@ -5,6 +5,9 @@ use sspur_store::{Change, Store, Tx, TxResult};
 use sspur_syntax::{line_col, printer::print_def};
 use std::collections::BTreeSet;
 
+/// Ends a rejected edit: weak models otherwise retry one definition per call.
+pub const RESEND: &str = "fix these and resend the whole edit in one call";
+
 pub fn diag_lines(src: &str, diags: &[Diag], only: Option<&BTreeSet<String>>) -> Vec<String> {
     let defs: Vec<(String, u32)> = sspur_syntax::parse(src).map(|m| m.defs.iter().map(|d| (d.name().to_string(), d.span().start)).collect()).unwrap_or_default();
     let mut out = Vec::new();
@@ -65,6 +68,9 @@ fn tx_text_for(r: &TxResult, named: Option<&BTreeSet<String>>) -> String {
             && let Some(b) = r.rebase.as_ref().and_then(|b| b["base"].as_str()) {
                 lines.push(format!("HEAD is now {b}"));
             }
+        if r.conflicts.is_empty() && !errors.is_empty() {
+            lines.push(RESEND.to_string());
+        }
         return lines.join("\n");
     }
     let shown: Vec<&Change> = r.changes.iter().filter(|c| named.is_none_or(|n| c.old.is_none() || c.new.is_none() || c.renamed_from.is_some() || n.contains(&c.path))).collect();
@@ -114,9 +120,17 @@ pub fn edit_ops(store: &Store, input: &str) -> Result<Vec<Json>, String> {
         }
         body.push('\n');
     }
-    let module = sspur_syntax::parse(&body).map_err(|e| {
-        let (l, c) = line_col(&body, e.span.start);
-        format!("rejected, nothing changed\ninput:{l}:{c} {} {}", e.code, e.msg)
+    let module = sspur_syntax::parse_all(&body).map_err(|errs| {
+        let mut lines = vec!["rejected, nothing changed".to_string()];
+        for e in &errs {
+            let (l, c) = line_col(&body, e.span.start);
+            lines.push(format!("input:{l}:{c} {} {}", e.code, e.msg));
+            if let Some(h) = sspur_syntax::syntax_hint(&body, e) {
+                lines.push(format!("  hint: {h}"));
+            }
+        }
+        lines.push(RESEND.to_string());
+        lines.join("\n")
     })?;
     if module.defs.is_empty() && renames.is_empty() && removes.is_empty() {
         return Err("nothing to edit: give definitions, 'rename OLD NEW', or 'remove NAME'".into());

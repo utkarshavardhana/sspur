@@ -56,4 +56,4 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 `./sspur add ../lib|URL@tag`. `pub` exports; use `lib.f(x)`, `lib.T`, `use lib.{f, T}`; callers declare `fail[lib.E]`.
 
 ## CLI
-`./sspur src`, `q body|sig|callers NAME`. `./sspur edit --test -e '<defs>'` (all defs in one single-quoted multi-line argument) adds or replaces each definition by name (`rename A B`, `remove NAME` lines first), atomically, then runs every test. Put all changes in one edit. Or save them to FILE: `./sspur edit --test FILE`. On `E_CONFLICT` read theirs, merge, resend. `./sspur test|check`.
+`./sspur src`, `q find|grep|body|callers X`. `./sspur edit --test -e '<defs>'` (all defs in one single-quoted multi-line argument) adds or replaces each definition by name (`rename A B`, `remove NAME` lines first), atomically, then runs every test. Put all changes in one edit. Or save them to FILE: `./sspur edit --test FILE`. On `E_CONFLICT` merge theirs and resend. `./sspur test|check`.

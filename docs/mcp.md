@@ -58,7 +58,7 @@ Every tool returns compact text, the same as the CLI (`json: true` on `query` an
 |---|---|---|
 | `spec` | `sspur spec [--full]` | The compact language spec (about 1.8k tokens). Read it once first |
 | `src` | `sspur src` | The whole codebase as source; for small codebases |
-| `query` | `sspur q QUERY TARGET` | `list`, `find 'a\|b*'`, `grep TEXT`, `body A,B`, `sig`, `callers`, `callees`, `effects`, `impact`, `pack`, `why`, `holes`, `diag`, `log` |
+| `query` | `sspur q QUERY TARGET` | `list`, `find 'a\|b*'`, `grep TEXT`, `body A,B`, `sig`, `callers`, `callees`, `effects`, `impact`, `pack A,B`, `why`, `holes`, `diag`, `log` |
 | `edit` | `sspur edit --test -e SRC` | Add or replace definitions by name (plus `rename A B`, `remove A` lines), atomically; `test: true` runs every test after it |
 | `test` | `sspur test` | Run the tests: failures and a count |
 | `check` | `sspur check` | Typecheck and list diagnostics |

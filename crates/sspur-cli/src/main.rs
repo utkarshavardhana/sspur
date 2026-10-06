@@ -337,7 +337,15 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         sspur_native::set_program_args(args.pos.iter().skip(2).cloned().collect());
     }
     let json = args.has("--json");
-    let (label, text, loaded) = match args.pos.get(1) {
+    let manifest_src = if args.pos.get(1).is_none() && cwd_store().is_none() {
+        std::env::current_dir().ok().and_then(|d| sspur_store::pkg::find_root(&d)).and_then(|r| {
+            let m = sspur_store::pkg::Manifest::read(&r).ok()??;
+            Some(r.join(m.src.unwrap_or_else(|| "main.ssp".into())).to_string_lossy().into_owned())
+        })
+    } else {
+        None
+    };
+    let (label, text, loaded) = match args.pos.get(1).or(manifest_src.as_ref()) {
         Some(path) => match std::fs::read_to_string(path) {
             Ok(src) if cmd == "fmt" => (path.clone(), src.clone(), sspur_syntax::parse(&src).map(|module| Loaded { own: module.defs.len(), src, module, check: Default::default(), hashes: Default::default(), partial: true, pkgs: vec![], exports: Default::default() }).map_err(|e| vec![sspur_check::syntax_diag(&e)])),
             Ok(src) => match file_env(path) {

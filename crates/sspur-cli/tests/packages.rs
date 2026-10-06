@@ -302,3 +302,11 @@ fn the_packages_example_builds() {
     assert_eq!(w.ok("app", &["run", "main.ssp"]), "PACKAGES\nThe Quick Brown \n(empty)\n3 words");
     assert_eq!(w.ok("textutils", &["test", "lib.ssp"]), "3 passed, 0 failed");
 }
+
+#[test]
+fn commands_default_to_the_manifest_source() {
+    let app = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/packages/app");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sspur")).arg("test").arg("--interp").current_dir(&app).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success() && stdout.contains("passed, 0 failed"), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+}

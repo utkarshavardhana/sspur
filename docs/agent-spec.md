@@ -31,7 +31,6 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 - `match e` + arms `| Pat => e`, `| Pat if c => e`. Exhaustive patterns: `_`, name, literal, tuple, `Ctor Ctor{f, g: pat} some(p) none ok(p) err(p)`; bare `Ctor` ignores fields. A nested `match` takes the arms below it; use a helper fn.
 - `raise Ctor{..}`; `catch e` + arms; arms have the type of `e`, so a test compares inside: `catch f(x) == [] | Missing{sku} => .. | _ => false`. Covering every variant removes `fail[E]`.
 - `effect ask() -> Int` (callers `! ask`); `handle e` + `| ask() => resume(21)` (once; `| return(r) =>`). `yield(x)` (`! yield[T]`) makes a generator for `for`.
-- `! conc`: `par(a, b)` gives `(a, b)`; `for i in par(xs)`; `atomic(0)`, `chan()`.
 - `Item{sku: "a", qty: 1}`, `Item{sku, qty}`; `x with qty := 2, a.b := 3, xs[0] := v`.
 - Lambdas `x => e`, `(a, b) => e` (one expression). `_` makes the innermost call argument a lambda: `sort_by((-_.n, _.name))`; in `f(g(_.a))` it binds inside `g`, so write `x => f(g(x.a))`.
 - `"n={n} {x.name}"` interpolates, so a literal `{` is `\{` (`"\{\"a\":1}"`). Escapes: `\n \t \" \\ \{`, so regex `\d` is `"\\d"`. `+` joins Str and List.
@@ -46,14 +45,8 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 - `big(n)`, `decimal("1.25")` (Opt); `regex(p)` (Res) `.is_match(s) captures(s)` (Opt of groups, 0 first) `find_all replace(s, "$1")`; `date(y, m, d)` (Opt); `json.encode(v) json.decode[T](s)` (Res).
 - `! fs`: `read_file(p) write_file(p, s)` (`Res[_, Str]`); `! io`: `read_line`; `! time`: `now`; `! env`: `env_var`; `! proc`: `run_cmd`.
 
-## Services
-`store S = table[K, V]`; `db.get(S, k)` (Opt) `db.scan(S)` need `! db.read[S]`, `db.put(S, k, v) db.del` need `! db.write[S]`. `svc name` + `ep get "/items/{id}" = fname` (`{id}` binds `id`, another param is the JSON body, `none` is 404). Changing V beyond new `Opt` fields or variants needs `fn migrate_S(old: OldV) -> V`.
-
-## C, sys, bare, GPU
-`extern fn cbrt(x: F64) -> F64 ! ffi from "m"`, `profile sys`, `profile bare`, `kernel fn k(..) @grid(n, 64)`: see `./sspur spec --full`.
-
-## Packages
-`./sspur add ../lib|URL@tag`. `pub` exports; use `lib.f(x)`, `lib.T`, `use lib.{f, T}`; callers declare `fail[lib.E]`.
+## Elsewhere
+`./sspur spec --full` covers concurrency (`! conc`, `par`, `atomic`, `chan`), services (`store`, `db.get`, `svc`, `ep`, `migrate_S`), packages (`./sspur add`, `pub`, `use lib.{f}`) and C, sys, bare and GPU (`extern fn`, `profile`, `kernel fn`).
 
 ## CLI
-`./sspur src`, `q find|grep|body|callers X`. `./sspur edit --test -e '<defs>'` (all defs in one single-quoted multi-line argument) adds or replaces each definition by name (`rename A B`, `remove NAME` lines first), atomically, then runs every test. Put all changes in one edit. Or save them to FILE: `./sspur edit --test FILE`. On `E_CONFLICT` merge theirs and resend. `./sspur test|check`.
+`./sspur src`, `q find|grep|body|pack|callers X` (body and pack take `A,B`). `./sspur edit --test -e '<defs>'` (all defs in one single-quoted multi-line argument) adds or replaces each definition by name (`rename A B`, `remove NAME` lines first), atomically, then runs every test. Put all changes in one edit. Or save them to FILE: `./sspur edit --test FILE`. On `E_CONFLICT` merge theirs and resend. `./sspur test|check`.

@@ -47,7 +47,7 @@ Any client that speaks MCP over stdio works: run `sspur mcp [--dir PATH]` as the
 
 ```
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"spec","arguments":{}}}' | sspur mcp
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"start","arguments":{}}}' | sspur mcp
 ```
 
 ## Tools
@@ -56,7 +56,8 @@ Every tool returns compact text, the same as the CLI (`json: true` on `query` an
 
 | Tool | CLI | What it does |
 |---|---|---|
-| `spec` | `sspur spec [--full]` | The compact language spec (about 1.8k tokens). Read it once first |
+| `start` | `sspur start [NAME...]` | Call it first, with `names` from the task (`"a,b,c"`): the compact spec, then the codebase (all of it if small; otherwise counts, `pack` of the named definitions and `find` of other words) |
+| `spec` | `sspur spec [--full]` | The compact language spec alone (about 1.6k tokens) |
 | `src` | `sspur src` | The whole codebase as source; for small codebases |
 | `query` | `sspur q QUERY TARGET` | `list`, `find 'a\|b*'`, `grep TEXT`, `body A,B`, `sig`, `callers`, `callees`, `effects`, `impact`, `pack A,B`, `why`, `holes`, `diag`, `log` |
 | `edit` | `sspur edit --test -e SRC` | Add or replace definitions by name (plus `rename A B`, `remove A` lines), atomically; `test: true` runs every test after it |
@@ -68,4 +69,4 @@ Every tool returns compact text, the same as the CLI (`json: true` on `query` an
 
 The older tool names (`sspur_edit`, `sspur_query`, `sspur_export`, ...) still work.
 
-The workflow the server's instructions describe: `spec` once, read with `src` or `query`, then put every change in one `edit` with `test: true`. A rejected edit changes nothing and lists each error with a hint (`hint: no '&&' operator: write 'and'`), ending with `fix these and resend the whole edit in one call`. `verify` (Z3 proofs) and `deploy local` are CLI only.
+The workflow the server's instructions describe: `start` first (the spec and the code the task names, in one call), more `query` only if needed, then every change in one `edit` with `test: true`. The instructions themselves are short (825 characters, about 210 tokens) and do not carry the spec: Claude Code cuts server instructions at 2,048 characters (checked with Claude Code 2.1.288; instructions with the spec appended, 5.8k characters, were cut mid-sentence), and a spec that is silently cut is worse than one call to `start`. A rejected edit changes nothing and lists each error with a hint (`hint: no '&&' operator: write 'and'`), ending with `fix these and resend the whole edit in one call`. `verify` (Z3 proofs) and `deploy local` are CLI only.

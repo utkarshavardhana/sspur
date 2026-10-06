@@ -1,10 +1,11 @@
 """Create fresh work directories and print one agent prompt per (language, task).
 
-  python3 setup.py <work_root> [--v1] [--tmo] [--new] [--b]   -> <work_root>/{sspur,python}/<task>/ and <work_root>/prompts.json
+  python3 setup.py <work_root> [--v1] [--r7] [--tmo] [--new] [--b]   -> <work_root>/{sspur,python}/<task>/ and <work_root>/prompts.json
 
 --v1 uses the SSPUR instructions of the first run (q + apply tx.json); the default uses `edit`.
 --new sets up only the tasks marked "new" (a9, outside the 8-task comparison).
 --b sets up only the independently specified tasks (b1 to b8, "set": "b").
+--r7 keeps the first step of runs 2 to 7 (`./sspur spec && ./sspur src`) instead of `./sspur start` (run 8 on).
 --tmo (run 4 on) runs ./sspur and pytest under a 300 s timeout ($TMO, default ~/code/sspur-tools/tmo).
 """
 import json, os, shutil, subprocess, sys
@@ -32,16 +33,18 @@ SSPUR_INTRO_V1 = """You are working on a small codebase written in SSPUR, a new 
 SSPUR_INTRO = """You are working on a small codebase written in SSPUR, a new programming language you have not seen before. Working directory: {dir}
 
 - The code lives in a store in .sspur/, and the CLI is ./sspur (run commands as `cd {dir} && ./sspur ...`).
-- Start with `cd {dir} && ./sspur spec && ./sspur src`: the language reference (the only documentation) and the whole codebase.
+- Start with `cd {dir} && ./sspur start`: the language reference (the only documentation) and the whole codebase, in one command.
 - Change code only with `./sspur edit` as the reference describes. `./sspur q`, `./sspur test` and `./sspur check` are also available.
 - Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."""
+
+R7_START = "./sspur spec && ./sspur src`: the language reference (the only documentation) and the whole codebase."
 
 PY_INTRO = """You are working on a small Python 3.9 codebase. Working directory: {dir}
 
 - All code is in app.py, with its tests at the bottom. Run them with `cd {dir} && LC_ALL=en_US.UTF-8 python3 -m pytest -q app.py`."""
 
 
-def main(root, v1=False, tmo=False, new=False, b=False):
+def main(root, v1=False, tmo=False, new=False, b=False, r7=False):
     tasks = [t for t in json.load(open(os.path.join(HERE, "tasks.json"))) if t.get("new", False) == new and (t.get("set", "a") == "b") == b]
     prompts = []
     for lang in ("sspur", "python"):
@@ -54,7 +57,7 @@ def main(root, v1=False, tmo=False, new=False, b=False):
                 shutil.copy(src, os.path.join(d, "start.ssp"))
                 subprocess.run([SSPUR, "init", "start.ssp"], cwd=d, check=True, capture_output=True)
                 os.remove(os.path.join(d, "start.ssp"))
-                intro = (SSPUR_INTRO_V1 if v1 else SSPUR_INTRO).format(dir=d)
+                intro = (SSPUR_INTRO_V1 if v1 else SSPUR_INTRO.replace("./sspur start`: the language reference (the only documentation) and the whole codebase, in one command.", R7_START) if r7 else SSPUR_INTRO).format(dir=d)
                 if tmo:
                     w = os.path.join(d, "sspur")
                     open(w, "w").write(f'#!/bin/sh\nexec {TMO} 300 {SSPUR} "$@"\n')
@@ -75,4 +78,4 @@ def main(root, v1=False, tmo=False, new=False, b=False):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], "--v1" in sys.argv[2:], "--tmo" in sys.argv[2:], "--new" in sys.argv[2:], "--b" in sys.argv[2:])
+    main(sys.argv[1], "--v1" in sys.argv[2:], "--tmo" in sys.argv[2:], "--new" in sys.argv[2:], "--b" in sys.argv[2:], "--r7" in sys.argv[2:])

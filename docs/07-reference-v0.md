@@ -641,3 +641,5 @@ Queries (`sspur q <query> [target] [--budget N]`, or the MCP tool `query`; see `
 | `why X` | X's provenance and edit history |
 | `impact X` | Everything that depends on X, including tests |
 | `holes`, `diag`, `log` | Open holes, all diagnostics, or the edit history |
+
+Reading the spec and the code in one call: `sspur start [NAME|PATTERN...]` (the MCP tool `start`, with `names`) prints the agent spec (`docs/agent-spec.md`), then the codebase: all of it when the source is at most 12,000 bytes, otherwise the counts per kind, `q pack` of the arguments that name a definition and `q find` of the others. `sspur spec [--full] [src] [QUERY TARGET...]` prints the spec (or this reference) followed by `src` and the given queries, for example `sspur spec find 'ship|tax' pack money,tax_rate`; `list`, `holes`, `diag` and `log` take no target there.

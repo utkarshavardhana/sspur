@@ -5,20 +5,18 @@ description: Write, read and change SSPUR code (the AI-native language whose cod
 
 # Working with SSPUR
 
-SSPUR code lives in a content-addressed store (`.sspur/`), not in files you edit. You read it with queries and change it with atomic, typechecked edits. The language is new to you: learn it from `sspur spec`, not from other languages.
+SSPUR code lives in a content-addressed store (`.sspur/`), not in files you edit. You read it with queries and change it with atomic, typechecked edits. The language is new to you: learn it from its spec (`sspur start` prints it), not from other languages.
 
-Use the `sspur` MCP tools when they are available (`mcp__sspur__spec`, `query`, `edit`, `test`, ...); otherwise the CLI below. They do the same thing.
+Use the `sspur` MCP tools when they are available (`mcp__sspur__start`, `query`, `edit`, `test`, ...); otherwise the CLI below. They do the same thing.
 
 ## Workflow
 
-1. **Learn the language once.** `sspur spec` (about 1.8k tokens). Read it fully before writing any code. `sspur spec --full` is the long reference; open it only for something the spec points to (C FFI, GPU, bare metal, regex details).
-2. **Find the code.**
+1. **Learn the language and find the code in one call.** `sspur start NAME...` (MCP: the `start` tool with `names`), passing the definition names the task mentions. It prints the spec (about 1.6k tokens; read it fully before writing any code), then the codebase: all of it if it is small, otherwise counts per kind, `q pack` of each NAME (the definition, what it uses, its tests and its callers) and `q find` of other words. `sspur spec --full` is the long reference; open it only for what the spec points to (services, packages, concurrency, C FFI, GPU, bare metal).
    - No `.sspur/` yet but a `.ssp` file: `sspur init file.ssp` imports it. With neither, the first `edit` creates the store.
-   - Small codebase: `sspur src` prints all of it.
-   - Large codebase (check with `sspur q list | head`, which starts with counts per kind): don't print everything. Use
-     - `sspur q find 'ship|tax_*'` for names with their signatures,
-     - `sspur q grep TEXT` for definitions whose source contains TEXT, with those lines (this is how to find callers to update),
-     - `sspur q body A,B`, `q callers NAME`, `q pack NAME` (a definition with what it uses, its tests and its callers).
+2. **Search more only if you need to.** On a large codebase, don't print everything (`src`). Use
+   - `sspur q find 'ship|tax_*'` for names with their signatures,
+   - `sspur q grep TEXT` for definitions whose source contains TEXT, with those lines (this is how to find callers to update),
+   - `sspur q body A,B`, `q callers NAME`, `q pack A,B`.
 3. **Make every change in one edit.** Write all new and changed definitions, and new tests, in a single call:
    ```
    sspur edit --test -e 'fn f(x: Int) -> Int

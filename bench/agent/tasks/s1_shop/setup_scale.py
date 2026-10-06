@@ -1,6 +1,6 @@
 """Create the two work directories for the large-codebase task and write their prompts.
 
-  python3 setup_scale.py <work_root>   -> <work_root>/{sspur,python}/s1_shop/ and <work_root>/prompts.json
+  python3 setup_scale.py <work_root> [--r7]   -> <work_root>/{sspur,python}/s1_shop/ and <work_root>/prompts.json
 
 ./sspur and pytest run under a 300 s timeout ($TMO, default ~/code/sspur-tools/tmo), as in run 4.
 """
@@ -26,10 +26,15 @@ IFACE = {
 SSPUR_INTRO = """You are working on a large codebase written in SSPUR, a new programming language you have not seen before. Working directory: {dir}
 
 - The code lives in a store in .sspur/, and the CLI is ./sspur (run commands as `cd {dir} && ./sspur ...`; ./sspur runs under a 300 s timeout).
-- Start with `cd {dir} && ./sspur spec`: the language reference (the only documentation).
-- The codebase has about 1,100 definitions (31k tokens of source), so don't print all of it. Find what you need with `./sspur q find 'WORD|OTHER'` (matching names with their signatures), `./sspur q grep TEXT` (definitions whose source contains TEXT, with those lines), `./sspur q body A,B`, `./sspur q callers NAME` and `./sspur q pack A,B,C` (each definition with the signatures it uses, its tests and its callers, several at a time).
+- Start with `cd {dir} && ./sspur start NAME...`, passing the names of the definitions and types the task mentions. In one command it prints the language reference (the only documentation), the size of the codebase and `q pack` of those names (each definition with the signatures it uses, its tests and its callers).
+- The codebase has about 1,100 definitions (31k tokens of source), so don't print all of it. If you need more, find it with `./sspur q find 'WORD|OTHER'` (matching names with their signatures), `./sspur q grep TEXT` (definitions whose source contains TEXT, with those lines), `./sspur q body A,B`, `./sspur q callers NAME` and `./sspur q pack A,B,C` (each definition with the signatures it uses, its tests and its callers, several at a time).
 - Change code only with `./sspur edit` as the reference describes. `./sspur test` and `./sspur check` are also available.
 - Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."""
+
+# Runs 5 to 7 (--r7): the spec alone first, then searches.
+SSPUR_INTRO_R7 = SSPUR_INTRO.split("\n- Start with")[0] + """
+- Start with `cd {dir} && ./sspur spec`: the language reference (the only documentation).
+- The codebase has about 1,100 definitions (31k tokens of source), so don't print all of it. Find what you need with""" + SSPUR_INTRO.split("If you need more, find it with", 1)[1]
 
 PY_INTRO = """You are working on a large Python 3.9 codebase. Working directory: {dir}
 
@@ -46,7 +51,7 @@ Required interface (hidden tests call exactly these names): {iface}
 Do not look at, list, or search any directory other than {dir}. When every step is done and the tests pass, reply with the single word DONE."""
 
 
-def main(root):
+def main(root, r7=False):
     gen = tempfile.mkdtemp()
     subprocess.run([sys.executable, os.path.join(HERE, "gen.py"), gen], check=True, capture_output=True)
     prompts = []
@@ -61,7 +66,7 @@ def main(root):
             w = os.path.join(d, "sspur")
             open(w, "w").write(f'#!/bin/sh\nexec {TMO} 300 {SSPUR} "$@"\n')
             os.chmod(w, 0o755)
-            intro = SSPUR_INTRO.format(dir=d)
+            intro = (SSPUR_INTRO_R7 if r7 else SSPUR_INTRO).format(dir=d)
         else:
             shutil.copytree(os.path.join(gen, "py", "shop"), os.path.join(d, "shop"))
             shutil.copytree(os.path.join(gen, "py", "tests"), os.path.join(d, "tests"))
@@ -73,4 +78,4 @@ def main(root):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], "--r7" in sys.argv[2:])

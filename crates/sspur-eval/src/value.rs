@@ -163,6 +163,10 @@ impl Ord for Value {
             (Float(a), Float(b)) => canon(*a).total_cmp(&canon(*b)),
             (Str(a), Str(b)) => a.cmp(b),
             (List(a), List(b)) | (Tuple(a), Tuple(b)) => a.iter().cmp(b.iter()),
+            (Record(n1, a), Record(n2, b)) if &**n1 == "#Ratio" && &**n2 == "#Ratio" => match (&a[0].1, &a[1].1, &b[0].1, &b[1].1) {
+                (Big(an), Big(ad), Big(bn), Big(bd)) => sspur_native::bigint::ratio_cmp(an, ad, bn, bd),
+                _ => cmp_fields(a, b),
+            },
             (Record(n1, a), Record(n2, b)) => n1.cmp(n2).then_with(|| cmp_fields(a, b)),
             (Variant(n1, a), Variant(n2, b)) => n1.cmp(n2).then_with(|| match (a, b) {
                 (Some(a), Some(b)) => cmp_fields(a, b),
@@ -254,6 +258,10 @@ impl fmt::Display for Value {
             Value::List(xs) => write_seq(f, "[", "]", xs),
             Value::Tuple(xs) => write_seq(f, "(", ")", xs),
             Value::Record(n, fs) if &**n == "#File" => write!(f, "File({})", Quoted(&fs[1].1)),
+            Value::Record(n, fs) if &**n == "#Ratio" => match (&fs[0].1, &fs[1].1) {
+                (Value::Big(a), Value::Big(b)) => write!(f, "{}", sspur_native::bigint::ratio_str(a, b)),
+                _ => write_fields(f, fs),
+            },
             Value::Record(n, fs) => {
                 write!(f, "{}", sspur_syntax::display_name(n.trim_start_matches('#')))?;
                 write_fields(f, fs)

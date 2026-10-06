@@ -8,6 +8,7 @@ mod sched;
 mod stdlib;
 mod stdbig;
 mod stdcx;
+mod stdratio;
 mod stdfile;
 mod stdflat;
 mod stdre;

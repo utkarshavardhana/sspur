@@ -350,6 +350,13 @@ impl Interp {
                 let (re, im) = (self.generate(&f_ty, rng, opts, depth)?, self.generate(&f_ty, rng, opts, depth)?);
                 Value::Record("#Complex".into(), Rc::new(vec![("re".into(), re), ("im".into(), im)]))
             }
+            "Ratio" if !self.types.contains_key(name) => {
+                let int_ty = Ty::Named { name: "Int".into(), args: vec![], span: Span::default() };
+                let (Value::Int(n), Value::Int(d)) = (self.generate(&int_ty, rng, opts, depth)?, self.generate(&int_ty, rng, opts, depth)?) else { return None };
+                let d = if d == 0 { 1 } else { d };
+                let (n, d) = sspur_native::bigint::ratio_norm(&sspur_native::bigint::Big::from_i64(n), &sspur_native::bigint::Big::from_i64(d)).ok()?;
+                crate::stdratio::value(n, d)
+            }
             "Rng" if !self.types.contains_key(name) => {
                 let int_ty = Ty::Named { name: "Int".into(), args: vec![], span: Span::default() };
                 let (Value::Int(a), Value::Int(b)) = (self.generate(&int_ty, rng, opts, depth)?, self.generate(&int_ty, rng, opts, depth)?) else { return None };

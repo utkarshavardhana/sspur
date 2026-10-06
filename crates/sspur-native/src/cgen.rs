@@ -21,6 +21,7 @@ mod simd;
 mod split;
 mod stdlib;
 mod stdcx;
+mod stdratio;
 mod stdfile;
 mod stdflat;
 mod stdrng;
@@ -1952,6 +1953,10 @@ impl<'a> Cx<'a> {
                 }
                 body.push_str("return 0;");
             }
+            Type::Con(n, _) if n == "#Ratio" => {
+                self.std("ratio");
+                body.push_str("return ss_rat_cmp((SRat){a.num, a.den}, (SRat){b.num, b.den});");
+            }
             Type::Con(n, a) if self.layouts.records.contains_key(n) => {
                 for (f, ft) in self.layouts.record_fields(n, a).unwrap() {
                     let ec = self.helper_cmp(&ft)?;
@@ -3105,6 +3110,10 @@ impl<'a> Cx<'a> {
                 let e = self.helper_show(&Type::con("Str"))?;
                 format!("sb_put(b, \"File(\", 5); {e}(b, v.path, 1); sb_put(b, \")\", 1);")
             }
+            Type::Con(n, _) if n == "#Ratio" => {
+                self.std("ratio");
+                "(void)q; ss_rat_put(b, (SRat){v.num, v.den});".into()
+            }
             Type::Con(n, a) if self.layouts.records.contains_key(n) => {
                 let mut s = lit(&format!("{}{{", sspur_syntax::display_name(n.trim_start_matches('#'))));
                 for (i, (f, ft)) in self.layouts.record_fields(n, a).unwrap().iter().enumerate() {
@@ -3725,6 +3734,9 @@ impl<'a> Cx<'a> {
         }
         if matches!(&rt, Type::Con(n, _) if n == "#Rng") {
             return self.rng_method(&r, name, args, t);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "#Ratio") {
+            return self.ratio_method(&r, name, args);
         }
         if matches!(&rt, Type::Con(n, _) if n == "#Complex") {
             return self.cx_method(&r, name, args);

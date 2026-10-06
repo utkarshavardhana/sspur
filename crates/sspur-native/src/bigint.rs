@@ -216,7 +216,7 @@ impl Big {
         Ok((norm(self.neg != o.neg, q), norm(self.neg, r)))
     }
 
-    fn bits(&self) -> u64 {
+    pub fn bits(&self) -> u64 {
         match self.mag.last() {
             None => 0,
             Some(top) => 32 * (self.mag.len() as u64 - 1) + u64::from(32 - top.leading_zeros()),
@@ -386,4 +386,68 @@ pub fn dec_div(a: &Big, sa: i64, b: &Big, sb: i64, scale: i64) -> Result<Big, Bi
     let den = mag_mul(&b.mag, &Big::pow10(sa).mag);
     let (q, r) = mag_divmod(&num, &den);
     Ok(round_half_even(a.neg != b.neg, q, &r, &den))
+}
+
+unsafe extern "C" {
+    fn ldexp(x: f64, e: i32) -> f64;
+}
+
+pub fn gcd(a: &Big, b: &Big) -> Big {
+    let (mut a, mut b) = (a.mag.clone(), b.mag.clone());
+    while !b.is_empty() {
+        let (_, r) = mag_divmod(&a, &b);
+        a = b;
+        b = r;
+    }
+    norm(false, a)
+}
+
+pub fn ratio_norm(n: &Big, d: &Big) -> Result<(Big, Big), BigErr> {
+    if d.is_zero() {
+        return Err(BigErr::DivZero);
+    }
+    let (n, d) = if d.neg { (n.neg(), d.neg()) } else { (n.clone(), d.clone()) };
+    let g = gcd(&n, &d);
+    if g.mag == [1] {
+        return Ok((n, d));
+    }
+    Ok((n.divmod(&g)?.0, d.divmod(&g)?.0))
+}
+
+pub fn ratio_cmp(an: &Big, ad: &Big, bn: &Big, bd: &Big) -> Ordering {
+    if an.sign() != bn.sign() {
+        return an.sign().cmp(&bn.sign());
+    }
+    let x = norm(an.neg, mag_mul(&an.mag, &bd.mag));
+    let y = norm(bn.neg, mag_mul(&bn.mag, &ad.mag));
+    x.compare(&y)
+}
+
+pub fn ratio_f64(n: &Big, d: &Big) -> Result<f64, BigErr> {
+    if n.is_zero() {
+        return Ok(0.0);
+    }
+    let a = n.abs();
+    let (bn, bd) = (a.bits() as i64, d.bits() as i64);
+    let sign = if n.neg { -1.0 } else { 1.0 };
+    if bn - bd > 1100 {
+        return Ok(sign * f64::INFINITY);
+    }
+    if bd - bn > 1200 {
+        return Ok(sign * 0.0);
+    }
+    let s = 63 - bn + bd;
+    let two = Big::from_i64(2);
+    let (num, den) = if s >= 0 { (a.mul(&two.pow(s)?)?, d.clone()) } else { (a, d.mul(&two.pow(-s)?)?) };
+    let (q, r) = num.divmod(&den)?;
+    let mut u = u64::from(*q.mag.first().unwrap_or(&0)) | (u64::from(*q.mag.get(1).unwrap_or(&0)) << 32);
+    if !r.is_zero() {
+        u |= 1;
+    }
+    let x = unsafe { ldexp(u as f64, -s as i32) };
+    Ok(sign * x)
+}
+
+pub fn ratio_str(n: &Big, d: &Big) -> String {
+    if d.mag == [1] { n.to_string() } else { format!("{n}/{d}") }
 }

@@ -413,6 +413,9 @@ impl Cx<'_> {
         if let Some(x) = self.cx_global(n, &vals, t)? {
             return Ok(Some(x));
         }
+        if let Some(x) = self.ratio_global(n, &vals, t)? {
+            return Ok(Some(x));
+        }
         if let Some(x) = self.flat_global(n, &vals, t)? {
             return Ok(Some(x));
         }

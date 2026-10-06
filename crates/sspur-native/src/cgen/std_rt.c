@@ -1825,3 +1825,80 @@ static int ss_f_seek(SsF f, int64_t pos, int64_t* out, int whence, Str* err) { o
 static int ss_f_size(SsF f, int64_t* out, Str* err) { struct stat sb; if (fstat((int)f.fd, &sb) != 0) { *err = ss_f_why(f.path, errno); return 0; } *out = (int64_t)sb.st_size; return 1; }
 //@ fold
 static Str str_fold(Str s) { if (str_ascii(s)) return str_case(s, 1); int64_t cap = s.len * 12 + 16; char* o = (char*)sspur_alloc_atomic((size_t)cap); int64_t n = host_.str_op(4, s.p, s.len, o, cap); return (Str){n, o}; }
+//@ ratio big dec
+typedef struct { SBig n, d; } SRat;
+static int ss_big_one(SBig a) { return a.n == 1 && a.d[0] == 1; }
+static SBig ss_big_gcd(SBig a, SBig b) {
+    uint32_t *x = a.d, *y = b.d; int64_t nx = ss_bl(a), ny = ss_bl(b);
+    while (ny) { uint32_t *q, *r; int64_t nq, nr; ss_mdivmod(x, nx, y, ny, &q, &nq, &r, &nr); x = y; nx = ny; y = r; ny = nr; }
+    return ss_big_mk(0, x, nx);
+}
+static SRat ss_rat_mk(SBig n, SBig d, Status* st) {
+    if (!d.n) sspur_trap(st, 2, 0, 0, 0);
+    if (d.n < 0) { n = ss_big_neg(n); d = ss_big_neg(d); }
+    SBig g = ss_big_gcd(n, d); SRat r;
+    if (ss_big_one(g)) { r.n = n; r.d = d; return r; }
+    r.n = ss_big_div(n, g, st); r.d = ss_big_div(d, g, st); return r;
+}
+static int ss_rat_cmp(SRat a, SRat b) {
+    int64_t sa = ss_big_sign(a.n), sb = ss_big_sign(b.n);
+    if (sa != sb) return sa < sb ? -1 : 1;
+    int64_t n1 = ss_bl(a.n), n2 = ss_bl(b.d), n3 = ss_bl(b.n), n4 = ss_bl(a.d);
+    uint32_t* x = ss_limbs(n1 + n2); uint32_t* y = ss_limbs(n3 + n4);
+    SBig l = ss_big_mk(a.n.n < 0, x, ss_mmul(a.n.d, n1, b.d.d, n2, x)), r = ss_big_mk(b.n.n < 0, y, ss_mmul(b.n.d, n3, a.d.d, n4, y));
+    return ss_big_cmp(l, r);
+}
+static SRat ss_rat_bin(SRat a, SRat b, int op, Status* st) {
+    SBig x, y;
+    if (op < 2) { SBig l = ss_big_mul(a.n, b.d, st); SBig r = ss_big_mul(b.n, a.d, st); x = op ? ss_big_sub(l, r) : ss_big_add(l, r); y = ss_big_mul(a.d, b.d, st); }
+    else if (op == 2) { x = ss_big_mul(a.n, b.n, st); y = ss_big_mul(a.d, b.d, st); }
+    else { x = ss_big_mul(a.n, b.d, st); y = ss_big_mul(a.d, b.n, st); }
+    return ss_rat_mk(x, y, st);
+}
+static SRat ss_rat_pow(SRat a, int64_t e, Status* st) {
+    if (e == INT64_MIN) { SRat h = ss_rat_pow(a, e / 2, st); SRat o; o.n = ss_big_mul(h.n, h.n, st); o.d = ss_big_mul(h.d, h.d, st); return o; }
+    int64_t k = e < 0 ? -e : e;
+    SBig pn = ss_big_pow(a.n, k, st), pd = ss_big_pow(a.d, k, st);
+    if (e >= 0) { SRat o; o.n = pn; o.d = pd; return o; }
+    return ss_rat_mk(pd, pn, st);
+}
+static SBig ss_rat_round(SRat a, int mode, Status* st) {
+    SBig q, r; ss_big_divmod(a.n, a.d, &q, &r, st);
+    int up;
+    if (mode == 0) up = r.n < 0;
+    else if (mode == 1) up = r.n > 0;
+    else if (mode == 2) up = 0;
+    else { SBig t = ss_big_add(ss_big_abs(r), ss_big_abs(r)); int c = ss_big_cmp(t, a.d); up = c > 0 || (c == 0 && ss_bl(q) > 0 && (q.d[0] & 1)); }
+    if (!up) return q;
+    if (mode == 0) return ss_big_sub(q, ss_big_from(1));
+    if (mode == 1) return ss_big_add(q, ss_big_from(1));
+    return ss_big_add(q, ss_big_from(ss_big_sign(a.n)));
+}
+static int64_t ss_big_bits(SBig a) { int64_t n = ss_bl(a); return n ? 32 * (n - 1) + (32 - __builtin_clz(a.d[n - 1])) : 0; }
+static double ss_rat_f64(SRat a, Status* st) {
+    if (!a.n.n) return 0.0;
+    int neg = a.n.n < 0; SBig x = ss_big_abs(a.n);
+    int64_t bn = ss_big_bits(x), bd = ss_big_bits(a.d);
+    if (bn - bd > 1100) return neg ? -INFINITY : INFINITY;
+    if (bd - bn > 1200) return neg ? -0.0 : 0.0;
+    int64_t s = 63 - bn + bd; SBig num = x, den = a.d;
+    if (s >= 0) num = ss_big_mul(x, ss_big_pow(ss_big_from(2), s, st), st); else den = ss_big_mul(a.d, ss_big_pow(ss_big_from(2), -s, st), st);
+    SBig q, r; ss_big_divmod(num, den, &q, &r, st);
+    uint64_t u = (ss_bl(q) > 0 ? q.d[0] : 0) | ((uint64_t)(ss_bl(q) > 1 ? q.d[1] : 0) << 32);
+    if (r.n) u |= 1;
+    double v = ldexp((double)u, (int)-s);
+    return neg ? -v : v;
+}
+static void ss_rat_put(SB* b, SRat a) { ss_big_put(b, a.n); if (!ss_big_one(a.d)) { sb_put(b, "/", 1); ss_big_put(b, a.d); } }
+static int ss_rat_digits(Str s) { if (!s.len) return 0; for (int64_t i = 0; i < s.len; i++) if (s.p[i] < '0' || s.p[i] > '9') return 0; return 1; }
+static int ss_rat_parse(Str s, SRat* out, Status* st) {
+    s = str_trim(s);
+    int64_t k = 0; while (k < s.len && s.p[k] != '/') k++;
+    Str a = {k, s.p}, b = {1, "1"};
+    if (k < s.len) { b.len = s.len - k - 1; b.p = s.p + k + 1; }
+    Str body = a; if (body.len && (body.p[0] == '+' || body.p[0] == '-')) { body.p++; body.len--; }
+    if (!ss_rat_digits(body) || !ss_rat_digits(b)) return 0;
+    SBig n, d; ss_big_parse(a, &n); ss_big_parse(b, &d);
+    if (!d.n) return 0;
+    *out = ss_rat_mk(n, d, st); return 1;
+}

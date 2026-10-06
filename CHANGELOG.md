@@ -4,6 +4,8 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-06
+
 ### Added
 - Packages (ADR 0026). `sspur.toml` names a package and its dependencies (a local path, or a git URL with a tag or revision); `sspur.lock` pins each one by the hash of its exports. `pub fn`, `pub type` and `pub effect` export definitions; dependents call `lib.f(x)`, name `lib.T` and `lib.Ctor`, or import with `use lib.{f, T}` (a type brings its variants). Private names, unknown names and undeclared packages are diagnostics (`E_PKG_PRIVATE`, `E_PKG_NAME`, `E_PKG_UNKNOWN`).
 - `sspur add <path|git-url>[@rev]`, `sspur deps fetch|update|tree`, and `sspur init --pkg NAME`. Fetches are verified: a dependency whose content hash differs from the lock fails with `E_DEP_HASH`. Dependencies are cached by hash in `~/.cache/sspur/pkgs`.
@@ -138,7 +140,8 @@ This release covers Phases 3 to 7 of the roadmap and ADRs 0003 to 0024. SSPUR no
 - Language design spec, JSON schemas and the token benchmark.
 - Compiler core: parser, checker, content hashing, interpreter and the `sspur` CLI, with an 11-program suite.
 
-[Unreleased]: https://github.com/utkarshavardhana/sspur/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/utkarshavardhana/sspur/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/utkarshavardhana/sspur/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/utkarshavardhana/sspur/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/utkarshavardhana/sspur/releases/tag/v0.2.0
 [0.1.0]: https://github.com/utkarshavardhana/sspur/tree/6c55224

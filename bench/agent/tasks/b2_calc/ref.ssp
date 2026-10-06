@@ -1,0 +1,104 @@
+type Tok = Num{v: Int} | Op{c: Str}
+type CalcErr = BadChar{ch: Str} | DivByZero | BadSyntax
+
+fn is_digit(ch: Str) -> Bool
+= "0123456789".contains(ch)
+
+fn tokenize(s: Str) -> List[Tok] ! fail[CalcErr]
+= do
+  var toks = []
+  var num = ""
+  for ch in s.chars
+    if is_digit(ch) then num := num + ch
+    else do
+      if not num.is_empty then do
+        toks := toks.push(Num{v: num.to_int.or(0)})
+        num := ""
+      if "+-*/()".contains(ch) then toks := toks.push(Op{c: ch})
+      else if ch != " " then raise BadChar{ch}
+  if not num.is_empty then toks := toks.push(Num{v: num.to_int.or(0)})
+  toks
+
+fn is_op(t: Opt[Tok], c: Str) -> Bool
+= t == some(Op{c})
+
+fn apply_op(c: Str, a: Int, b: Int) -> Int ! fail[CalcErr]
+= match c
+  | "+" => a + b
+  | "-" => a - b
+  | "*" => a * b
+  | _ => if b == 0 then raise DivByZero else a / b
+
+fn parse_expr(toks: List[Tok]) -> (Int, List[Tok]) ! fail[CalcErr], div
+= do
+  (first, r0) = parse_term(toks)
+  var acc = first
+  var rest = r0
+  while is_op(rest.first, "+") or is_op(rest.first, "-")
+    c = if is_op(rest.first, "+") then "+" else "-"
+    (b, r) = parse_term(rest.drop(1))
+    acc := apply_op(c, acc, b)
+    rest := r
+  (acc, rest)
+
+fn parse_term(toks: List[Tok]) -> (Int, List[Tok]) ! fail[CalcErr], div
+= do
+  (first, r0) = parse_unary(toks)
+  var acc = first
+  var rest = r0
+  while is_op(rest.first, "*") or is_op(rest.first, "/")
+    c = if is_op(rest.first, "*") then "*" else "/"
+    (b, r) = parse_unary(rest.drop(1))
+    acc := apply_op(c, acc, b)
+    rest := r
+  (acc, rest)
+
+fn parse_unary(toks: List[Tok]) -> (Int, List[Tok]) ! fail[CalcErr], div
+= if is_op(toks.first, "-") then do
+    (v, r) = parse_unary(toks.drop(1))
+    (-v, r)
+  else parse_atom(toks)
+
+fn parse_atom(toks: List[Tok]) -> (Int, List[Tok]) ! fail[CalcErr], div
+= match toks.first
+  | some(Num{v}) => (v, toks.drop(1))
+  | some(Op{c}) if c == "(" => do
+    (v, r) = parse_expr(toks.drop(1))
+    if not is_op(r.first, ")") then raise BadSyntax
+    (v, r.drop(1))
+  | _ => raise BadSyntax
+
+fn calc(s: Str) -> Int ! fail[CalcErr], div
+= do
+  (v, rest) = parse_expr(tokenize(s))
+  if not rest.is_empty then raise BadSyntax
+  v
+
+fn show_result(s: Str) -> Str ! div
+= catch "{s} = {calc(s)}"
+  | BadChar{ch} => "{s} = error: bad character {ch}"
+  | DivByZero => "{s} = error: division by zero"
+  | BadSyntax => "{s} = error: syntax"
+
+fn main() -> Unit ! log, div
+= log(show_result("12 + 30 - 2"))
+
+test adds = catch calc("1 + 2 + 3") == 6
+  | _ => false
+
+test subtracts = catch calc("10 - 4 - 3") == 3
+  | _ => false
+
+test bad_char = catch calc("2 $ 3") == 0
+  | BadChar{ch} => ch == "$"
+  | _ => false
+
+test shown = show_result("7 - 2") == "7 - 2 = 5"
+
+test precedence = catch calc("2 + 3 * 4") == 14
+  | _ => false
+
+test unary_parens = catch calc("-(2 + 3) * 2") == -10
+  | _ => false
+
+test syntax = show_result("(1") == "(1 = error: syntax"

@@ -1,0 +1,42 @@
+fn h_err(text: Str) -> Str
+= catch "rows {parse(text).len}"
+  | BadRow{line} => "row {line}"
+  | BadNumber{line, field} => "number {line} {field}"
+  | _ => "other"
+
+test hidden_sample = catch parse(sample()).len == 6 and pay(parse(sample())[2]) == 4000
+  | _ => false
+
+test hidden_header = h_err("name,rate,hours\nBeth,400,10") == "rows 1"
+
+test hidden_header_trimmed = h_err("  name,rate,hours  \nBeth,400,10") == "rows 1"
+
+test hidden_header_not_first = h_err("Beth,400,10\nname,rate,hours") == "number 2 rate"
+
+test hidden_blank_lines = h_err("\nBeth,400,10\n\n   \nDan,375,2\n") == "rows 2" and h_err("") == "rows 0"
+
+test hidden_trims = catch parse(" Beth , 400 , 10 ") == [Row{name: "Beth", rate: 400, hours: 10}]
+  | _ => false
+
+test hidden_bad_row = h_err("Beth,400\nDan,375,2") == "row 1" and h_err("a,1,2\nb,1,2,3") == "row 2"
+
+test hidden_line_numbers = h_err("name,rate,hours\n\nBeth,4x,1") == "number 3 rate"
+
+test hidden_bad_hours = h_err("Beth,400,ten") == "number 1 hours" and h_err("Beth,400,-5") == "number 1 hours"
+
+test hidden_rate_first = h_err("Beth,x,y") == "number 1 rate" and h_err("Beth,-1,3") == "number 1 rate"
+
+test hidden_overtime = pay(Row{name: "x", rate: 400, hours: 45}) == 19000 and pay(Row{name: "y", rate: 5, hours: 41}) == 207
+
+test hidden_no_overtime = pay(Row{name: "x", rate: 400, hours: 40}) == 16000 and pay(Row{name: "z", rate: 375, hours: 0}) == 0
+
+test hidden_report_sorted = catch report(parse("Beth,400,0\nDan,375,0\nKathy,400,10")) == "Kathy: 4000\nBeth: 0\nDan: 0\ntotal: 4000"
+  | _ => false
+
+test hidden_report_overtime = report([Row{name: "a", rate: 10, hours: 50}, Row{name: "b", rate: 20, hours: 30}]) == "b: 600\na: 550\ntotal: 1150"
+
+test hidden_report_empty = report([]) == "total: 0"
+
+test hidden_validate = validate("name,rate,hours\nBeth,400\nDan,x,1\nKathy,400,10\nMark,500,z") == ["line 2: expected 3 fields", "line 3: bad rate", "line 5: bad hours"]
+
+test hidden_validate_ok = validate(sample()) == [] and validate("") == []

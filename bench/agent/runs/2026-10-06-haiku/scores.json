@@ -1,0 +1,50 @@
+[
+ {
+  "lang": "sspur",
+  "task": "a1_inventory",
+  "passed": 12,
+  "total": 12,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a1_inventory",
+  "passed": 12,
+  "total": 12,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a2_wordstats",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a2_wordstats",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a3_bank",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a3_bank",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
+ }
+]

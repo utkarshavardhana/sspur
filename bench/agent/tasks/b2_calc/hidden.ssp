@@ -1,0 +1,40 @@
+fn h_res(s: Str) -> Str ! div
+= catch calc(s).str
+  | DivByZero => "div"
+  | BadSyntax => "syntax"
+  | BadChar{ch} => "char " + ch
+  | _ => "other"
+
+test hidden_precedence = h_res("1 + 2 * 3") == "7" and h_res("2 * 3 + 4") == "10" and h_res("20 - 6 / 3") == "18"
+
+test hidden_left_assoc = h_res("8 - 3 - 2") == "3" and h_res("16 / 4 / 2") == "2" and h_res("2 * 3 / 4") == "1"
+
+test hidden_truncate = h_res("7 / 2") == "3" and h_res("-7 / 2") == "-3" and h_res("7 / -2") == "-3"
+
+test hidden_no_spaces = h_res("12*3-4") == "32"
+
+test hidden_div_zero = h_res("1 / 0") == "div" and h_res("5 / (2 - 2)") == "div"
+
+test hidden_parens = h_res("2 * (3 + 4)") == "14" and h_res("((2))") == "2" and h_res("(1 + 2) * (3 + 4)") == "21" and h_res("10 - (2 - 3)") == "11"
+
+test hidden_nested_parens = h_res("2 * (3 + (4 - 1) * 2)") == "18"
+
+test hidden_unary = h_res("-3") == "-3" and h_res("2 * -3") == "-6" and h_res("-(1 + 2)") == "-3" and h_res("2 - -3") == "5" and h_res("(-4) * 2") == "-8"
+
+test hidden_empty = h_res("") == "syntax" and h_res("   ") == "syntax"
+
+test hidden_missing_operand = h_res("1 +") == "syntax" and h_res("* 2") == "syntax"
+
+test hidden_two_numbers = h_res("1 2") == "syntax"
+
+test hidden_unbalanced = h_res("(1 + 2") == "syntax" and h_res("1 + 2)") == "syntax"
+
+test hidden_empty_parens = h_res("()") == "syntax"
+
+test hidden_bad_char = h_res("1 $ 2") == "char $"
+
+test hidden_show_div = show_result("1 / 0") == "1 / 0 = error: division by zero"
+
+test hidden_show_syntax = show_result("1 +") == "1 + = error: syntax"
+
+test hidden_show_ok = show_result("2 * (3 + 4)") == "2 * (3 + 4) = 14" and show_result("1 ? 2") == "1 ? 2 = error: bad character ?"

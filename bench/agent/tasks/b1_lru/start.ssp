@@ -1,0 +1,35 @@
+type Entry = {key: Str, value: Int}
+type Cache = {cap: Int, entries: List[Entry]}
+type CacheErr = BadCapacity{cap: Int}
+
+fn new_cache(cap: Int) -> Cache
+= Cache{cap, entries: []}
+
+fn lookup(c: Cache, key: Str) -> Opt[Int]
+= c.entries.find(_.key == key).map(_.value)
+
+fn get_or(c: Cache, key: Str, default: Int) -> Int
+= lookup(c, key).or(default)
+
+fn put(c: Cache, key: Str, value: Int) -> Cache
+= c with entries := c.entries.filter(_.key != key).push(Entry{key, value})
+
+fn keys(c: Cache) -> List[Str]
+= c.entries.map(_.key)
+
+fn size(c: Cache) -> Int
+= c.entries.len
+
+fn describe(c: Cache) -> Str
+= "cap={c.cap} [" + c.entries.map(e => "{e.key}={e.value}").join(", ") + "]"
+
+fn main() -> Unit ! log
+= log(describe(put(put(new_cache(2), "a", 1), "b", 2)))
+
+test put_two = keys(put(put(new_cache(2), "a", 1), "b", 2)) == ["a", "b"]
+
+test lookup_hit = lookup(put(new_cache(2), "a", 1), "a") == some(1)
+
+test lookup_miss = get_or(new_cache(2), "z", -1) == -1
+
+test described = describe(put(new_cache(3), "x", 7)) == "cap=3 [x=7]"

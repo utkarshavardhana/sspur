@@ -1,0 +1,68 @@
+fn h_abc(cap: Int) -> Cache ! fail[CacheErr]
+= put(put(put(new_cache(cap), "a", 1), "b", 2), "c", 3)
+
+fn h_counted() -> Cache ! fail[CacheErr]
+= lookup(lookup(lookup(h_abc(3), "a").1, "z").1, "b").1
+
+test hidden_bad_cap_zero = catch new_cache(0).cap == -1
+  | BadCapacity{cap} => cap == 0
+
+test hidden_bad_cap_neg = catch new_cache(-3).cap == -1
+  | BadCapacity{cap} => cap == -3
+
+test hidden_cap_one = catch size(put(put(new_cache(1), "a", 1), "b", 2)) == 1 and keys(put(put(new_cache(1), "a", 1), "b", 2)) == ["b"]
+  | _ => false
+
+test hidden_evict = catch keys(h_abc(2)) == ["b", "c"]
+  | _ => false
+
+test hidden_no_evict = catch keys(h_abc(3)) == ["a", "b", "c"]
+  | _ => false
+
+test hidden_update_existing = catch keys(put(h_abc(3), "a", 9)) == ["b", "c", "a"] and peek(put(h_abc(3), "a", 9), "a") == some(9)
+  | _ => false
+
+test hidden_update_full = catch size(put(h_abc(3), "b", 5)) == 3 and keys(put(h_abc(3), "b", 5)) == ["a", "c", "b"]
+  | _ => false
+
+test hidden_lookup_recency = catch keys(put(lookup(h_abc(3), "a").1, "d", 4)) == ["c", "a", "d"]
+  | _ => false
+
+test hidden_lookup_value = catch lookup(h_abc(3), "b").0 == some(2)
+  | _ => false
+
+test hidden_lookup_miss = catch lookup(h_abc(3), "z").0 == none and keys(lookup(h_abc(3), "z").1) == ["a", "b", "c"]
+  | _ => false
+
+test hidden_counters = catch h_counted().hits == 2 and h_counted().misses == 1
+  | _ => false
+
+test hidden_counters_start = catch new_cache(2).hits == 0 and new_cache(2).misses == 0
+  | _ => false
+
+test hidden_get_or_miss = catch get_or(h_abc(3), "z", -1).0 == -1 and get_or(h_abc(3), "z", -1).1.misses == 1 and get_or(h_abc(3), "z", -1).1.hits == 0
+  | _ => false
+
+test hidden_get_or_hit = catch get_or(h_abc(3), "a", -1).0 == 1 and get_or(h_abc(3), "a", -1).1.hits == 1 and keys(get_or(h_abc(3), "a", -1).1) == ["b", "c", "a"]
+  | _ => false
+
+test hidden_peek = catch peek(h_abc(3), "a") == some(1) and peek(h_abc(3), "z") == none and peek(h_counted(), "a") == some(1)
+  | _ => false
+
+test hidden_resize_down = catch keys(resize(h_abc(3), 1)) == ["c"] and resize(h_abc(3), 1).cap == 1
+  | _ => false
+
+test hidden_resize_then_put = catch keys(put(resize(h_abc(3), 2), "d", 4)) == ["c", "d"]
+  | _ => false
+
+test hidden_resize_up = catch keys(put(resize(h_abc(2), 3), "d", 4)) == ["b", "c", "d"]
+  | _ => false
+
+test hidden_resize_bad = catch resize(h_abc(2), 0).cap == -1
+  | BadCapacity{cap} => cap == 0
+
+test hidden_put_keeps_counters = catch put(h_counted(), "q", 1).hits == 2 and resize(h_counted(), 1).misses == 1
+  | _ => false
+
+test hidden_describe = catch describe(h_abc(2)) == "cap=2 [b=2, c=3]"
+  | _ => false

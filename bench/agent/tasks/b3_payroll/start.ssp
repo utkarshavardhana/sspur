@@ -1,0 +1,27 @@
+type Row = {name: Str, rate: Int, hours: Int}
+
+fn sample() -> Str
+= "Beth,400,0\nDan,375,0\nKathy,400,10\nMark,500,20\nMary,550,22\nSusie,425,18"
+
+fn parse_row(line: Str) -> Row
+= do
+  f = line.split(",")
+  Row{name: f[0], rate: f[1].to_int.or(0), hours: f[2].to_int.or(0)}
+
+fn parse(text: Str) -> List[Row]
+= text.split("\n").map(parse_row)
+
+fn pay(r: Row) -> Int
+= r.rate * r.hours
+
+fn report(rows: List[Row]) -> Str
+= rows.map(r => "{r.name}: {pay(r)}").join("\n")
+
+fn main() -> Unit ! log
+= log(report(parse(sample())))
+
+test parsed = parse(sample()).len == 6 and parse(sample())[2] == Row{name: "Kathy", rate: 400, hours: 10}
+
+test paid = pay(Row{name: "Mark", rate: 500, hours: 20}) == 10000
+
+test reported = report(parse("Beth,400,0\nKathy,400,10")) == "Beth: 0\nKathy: 4000"

@@ -1,0 +1,54 @@
+type Row = {name: Str, rate: Int, hours: Int}
+type CsvErr = BadRow{line: Int} | BadNumber{line: Int, field: Str}
+
+fn sample() -> Str
+= "Beth,400,0\nDan,375,0\nKathy,400,10\nMark,500,20\nMary,550,22\nSusie,425,18"
+
+fn num(s: Str, line: Int, field: Str) -> Int ! fail[CsvErr]
+= match s.to_int
+  | some(n) if n >= 0 => n
+  | _ => raise BadNumber{line, field}
+
+fn parse_row(line: Str, n: Int) -> Row ! fail[CsvErr]
+= do
+  f = line.split(",").map(_.trim)
+  if f.len != 3 then raise BadRow{line: n}
+  Row{name: f[0], rate: num(f[1], n, "rate"), hours: num(f[2], n, "hours")}
+
+fn data_lines(text: Str) -> List[(Int, Str)]
+= text.split("\n").enumerate.map(p => (p.0 + 1, p.1)).filter(p => not p.1.trim.is_empty and not (p.0 == 1 and p.1.trim == "name,rate,hours"))
+
+fn parse(text: Str) -> List[Row] ! fail[CsvErr]
+= data_lines(text).map(p => parse_row(p.1, p.0))
+
+fn pay(r: Row) -> Int
+= if r.hours > 40 then r.rate * 40 + r.rate * 3 * (r.hours - 40) / 2 else r.rate * r.hours
+
+fn report(rows: List[Row]) -> Str
+= rows.sort_by(r => (-pay(r), r.name)).map(r => "{r.name}: {pay(r)}").push("total: {rows.map(pay).sum}").join("\n")
+
+fn check_line(p: (Int, Str)) -> List[Str]
+= catch do
+    parse_row(p.1, p.0)
+    []
+  | BadRow{line} => ["line {line}: expected 3 fields"]
+  | BadNumber{line, field} => ["line {line}: bad {field}"]
+
+fn validate(text: Str) -> List[Str]
+= data_lines(text).flat_map(check_line)
+
+fn main() -> Unit ! log
+= log(catch report(parse(sample()))
+  | _ => "invalid")
+
+test parsed = catch parse(sample()).len == 6 and parse(sample())[2] == Row{name: "Kathy", rate: 400, hours: 10}
+  | _ => false
+
+test paid = pay(Row{name: "Mark", rate: 500, hours: 20}) == 10000
+
+test reported = catch report(parse("Beth,400,0\nKathy,400,10")) == "Kathy: 4000\nBeth: 0\ntotal: 4000"
+  | _ => false
+
+test overtime = pay(Row{name: "x", rate: 10, hours: 42}) == 430
+
+test validated = validate("a,1\nb,2,x") == ["line 1: expected 3 fields", "line 2: bad hours"]

@@ -1,0 +1,59 @@
+type Entry = {key: Str, value: Int}
+type Cache = {cap: Int, entries: List[Entry], hits: Int, misses: Int}
+type CacheErr = BadCapacity{cap: Int}
+
+fn new_cache(cap: Int) -> Cache ! fail[CacheErr]
+= if cap < 1 then raise BadCapacity{cap} else Cache{cap, entries: [], hits: 0, misses: 0}
+
+fn trim(c: Cache) -> Cache
+= c with entries := c.entries.drop(max(0, c.entries.len - c.cap))
+
+fn touch(c: Cache, key: Str, value: Int) -> Cache
+= c with entries := c.entries.filter(_.key != key).push(Entry{key, value})
+
+fn lookup(c: Cache, key: Str) -> (Opt[Int], Cache)
+= match peek(c, key)
+  | some(v) => (some(v), touch(c, key, v) with hits := c.hits + 1)
+  | none => (none, c with misses := c.misses + 1)
+
+fn get_or(c: Cache, key: Str, default: Int) -> (Int, Cache)
+= do
+  (v, c2) = lookup(c, key)
+  (v.or(default), c2)
+
+fn peek(c: Cache, key: Str) -> Opt[Int]
+= c.entries.find(_.key == key).map(_.value)
+
+fn put(c: Cache, key: Str, value: Int) -> Cache
+= trim(touch(c, key, value))
+
+fn resize(c: Cache, cap: Int) -> Cache ! fail[CacheErr]
+= if cap < 1 then raise BadCapacity{cap} else trim(c with cap := cap)
+
+fn keys(c: Cache) -> List[Str]
+= c.entries.map(_.key)
+
+fn size(c: Cache) -> Int
+= c.entries.len
+
+fn describe(c: Cache) -> Str
+= "cap={c.cap} [" + c.entries.map(e => "{e.key}={e.value}").join(", ") + "]"
+
+fn main() -> Unit ! log
+= log(catch describe(put(put(new_cache(2), "a", 1), "b", 2))
+  | BadCapacity{cap} => "bad capacity {cap}")
+
+test put_two = catch keys(put(put(new_cache(2), "a", 1), "b", 2)) == ["a", "b"]
+  | _ => false
+
+test lookup_hit = catch lookup(put(new_cache(2), "a", 1), "a").0 == some(1)
+  | _ => false
+
+test lookup_miss = catch get_or(new_cache(2), "z", -1).0 == -1
+  | _ => false
+
+test described = catch describe(put(new_cache(3), "x", 7)) == "cap=3 [x=7]"
+  | _ => false
+
+test evicts = catch keys(put(put(put(new_cache(2), "a", 1), "b", 2), "c", 3)) == ["b", "c"]
+  | _ => false

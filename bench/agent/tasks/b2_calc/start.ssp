@@ -1,0 +1,51 @@
+type Tok = Num{v: Int} | Op{c: Str}
+type CalcErr = BadChar{ch: Str}
+
+fn is_digit(ch: Str) -> Bool
+= "0123456789".contains(ch)
+
+fn tokenize(s: Str) -> List[Tok] ! fail[CalcErr]
+= do
+  var toks = []
+  var num = ""
+  for ch in s.chars
+    if is_digit(ch) then num := num + ch
+    else do
+      if not num.is_empty then do
+        toks := toks.push(Num{v: num.to_int.or(0)})
+        num := ""
+      if ch == "+" or ch == "-" then toks := toks.push(Op{c: ch})
+      else if ch != " " then raise BadChar{ch}
+  if not num.is_empty then toks := toks.push(Num{v: num.to_int.or(0)})
+  toks
+
+fn eval_tokens(toks: List[Tok]) -> Int
+= do
+  var total = 0
+  var sign = 1
+  for t in toks
+    match t
+      | Num{v} => total := total + sign * v
+      | Op{c} => sign := if c == "-" then -1 else 1
+  total
+
+fn calc(s: Str) -> Int ! fail[CalcErr]
+= eval_tokens(tokenize(s))
+
+fn show_result(s: Str) -> Str
+= catch "{s} = {calc(s)}"
+  | BadChar{ch} => "{s} = error: bad character {ch}"
+
+fn main() -> Unit ! log
+= log(show_result("12 + 30 - 2"))
+
+test adds = catch calc("1 + 2 + 3") == 6
+  | _ => false
+
+test subtracts = catch calc("10 - 4 - 3") == 3
+  | _ => false
+
+test bad_char = catch calc("2 $ 3") == 0
+  | BadChar{ch} => ch == "$"
+
+test shown = show_result("7 - 2") == "7 - 2 = 5"

@@ -22,7 +22,7 @@ That adds it for you in this project. `--scope project` writes a `.mcp.json` tha
 }
 ```
 
-The tools show up as `mcp__sspur__edit`, `mcp__sspur__query` and so on. The Claude Code plugin in [`plugins/claude-code/`](../plugins/claude-code/) bundles this server with a skill that teaches the workflow; see its README.
+The tools show up as `mcp__sspur__edit`, `mcp__sspur__query` and so on. The Claude Code plugin in [`plugins/claude-code/`](https://github.com/utkarshavardhana/sspur/tree/main/plugins/claude-code) bundles this server with a skill that teaches the workflow; see its README.
 
 ## Claude Desktop
 

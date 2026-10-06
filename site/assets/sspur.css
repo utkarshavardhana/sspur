@@ -1,0 +1,17 @@
+/* SSPUR effect rows and types stand out from ordinary identifiers. */
+code.language-sspur .hljs-meta { color: #8a3ffc; }
+code.language-sspur .hljs-type { color: #0b7285; }
+code.language-sspur .hljs-title { color: #1c5fb8; font-weight: 600; }
+code.language-sspur .hljs-subst { color: inherit; }
+
+.navy code.language-sspur .hljs-meta,
+.coal code.language-sspur .hljs-meta,
+.ayu code.language-sspur .hljs-meta { color: #c4a2ff; }
+.navy code.language-sspur .hljs-type,
+.coal code.language-sspur .hljs-type,
+.ayu code.language-sspur .hljs-type { color: #66d9e8; }
+.navy code.language-sspur .hljs-title,
+.coal code.language-sspur .hljs-title,
+.ayu code.language-sspur .hljs-title { color: #8ab4f8; }
+
+.sspur-links { display: flex; flex-wrap: wrap; gap: 0.5em 1.5em; padding: 0; list-style: none; }

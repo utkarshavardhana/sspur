@@ -1,0 +1,95 @@
+type CsvErr = BadRow{line: Int} | BadNumber{line: Int, field: Str}
+
+type Row = {name: Str, rate: Int, hours: Int}
+
+fn check_line(n: Int, line: Str) -> Str ! fail[CsvErr]
+= do
+  _ = parse_line(n, line)
+  ""
+
+fn data_lines(text: Str) -> List[(Int, Str)]
+= text.split("\n").enumerate.map(p => (p.0 + 1, p.1.trim)).filter(p => not p.1.is_empty and not (p.0 == 1 and p.1 == "name,rate,hours"))
+
+fn line_msg(p: (Int, Str)) -> Str
+= catch check_line(p.0, p.1)
+| BadRow{line} => "line {line}: expected 3 fields"
+| BadNumber{line, field} => "line {line}: bad {field}"
+
+fn main() -> Unit ! log, fail[CsvErr]
+= log(report(parse(sample())))
+
+fn num(n: Int, field: Str, s: Str) -> Int ! fail[CsvErr]
+= do
+  v = s.to_int.or(-1)
+  if v < 0 then raise BadNumber{line: n, field: field}
+  v
+
+fn parse(text: Str) -> List[Row] ! fail[CsvErr]
+= do
+  var out = []
+  for p in data_lines(text)
+    out := out.push(parse_line(p.0, p.1))
+  out
+
+fn parse_line(n: Int, line: Str) -> Row ! fail[CsvErr]
+= do
+  f = line.split(",").map(_.trim)
+  if f.len != 3 then raise BadRow{line: n}
+  rate = num(n, "rate", f[1])
+  hours = num(n, "hours", f[2])
+  Row{name: f[0], rate: rate, hours: hours}
+
+fn parse_row(line: Str) -> Row
+= do
+  f = line.split(",")
+  Row{name: f[0], rate: f[1].to_int.or(0), hours: f[2].to_int.or(0)}
+
+fn pay(r: Row) -> Int
+= if r.hours > 40 then r.rate * 40 + r.rate * 3 * (r.hours - 40) / 2 else r.rate * r.hours
+
+fn report(rows: List[Row]) -> Str
+= do
+  lines = rows.sort_by(r => (-pay(r), r.name)).map(r => "{r.name}: {pay(r)}")
+  (lines + ["total: {rows.map(pay).sum}"]).join("\n")
+
+fn sample() -> Str
+= "Beth,400,0\nDan,375,0\nKathy,400,10\nMark,500,20\nMary,550,22\nSusie,425,18"
+
+fn validate(text: Str) -> List[Str]
+= data_lines(text).map(line_msg).filter(m => not m.is_empty)
+
+test bad_both = catch parse("A,x,y") == []
+| BadNumber{line, field} => field == "rate"
+| _ => false
+
+test bad_hours = catch parse("A,1,-1") == []
+| BadNumber{line, field} => line == 1 and field == "hours"
+| _ => false
+
+test bad_rate = catch parse("A,1,1\nB,x,1") == []
+| BadNumber{line, field} => line == 2 and field == "rate"
+| _ => false
+
+test bad_row = catch parse("name,rate,hours\n\nA,1") == []
+| BadRow{line} => line == 3
+| _ => false
+
+test empty_report = report([]) == "total: 0"
+
+test overtime = pay(Row{name: "A", rate: 10, hours: 50}) == 550 and pay(Row{name: "A", rate: 10, hours: 40}) == 400 and pay(Row{name: "A", rate: 5, hours: 41}) == 207
+
+test paid = pay(Row{name: "Mark", rate: 500, hours: 20}) == 10000
+
+test parse_skips = parse("name,rate,hours\n\n Ann , 10 ,2 \n").len == 1 and parse(" name,rate,hours \nA,1,1")[0] == Row{name: "A", rate: 1, hours: 1}
+
+test parse_trim = parse("  A , 3 , 4 ")[0] == Row{name: "A", rate: 3, hours: 4}
+
+test parsed = parse(sample()).len == 6 and parse(sample())[2] == Row{name: "Kathy", rate: 400, hours: 10}
+
+test reported = report(parse("Beth,400,0\nKathy,400,10")) == "Kathy: 4000\nBeth: 0\ntotal: 4000"
+
+test sorted_report = report(parse("B,10,1\nA,10,1\nC,20,1")) == "C: 20\nA: 10\nB: 10\ntotal: 40"
+
+test validate_msgs = validate("name,rate,hours\nA,1\nB,x,1\n\nC,1,y\nD,1,1") == ["line 2: expected 3 fields", "line 3: bad rate", "line 5: bad hours"]
+
+test validate_ok = validate("A,1,1").is_empty

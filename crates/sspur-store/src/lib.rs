@@ -154,6 +154,16 @@ impl Loaded {
         &self.module.defs[..self.own]
     }
 
+    /// The module for code generation: dependencies first, so their generated declarations come
+    /// in the same order in every dependent and their native objects are shared through the cache.
+    pub fn native_module(&self) -> std::borrow::Cow<'_, Module> {
+        if self.own == self.module.defs.len() {
+            return std::borrow::Cow::Borrowed(&self.module);
+        }
+        let defs = self.module.defs[self.own..].iter().chain(&self.module.defs[..self.own]).cloned().collect();
+        std::borrow::Cow::Owned(Module { profile: self.module.profile.clone(), defs })
+    }
+
     pub fn is_dep(&self, name: &str) -> bool {
         !self.pkgs.is_empty() && sspur_syntax::link::demangle_name(name, &|p| self.pkgs.iter().any(|x| x == p)).is_some()
     }

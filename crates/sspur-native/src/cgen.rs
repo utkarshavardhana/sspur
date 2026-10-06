@@ -1349,7 +1349,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashM
         return Err(e);
     }
     if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
-        eprintln!("split: {} units, {} compiled, {:?}", tus.len(), todo.len(), t0.elapsed());
+        eprintln!("split: {} units, {} compiled, {:?}: {}", tus.len(), todo.len(), t0.elapsed(), todo.iter().map(|&i| tus[i].name.as_str()).collect::<Vec<_>>().join(" "));
     }
     let tmp = lib.with_extension(format!("{}.tmp", std::process::id()));
     let mut link = Command::new(&cc);

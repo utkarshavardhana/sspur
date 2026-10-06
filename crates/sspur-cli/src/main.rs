@@ -386,7 +386,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             }
         }
         if cmd == "build" {
-            return match sspur_native::cgen::compile_release(&loaded.module, &loaded.check, if args.has("--O3") { "-O3" } else { "-O2" }) {
+            return match sspur_native::cgen::compile_release(&loaded.native_module(), &loaded.check, if args.has("--O3") { "-O3" } else { "-O2" }) {
                 Ok(c) => {
                     if let Some(e) = &c.fallback {
                         native_failed(args, &format!("per-definition native build failed {e}"), "using the whole-program build");
@@ -420,10 +420,10 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             ExitCode::SUCCESS
         }
         "native" if args.has("--emit-c") => {
-            print!("{}", sspur_native::cgen::c_source(&loaded.module, &loaded.check));
+            print!("{}", sspur_native::cgen::c_source(&loaded.native_module(), &loaded.check));
             ExitCode::SUCCESS
         }
-        "native" if args.has("--release") => match sspur_native::cgen::compile_release(&loaded.module, &loaded.check, "-O2") {
+        "native" if args.has("--release") => match sspur_native::cgen::compile_release(&loaded.native_module(), &loaded.check, "-O2") {
             Ok(c) => {
                 if let Some(e) = &c.fallback {
                     native_failed(args, &format!("per-definition native build failed {e}"), "using the whole-program build");
@@ -716,7 +716,7 @@ fn native_interp(l: &Loaded, args: &Args) -> Interp {
         return it;
     }
     let opt = if args.has("--O3") { "-O3" } else { "-O2" };
-    match sspur_native::cgen::compile_release(&l.module, &l.check, opt) {
+    match sspur_native::cgen::compile_release(&l.native_module(), &l.check, opt) {
         Ok(c) => {
             if let Some(e) = &c.fallback {
                 native_failed(args, &format!("per-definition native build failed {e}"), "using the whole-program build");

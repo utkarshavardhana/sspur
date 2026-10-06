@@ -27,6 +27,8 @@ pub struct Item {
 pub struct Scope {
     pub pkgs: BTreeMap<String, BTreeMap<String, Item>>,
     pub imported: BTreeMap<String, Item>,
+    /// Packages that are only dependencies of dependencies.
+    pub indirect: Vec<String>,
 }
 
 pub fn mangle(pkg: &str, name: &str) -> String {
@@ -271,9 +273,13 @@ impl R<'_> {
         }
     }
 
-    fn pkg_of(&self, e: &Expr, l: &Locals) -> Option<String> {
+    fn pkg_of(&mut self, e: &Expr, l: &Locals) -> Option<String> {
         match &e.kind {
             ExprKind::Name(p) if self.s.pkgs.contains_key(p) && !bound(l, p) => Some(p.clone()),
+            ExprKind::Name(p) if self.s.indirect.contains(p) && !bound(l, p) => {
+                self.errs.push(SyntaxError::new("E_PKG_UNKNOWN", format!("no dependency '{p}': it is only a dependency of a dependency; add it with 'sspur add' to use it here"), e.span));
+                None
+            }
             _ => None,
         }
     }

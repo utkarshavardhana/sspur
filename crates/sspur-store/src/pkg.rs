@@ -553,6 +553,7 @@ impl Env {
                 s.pkgs.insert(d.clone(), items);
             }
         }
+        s.indirect = self.all.keys().filter(|k| !self.direct.contains(k)).cloned().collect();
         s
     }
 
@@ -1111,6 +1112,10 @@ pub fn ingest_bundle(root: &Path, b: &serde_json::Value) -> Result<Vec<String>, 
         }
         let parsed = Manifest::parse(&format!("[package]\nname = \"x\"\n[deps]\n{n} = {}\n", t.as_str().unwrap_or_default()))?;
         if let Some(src) = parsed.deps.get(n) {
+            if let Some(e) = lock.entries.get_mut(n).filter(|_| added.contains(n)) {
+                e.source = src.key();
+                e.reference = src.rev().map(String::from);
+            }
             text = m.with_dep(n, Some(src));
             m = Manifest::parse(&text)?;
         }

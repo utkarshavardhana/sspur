@@ -1,0 +1,49 @@
+// ANCHOR: start
+$ cd agents
+$ sspur init cart.ssp
+ok 6 definitions
+$ sspur start total
+# SSPUR agent spec
+...
+## This codebase: 1 type, 3 fns, 2 tests, all of it
+type Item = {name: Str, price: Int where _ >= 0, qty: Int where _ > 0}
+...
+test pens = total([Item{name: "pen", price: 3, qty: 4}]) == 12
+// ANCHOR_END: start
+// ANCHOR: pack
+$ sspur q pack total
+fn total(items: List[Item]) -> Int
+= subtotal(items)
+
+type Item = {name: Str, price: Int where _ >= 0, qty: Int where _ > 0}
+
+fn subtotal(items: List[Item]) -> Int
+
+test empty = total([]) == 0
+
+test pens = total([Item{name: "pen", price: 3, qty: 4}]) == 12
+
+fn main() -> Unit ! log
+= do
+  cart = [Item{name: "pen", price: 3, qty: 4}, Item{name: "book", price: 12, qty: 1}]
+  log("total: {total(cart)}")
+
+-- complete: every caller (1) and test (2) of total is above
+// ANCHOR_END: pack
+// ANCHOR: edit
+$ sspur edit --test -e 'fn total(items: List[Item]) -> Int
+= do
+  s = subtotal(items)
+  if s >= 50 then s * 9 / 10 else s
+
+test bulk = total([Item{name: "box", price: 25, qty: 2}]) == 45'
+ok +bulk ~total
+3 passed, 0 failed
+// ANCHOR_END: edit
+// ANCHOR: rejected
+$ sspur edit --test -e 'fn total(items: List[Item]) -> Int = if subtotal(items) >= 50 && true then 1 else 2'
+rejected, nothing changed
+input:1:63 E_PARSE_EXPECTED expected 'then', found '&'
+  hint: no '&&' operator: write 'and'
+fix these and resend the whole edit in one call
+// ANCHOR_END: rejected

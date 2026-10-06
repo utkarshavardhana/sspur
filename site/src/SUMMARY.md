@@ -3,12 +3,17 @@
 # Learn
 
 - [Your first SSPUR program in 10 minutes](tutorial.md)
-- [MCP setup](docs/mcp.md)
-- [Agent reference](docs/agent-spec.md)
+- [SSPUR for AI agents](agents.md)
+  - [MCP setup](docs/mcp.md)
+  - [Agent reference](docs/agent-spec.md)
 
 # Reference
 
 - [Language reference](docs/07-reference-v0.md)
+
+# Performance
+
+- [Agent token benchmark](agent-bench.md)
 
 # Design
 

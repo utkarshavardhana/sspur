@@ -223,7 +223,7 @@ fn update(root: &Path, m: &Manifest, names: &[String], force: bool) -> ExitCode 
         Ok(l) => l,
         Err(e) => return fail(e),
     };
-    let old = Env::load(root).ok().flatten().unwrap_or_default();
+    let old = Env::locked(m, &lock);
     for n in names {
         if !m.deps.contains_key(n) && !lock.entries.contains_key(n) {
             return fail(format!("no dependency '{n}'"));

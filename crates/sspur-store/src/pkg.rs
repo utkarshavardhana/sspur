@@ -574,11 +574,25 @@ impl Env {
         if let Some(env) = Env::from_lock(&m, &lock) {
             return Ok(Some(env));
         }
+        for (n, s) in &m.deps {
+            if let Some(e) = lock.entries.get(n)
+                && (e.source != s.key() || e.reference.as_deref() != s.rev()) {
+                    let want = s.rev().map_or(s.key(), |r| format!("{}@{r}", s.key()));
+                    let have = e.reference.as_ref().map_or(e.source.clone(), |r| format!("{}@{r}", e.source));
+                    return Err(format!("E_DEP_STALE {n}: sspur.toml asks for {want} but sspur.lock pins {have}; run 'sspur deps update {n}' to review the change"));
+                }
+        }
         let (lock2, env) = resolve(root, &m, &lock, None)?;
         if lock2 != lock {
             lock2.write(root)?;
         }
         Ok(Some(env))
+    }
+
+    /// What the lock pins, from the cache, whatever the manifest now says.
+    pub fn locked(m: &Manifest, lock: &Lock) -> Env {
+        let all = lock.entries.iter().filter_map(|(n, e)| Some((n.clone(), Arc::new(load_cached(&e.hash)?)))).collect();
+        Env { name: Some(m.name.clone()), direct: m.deps.keys().cloned().collect(), all }
     }
 
     fn from_lock(m: &Manifest, lock: &Lock) -> Option<Env> {

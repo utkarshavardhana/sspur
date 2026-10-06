@@ -4,6 +4,9 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Fixed
+- Concurrent native builds of the same program could fail with `No such file or directory`: the GPU runtime shim, the whole-program build and the OpenCL emit used fixed temporary file names in the shared cache, so one process renamed or deleted another's files. Every build now uses per-process, per-build temporary names. This also caused the intermittent macOS CI failure in `kernel_traps_are_identical_in_every_tier`.
+
 ## [0.3.0] - 2026-10-06
 
 ### Added

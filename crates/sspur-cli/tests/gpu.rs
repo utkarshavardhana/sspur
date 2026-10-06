@@ -216,3 +216,32 @@ fn kernel_traps_are_identical_in_every_tier() {
     assert!(interp.1.contains("1 passed, 0 failed"), "{}", interp.1);
     assert_eq!(interp.1, run(&["test"], &path, &[]).1);
 }
+
+#[test]
+fn concurrent_cold_builds_do_not_race() {
+    if !have_clang() {
+        return;
+    }
+    let path = suite().join("traps.ssp");
+    let expected = run(&["test", "--interp"], &path, &[]).1;
+    let cache = std::env::temp_dir().join(format!("sspur-race-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&cache);
+    let kids: Vec<_> = (0..4)
+        .map(|_| {
+            Command::new(env!("CARGO_BIN_EXE_sspur"))
+                .arg("test")
+                .arg(&path)
+                .env("SSPUR_CACHE", &cache)
+                .env("SSPUR_STRICT_NATIVE", "1")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let outs: Vec<_> = kids.into_iter().map(|k| k.wait_with_output().unwrap()).collect();
+    let _ = std::fs::remove_dir_all(&cache);
+    for o in outs {
+        assert_eq!(String::from_utf8_lossy(&o.stdout), expected, "{}", String::from_utf8_lossy(&o.stderr));
+    }
+}

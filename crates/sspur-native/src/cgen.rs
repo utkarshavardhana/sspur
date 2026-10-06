@@ -1221,9 +1221,10 @@ fn build(src: &str, opt: &str, links: &[String], lto: flags::Lto, names: &HashMa
     if lib.exists() {
         return Ok(lib);
     }
-    let c = dir.join(format!("{}.c", &key[..32]));
+    let uniq = tmp_suffix();
+    let c = dir.join(format!("{}.{uniq}.c", &key[..32]));
     std::fs::write(&c, src).map_err(|e| e.to_string())?;
-    let tmp = lib.with_extension("tmp");
+    let tmp = lib.with_extension(format!("{uniq}.tmp"));
     let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
     let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w"]).args(lto.flag()).args(lto.linker()).arg("-o").arg(&tmp).arg(&c).args(links).args(flags::sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
@@ -1231,8 +1232,10 @@ fn build(src: &str, opt: &str, links: &[String], lto: flags::Lto, names: &HashMa
         if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
             eprintln!("{cc} failed: {err}");
         }
+        let _ = std::fs::rename(&c, dir.join(format!("{}.c", &key[..32])));
         return Err(c_failure(&err, &|_| Some((src.to_string(), None)), names));
     }
+    let _ = std::fs::rename(&c, dir.join(format!("{}.c", &key[..32])));
     std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
     Ok(lib)
 }
@@ -1300,6 +1303,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashM
     }
     let objs: Vec<PathBuf> = keys.iter().map(|k| objdir.join(format!("{k}.o"))).collect();
     let todo: Vec<usize> = (0..tus.len()).filter(|&i| !objs[i].exists()).collect();
+    let build = tmp_suffix();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let failed: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
     let jobs = std::env::var("SSPUR_JOBS").ok().and_then(|j| j.parse::<usize>().ok()).unwrap_or(4).clamp(1, 4).min(todo.len().max(1));
@@ -1312,7 +1316,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashM
                 if b >= batches.len() || failed.lock().unwrap().is_some() {
                     break;
                 }
-                let wd = objdir.join(format!("b{}-{b}", std::process::id()));
+                let wd = objdir.join(format!("b{build}-{b}"));
                 let r = (|| {
                     std::fs::create_dir_all(&wd).map_err(|e| e.to_string())?;
                     let mut cmd = Command::new(&cc);
@@ -1351,7 +1355,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashM
     if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
         eprintln!("split: {} units, {} compiled, {:?}: {}", tus.len(), todo.len(), t0.elapsed(), todo.iter().map(|&i| tus[i].name.as_str()).collect::<Vec<_>>().join(" "));
     }
-    let tmp = lib.with_extension(format!("{}.tmp", std::process::id()));
+    let tmp = lib.with_extension(format!("{build}.tmp"));
     let mut link = Command::new(&cc);
     if let Some(l) = lto.flag() {
         let cache = dir.join("lto");
@@ -4803,4 +4807,9 @@ fn fix_members(src: &str) -> String {
     }
     out.push_str(&src[last..]);
     out
+}
+
+pub(crate) fn tmp_suffix() -> String {
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    format!("{}-{}", std::process::id(), SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
 }

@@ -137,7 +137,7 @@ pub(super) fn build_pgo(src: &str, opt: &str, links: &[String], o: &BuildOpts) -
     let dir = base.join("pgo").join(&key);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     std::fs::write(dir.join("prog.c"), src).map_err(|e| e.to_string())?;
-    let tmp = lib.with_extension(format!("{}.tmp", std::process::id()));
+    let tmp = lib.with_extension(format!("{}.tmp", super::tmp_suffix()));
     let mut cmd = Command::new(&cc);
     cmd.current_dir(&dir).args([opt, "-shared", "-fPIC", "-w", &flag]);
     if let Some(l) = lto {

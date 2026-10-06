@@ -1098,8 +1098,9 @@ pub fn emit(check: &CheckOutput, target: &str) -> Result<Vec<u8>, String> {
     let key = blake3::hash(format!("{target}\n{src}").as_bytes()).to_hex().to_string();
     let dir = cache_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let cl = dir.join(format!("{}.cl", &key[..24]));
-    let out = dir.join(format!("{}.{target}", &key[..24]));
+    let uniq = super::tmp_suffix();
+    let cl = dir.join(format!("{}.{uniq}.cl", &key[..24]));
+    let out = dir.join(format!("{}.{uniq}.{target}", &key[..24]));
     std::fs::write(&cl, &src).map_err(|e| e.to_string())?;
     let mut failure = String::new();
     let mut crashed = false;
@@ -1136,9 +1137,10 @@ pub fn shim() -> Result<PathBuf, String> {
     if lib.exists() {
         return Ok(lib);
     }
-    let src = dir.join(format!("sspur_gpu_{}.m", &key[..16]));
+    let uniq = super::tmp_suffix();
+    let src = dir.join(format!("sspur_gpu_{}.{uniq}.m", &key[..16]));
     std::fs::write(&src, SHIM_SRC).map_err(|e| e.to_string())?;
-    let tmp = lib.with_extension("tmp");
+    let tmp = lib.with_extension(format!("{uniq}.tmp"));
     let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
     let install = format!("-Wl,-install_name,{}", lib.display());
     let metal = Command::new(&cc).args(["-O2", "-fobjc-arc", "-shared", "-fPIC", "-w", &install, "-framework", "Metal", "-framework", "Foundation", "-o"]).arg(&tmp).arg(&src).output();
@@ -1148,6 +1150,7 @@ pub fn shim() -> Result<PathBuf, String> {
             return Err(format!("{cc} failed to build the GPU runtime: {}", String::from_utf8_lossy(&stub.stderr).lines().take(4).collect::<Vec<_>>().join(" | ")));
         }
     }
+    let _ = std::fs::remove_file(&src);
     std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
     Ok(lib)
 }

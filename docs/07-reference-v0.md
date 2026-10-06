@@ -634,7 +634,7 @@ Queries (`sspur q <query> [target] [--budget N]`, or the MCP tool `query`; see `
 | `sig X`, `body X` | X's signature, or its full source (`body A,B` gives several) |
 | `callers X`, `callees X` | Definitions that use X, or that X uses |
 | `effects X` | X's declared effects |
-| `find 'ship\|tax_*'` | Definitions whose name contains a word or matches a `*` pattern (case-insensitive, `\|` separates alternatives), with signatures; exact names first, at most 60 |
+| `find 'ship\|tax_*\|^order'` | Definitions whose name contains a word, matches a `*` pattern or an anchored `^`/`$` word (case-insensitive, `\|` separates alternatives), with signatures; exact names first, at most 60 |
 | `find "List[Int] -> Int"` | Functions whose type matches (any pattern with `->`, `[` or `(`) |
 | `grep TEXT` | Definitions whose source contains TEXT, each with its signature and up to 3 matching lines |
 | `pack X --budget N` | The minimal context for editing X: its source, callee signatures, its tests, and its callers, trimmed to N tokens; with more than 8 callers, 3 tests, 3 callers in full and 5 as signatures, then a count of the rest |

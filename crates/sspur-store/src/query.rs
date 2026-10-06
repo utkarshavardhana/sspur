@@ -16,14 +16,27 @@ const PACK_TESTS: usize = 3;
 
 const KINDS: &[(&str, &str)] = &[("types", "type"), ("type", "type"), ("fns", "fn"), ("fn", "fn"), ("tests", "test"), ("test", "test"), ("effects", "effect"), ("stores", "store"), ("svcs", "svc"), ("statics", "static"), ("uses", "use")];
 
-/// `a|b*c`: any alternative matches; `*` is a wildcard (then the whole name must match), otherwise a substring. Case-insensitive.
+/// `a|b*c|^d|e$`: any alternative matches; `*` is a wildcard (then the whole name must match), `^` and `$` anchor, otherwise a substring. Case-insensitive.
 pub fn name_matches(pattern: &str, name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    pattern.split('|').map(|a| a.trim().to_ascii_lowercase()).filter(|a| !a.is_empty()).any(|a| if a.contains('*') { glob(&a, &name) } else { name.contains(&a) })
+    pattern.split('|').map(|a| a.trim().to_ascii_lowercase()).filter(|a| !a.is_empty()).any(|a| {
+        let (start, end) = (a.starts_with('^'), a.ends_with('$') && a.len() > 1);
+        let core = a.trim_start_matches('^').trim_end_matches('$');
+        if start || end {
+            glob(&format!("{}{core}{}", if start { "" } else { "*" }, if end { "" } else { "*" }), &name)
+        } else if a.contains('*') {
+            glob(&a, &name)
+        } else {
+            name.contains(&a)
+        }
+    })
 }
 
 fn glob(p: &str, s: &str) -> bool {
     let parts: Vec<&str> = p.split('*').collect();
+    if parts.len() == 1 {
+        return p == s;
+    }
     let (first, last) = (parts[0], parts[parts.len() - 1]);
     if !s.starts_with(first) || s.len() < first.len() + last.len() || !s[first.len()..].ends_with(last) {
         return false;
@@ -168,7 +181,7 @@ impl<'a> Ctx<'a> {
                     Def::Fn(f) => json!(f.effects.iter().map(printer::effect).collect::<Vec<_>>()),
                     _ => json!([]),
                 },
-                "find" if need.clone()?.chars().all(|c| c.is_alphanumeric() || "_*|. ".contains(c)) => {
+                "find" if need.clone()?.chars().all(|c| c.is_alphanumeric() || "_*|.^$ ".contains(c)) => {
                     let pat = need.clone()?;
                     let mut hits: Vec<&Def> = self.searchable().filter(|d| name_matches(pat, d.name())).collect();
                     hits.sort_by_key(|d| (!pat.split('|').any(|a| a.trim().eq_ignore_ascii_case(d.name())), Self::kind(d) == "test"));

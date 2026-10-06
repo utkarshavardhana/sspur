@@ -121,6 +121,8 @@ fn queries_answer_from_the_graph() {
     let names: Vec<&str> = found["hits"].as_array().unwrap().iter().map(|h| h["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["quad", "double", "quad_t1"], "exact names first, tests last");
     assert_eq!(found["hits"][1]["sig"], "fn double(x: Int) -> Int");
+    let anchored = c.run("find", Some("^quad$|^dou"), 0);
+    assert_eq!(anchored["total"], 2, "{anchored}");
     let grep = c.run("grep", Some("double("), 0);
     assert_eq!(grep["total"], 2);
     assert_eq!(grep["hits"][1]["lines"], json!(["= double(double(x))"]));

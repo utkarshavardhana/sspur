@@ -91,9 +91,12 @@ pub fn tests_text(results: &[(String, Result<(), String>)], full: bool) -> (Stri
 fn directive(line: &str) -> Option<Json> {
     let w: Vec<&str> = line.split_whitespace().collect();
     let ident = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_');
+    let qualified = |s: &str| s.split_once('.').is_some_and(|(p, n)| ident(p) && ident(n));
     match w.as_slice() {
         ["rename", a, b] if ident(a) && ident(b) && !line.starts_with(' ') => Some(json!({"op": "rename", "from": a, "to": b})),
         ["remove", a] if ident(a) && !line.starts_with(' ') => Some(json!({"op": "remove", "path": a})),
+        ["remove", "use", p] if ident(p) && !line.starts_with(' ') => Some(json!({"op": "remove", "path": format!("use {p}")})),
+        ["remove", a] | ["rename", a, _] if qualified(a) && !line.starts_with(' ') => Some(json!({"error": format!("E_DEP_READONLY {a} belongs to dependency {}; dependency code can't be edited here", a.split('.').next().unwrap_or(""))})),
         _ => None,
     }
 }
@@ -104,6 +107,7 @@ pub fn edit_ops(store: &Store, input: &str) -> Result<Vec<Json>, String> {
     let mut body = String::new();
     for line in input.lines() {
         match directive(line) {
+            Some(op) if op.get("error").is_some() => return Err(format!("rejected, nothing changed\n{}", op["error"].as_str().unwrap_or(""))),
             Some(op) if op["op"] == "rename" => renames.push(op),
             Some(op) => removes.push(op),
             None => body.push_str(line),

@@ -998,6 +998,12 @@ pub fn resolve_with(root: &Path, m: &Manifest, lock: &Lock, update: Option<BTree
 
 /// Rebuilds every locked package from its cached source and checks it against the lock.
 pub fn verify_cache(lock: &Lock) -> Result<usize, String> {
+    rebuild(lock, &|h| cached_source(h), "the cached copy").map(|b| b.len())
+}
+
+/// Builds every package of `lock` from `source(hash)` in dependency order, checks each against
+/// its locked hash, and caches it.
+fn rebuild(lock: &Lock, source: &dyn Fn(&str) -> Option<(String, String)>, what: &str) -> Result<BTreeMap<String, Arc<Pkg>>, String> {
     let mut built: BTreeMap<String, Arc<Pkg>> = BTreeMap::new();
     let mut left: Vec<&LockEntry> = lock.entries.values().collect();
     while !left.is_empty() {
@@ -1008,7 +1014,7 @@ pub fn verify_cache(lock: &Lock) -> Result<usize, String> {
                 next.push(e);
                 continue;
             }
-            let (src, mt) = cached_source(&e.hash).ok_or_else(|| format!("{} is not in the cache", e.name))?;
+            let (src, mt) = source(&e.hash).ok_or_else(|| format!("{} (#{}) is not available; run 'sspur deps fetch'", e.name, &e.hash[..e.hash.len().min(12)]))?;
             let m = Manifest::parse(&mt)?;
             let mut deps = BTreeMap::new();
             let mut todo = e.deps.clone();
@@ -1020,8 +1026,9 @@ pub fn verify_cache(lock: &Lock) -> Result<usize, String> {
             }
             let p = build_pkg(&m, &src, &deps)?;
             if p.hash != e.hash {
-                return Err(format!("E_DEP_HASH {}: the cached copy hashes to #{}, the lock says #{}; delete {} and run 'sspur deps fetch'", e.name, &p.hash[..12], &e.hash[..e.hash.len().min(12)], pkg_dir(&e.hash).display()));
+                return Err(format!("E_DEP_HASH {}: {what} hashes to #{}, the lock says #{}; delete {} and run 'sspur deps fetch'", e.name, &p.hash[..12], &e.hash[..e.hash.len().min(12)], pkg_dir(&e.hash).display()));
             }
+            store_cached(&p, &src, &m.text)?;
             built.insert(e.name.clone(), Arc::new(p));
         }
         if next.len() == before {
@@ -1029,5 +1036,76 @@ pub fn verify_cache(lock: &Lock) -> Result<usize, String> {
         }
         left = next;
     }
-    Ok(built.len())
+    Ok(built)
+}
+
+/// A replica's dependencies for `sspur sync`: its manifest's deps, its lock, and the source of
+/// every locked package, so the other side can verify them by hash without fetching.
+pub fn bundle(root: &Path) -> serde_json::Value {
+    let m = Manifest::read(root).ok().flatten();
+    let lock = Lock::read(root).unwrap_or_default();
+    let pkgs: Vec<serde_json::Value> = lock.entries.values().filter_map(|e| cached_source(&e.hash).map(|(src, man)| serde_json::json!({"hash": e.hash, "src": src, "manifest": man}))).collect();
+    let direct: BTreeMap<String, String> = m.as_ref().map(|m| m.deps.iter().map(|(n, s)| (n.clone(), absolute(s, root).toml())).collect()).unwrap_or_default();
+    serde_json::json!({"name": m.map(|m| m.name), "lock": lock.render(), "direct": direct, "pkgs": pkgs})
+}
+
+fn absolute(s: &Source, root: &Path) -> Source {
+    match s {
+        Source::Path(p) => Source::Path(root.join(p).canonicalize().map(|p| p.display().to_string()).unwrap_or_else(|_| p.clone())),
+        g => g.clone(),
+    }
+}
+
+/// Merges another replica's dependencies into the package at `root`. Returns the names added.
+pub fn ingest_bundle(root: &Path, b: &serde_json::Value) -> Result<Vec<String>, String> {
+    let theirs = Lock::parse(b["lock"].as_str().unwrap_or_default())?;
+    if theirs.entries.is_empty() {
+        return Ok(vec![]);
+    }
+    let mut lock = Lock::read(root)?;
+    for (n, e) in &theirs.entries {
+        if let Some(mine) = lock.entries.get(n)
+            && mine.hash != e.hash {
+                return Err(format!("E_DEP_CONFLICT the replicas pin different versions of {n}: ours #{}, theirs #{}; run 'sspur deps update {n}' on one side first", &mine.hash[..mine.hash.len().min(12)], &e.hash[..e.hash.len().min(12)]));
+            }
+    }
+    let srcs: BTreeMap<String, (String, String)> = b["pkgs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| Some((p["hash"].as_str()?.to_string(), (p["src"].as_str()?.to_string(), p["manifest"].as_str()?.to_string()))))
+        .collect();
+    rebuild(&theirs, &|h| load_cached(h).and_then(|_| cached_source(h)).or_else(|| srcs.get(h).cloned()), "the replica's copy")?;
+    let mut added = Vec::new();
+    for (n, e) in theirs.entries {
+        if !lock.entries.contains_key(&n) {
+            added.push(n.clone());
+            lock.entries.insert(n, e);
+        }
+    }
+    let mut m = match Manifest::read(root)? {
+        Some(m) => m,
+        None => {
+            let name = b["name"].as_str().ok_or("the remote has dependencies but no package name")?;
+            Manifest::parse(&Manifest::new_text(name))?
+        }
+    };
+    let mut text = m.text.clone();
+    for (n, t) in b["direct"].as_object().into_iter().flatten() {
+        if m.deps.contains_key(n) {
+            continue;
+        }
+        let parsed = Manifest::parse(&format!("[package]\nname = \"x\"\n[deps]\n{n} = {}\n", t.as_str().unwrap_or_default()))?;
+        if let Some(src) = parsed.deps.get(n) {
+            text = m.with_dep(n, Some(src));
+            m = Manifest::parse(&text)?;
+        }
+    }
+    if !root.join(MANIFEST).exists() || std::fs::read_to_string(root.join(MANIFEST)).ok().as_deref() != Some(text.as_str()) {
+        write_atomic(&root.join(MANIFEST), &text)?;
+    }
+    if !added.is_empty() {
+        lock.write(root)?;
+    }
+    Ok(added)
 }

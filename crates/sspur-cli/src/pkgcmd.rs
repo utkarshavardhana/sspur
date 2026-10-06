@@ -28,7 +28,7 @@ fn rel_to(root: &Path, p: &Path) -> String {
     let ac: Vec<_> = a.components().collect();
     let bc: Vec<_> = b.components().collect();
     let k = ac.iter().zip(&bc).take_while(|(x, y)| x == y).count();
-    if k == 0 {
+    if k <= 1 {
         return b.display().to_string();
     }
     let mut out: Vec<String> = vec!["..".into(); ac.len() - k];

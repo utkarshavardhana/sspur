@@ -22,6 +22,7 @@ mod split;
 mod stdlib;
 mod stdcx;
 mod stdratio;
+mod stdlocale;
 mod stdfile;
 mod stdflat;
 mod stdrng;
@@ -1954,6 +1955,8 @@ impl<'a> Cx<'a> {
                 body.push_str("return 0;");
             }
             Type::Con(n, _) if n == "#Ratio" => {
+                self.cty(&Type::con("#BigInt"))?;
+                self.cty(&Type::con("#Dec"))?;
                 self.std("ratio");
                 body.push_str("return ss_rat_cmp((SRat){a.num, a.den}, (SRat){b.num, b.den});");
             }
@@ -3111,6 +3114,8 @@ impl<'a> Cx<'a> {
                 format!("sb_put(b, \"File(\", 5); {e}(b, v.path, 1); sb_put(b, \")\", 1);")
             }
             Type::Con(n, _) if n == "#Ratio" => {
+                self.cty(&Type::con("#BigInt"))?;
+                self.cty(&Type::con("#Dec"))?;
                 self.std("ratio");
                 "(void)q; ss_rat_put(b, (SRat){v.num, v.den});".into()
             }
@@ -3734,6 +3739,9 @@ impl<'a> Cx<'a> {
         }
         if matches!(&rt, Type::Con(n, _) if n == "#Rng") {
             return self.rng_method(&r, name, args, t);
+        }
+        if matches!(&rt, Type::Con(n, _) if n == "#Locale") {
+            return self.locale_method(&r, name, args, t);
         }
         if matches!(&rt, Type::Con(n, _) if n == "#Ratio") {
             return self.ratio_method(&r, name, args);

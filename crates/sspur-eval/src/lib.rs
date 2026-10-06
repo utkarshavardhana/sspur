@@ -9,6 +9,7 @@ mod stdlib;
 mod stdbig;
 mod stdcx;
 mod stdratio;
+mod stdlocale;
 mod stdfile;
 mod stdflat;
 mod stdre;

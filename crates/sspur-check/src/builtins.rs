@@ -115,9 +115,9 @@ pub const METHODS: &[(&str, &str)] = &[
     ("*", "str[A](x: A) -> Str"),
 ];
 
-pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0), ("Regex", "#Regex", 0), ("DevBuf", "#DevBuf", 1), ("Rng", "#Rng", 0), ("Complex", "#Complex", 0), ("FlatMap", "#FlatMap", 2), ("MdSpan", "#MdSpan", 1), ("Zone", "#Zone", 0), ("File", "#File", 0), ("View", "#View", 1), ("Ratio", "#Ratio", 0)];
+pub const STD_TYPES: &[(&str, &str, usize)] = &[("Set", "#Set", 1), ("Heap", "#Heap", 1), ("StrBuf", "#StrBuf", 0), ("Time", "#Time", 0), ("Duration", "#Duration", 0), ("Bits", "#Bits", 0), ("HashMap", "#HashMap", 2), ("HashSet", "#HashSet", 1), ("BigInt", "#BigInt", 0), ("Dec", "#Dec", 0), ("Regex", "#Regex", 0), ("DevBuf", "#DevBuf", 1), ("Rng", "#Rng", 0), ("Complex", "#Complex", 0), ("FlatMap", "#FlatMap", 2), ("MdSpan", "#MdSpan", 1), ("Zone", "#Zone", 0), ("File", "#File", 0), ("View", "#View", 1), ("Ratio", "#Ratio", 0), ("Locale", "#Locale", 0)];
 
-pub const STD_RECORDS: &[(&str, &str)] = &[("#Rng", "type Rng = {state: Int, gamma: Int}"), ("#Complex", "type Complex = {re: F64, im: F64}"), ("#FlatMap", "type FlatMap[K, V] = {keys: List[K], values: List[V]}"), ("#MdSpan", "type MdSpan[T] = {data: List[T], offset: Int, shape: List[Int], strides: List[Int]}"), ("#Zone", "type Zone = {name: Str, trans: List[Int], idx: List[Int], offs: List[Int], dst: List[Bool], abbrs: List[Str], tail: List[Int]}"), ("#File", "type File = {fd: Int, path: Str, dev: Int, ino: Int}"), ("#Ratio", "type Ratio = {num: BigInt, den: BigInt}")];
+pub const STD_RECORDS: &[(&str, &str)] = &[("#Rng", "type Rng = {state: Int, gamma: Int}"), ("#Complex", "type Complex = {re: F64, im: F64}"), ("#FlatMap", "type FlatMap[K, V] = {keys: List[K], values: List[V]}"), ("#MdSpan", "type MdSpan[T] = {data: List[T], offset: Int, shape: List[Int], strides: List[Int]}"), ("#Zone", "type Zone = {name: Str, trans: List[Int], idx: List[Int], offs: List[Int], dst: List[Bool], abbrs: List[Str], tail: List[Int]}"), ("#File", "type File = {fd: Int, path: Str, dev: Int, ino: Int}"), ("#Ratio", "type Ratio = {num: BigInt, den: BigInt}"), ("#Locale", "type Locale = {tag: Str}")];
 
 pub const STD_GLOBALS: &[&str] = &[
     "dev_f32(xs: List[F64]) -> DevBuf[F32] ! dev",
@@ -182,6 +182,7 @@ pub const STD_GLOBALS: &[&str] = &[
     "ratio(n: Int, d: Int) -> Ratio",
     "ratio_big(n: BigInt, d: BigInt) -> Ratio",
     "parse_ratio(s: Str) -> Opt[Ratio]",
+    "locale(tag: Str) -> Opt[Locale]",
     "polar(r: F64, theta: F64) -> Complex",
     "empty_flat_map[K, V]() -> FlatMap[K, V]",
     "mdspan[T](data: List[T], shape: List[Int]) -> MdSpan[T]",
@@ -483,6 +484,14 @@ pub const STD_METHODS: &[(&str, &str)] = &[
     ("#Ratio", "round(a: Ratio) -> BigInt"),
     ("#Ratio", "to_f64(a: Ratio) -> F64"),
     ("#Ratio", "to_dec(a: Ratio, scale: Int) -> Dec"),
+    ("#Locale", "compare(l: Locale, a: Str, b: Str) -> Int"),
+    ("#Locale", "sort(l: Locale, xs: List[Str]) -> List[Str]"),
+    ("#Locale", "format_int(l: Locale, n: Int) -> Str"),
+    ("#Locale", "format_f64(l: Locale, x: F64, digits: Int) -> Str"),
+    ("#Locale", "format_dec(l: Locale, d: Dec) -> Str"),
+    ("#Locale", "format_date(l: Locale, t: Time) -> Str"),
+    ("#Locale", "format_date_long(l: Locale, t: Time) -> Str"),
+    ("#Locale", "format_time(l: Locale, t: Time) -> Str"),
     ("List", "to_flat_map[K, V](xs: List[(K, V)]) -> FlatMap[K, V]"),
     ("#FlatMap", "get[K, V](m: FlatMap[K, V], k: K) -> Opt[V]"),
     ("#FlatMap", "has[K, V](m: FlatMap[K, V], k: K) -> Bool"),
@@ -540,7 +549,7 @@ pub const STD_METHODS: &[(&str, &str)] = &[
 ];
 
 pub const STD_GLOBAL_NAMES: &[&str] = &[
-    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "rand_binomial", "rand_poisson", "rand_geometric", "rand_gamma", "rand_beta", "rand_weighted", "rng", "complex", "polar", "ratio", "ratio_big", "parse_ratio", "empty_flat_map", "mdspan", "time_zone", "local_zone", "fixed_zone", "open_file", "with_file", "iota", "iterate", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "copy_file", "symlink", "read_link", "is_symlink", "file_mode", "set_mode", "eprint", "run_cmd", "exit", "regex", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days", "dev_f32", "dev_f64", "dev_i32", "dev_u32", "dev_int", "gpu_sync",
+    "empty_set", "empty_heap", "str_buf", "range", "clamp", "rand", "rand_int", "rand_f64", "rand_binomial", "rand_poisson", "rand_geometric", "rand_gamma", "rand_beta", "rand_weighted", "rng", "complex", "polar", "ratio", "ratio_big", "parse_ratio", "locale", "empty_flat_map", "mdspan", "time_zone", "local_zone", "fixed_zone", "open_file", "with_file", "iota", "iterate", "from_bytes", "from_codes", "read_file", "write_file", "append_file", "list_dir", "remove_file", "read_line", "read_lines", "now_ms", "mono_ns", "sleep_ms", "env_var", "args", "pi", "euler", "inf", "nan", "rand_normal", "rand_uniform", "rand_exp", "rand_bool", "read_bytes", "write_bytes", "mkdir", "mkdir_all", "remove_dir", "rename", "exists", "is_dir", "file_size", "modified_ms", "copy_file", "symlink", "read_link", "is_symlink", "file_mode", "set_mode", "eprint", "run_cmd", "exit", "regex", "bits", "big", "parse_big", "decimal", "hash_map", "hash_set", "time_ms", "date", "datetime", "parse_time", "now", "millis", "secs", "mins", "hours", "days", "dev_f32", "dev_f64", "dev_i32", "dev_u32", "dev_int", "gpu_sync",
 ];
 
 pub const SYS_GLOBALS: &[&str] = &[

@@ -13,6 +13,7 @@ pub mod cgen;
 pub mod chrono;
 pub mod json;
 pub mod llvm;
+pub mod locale;
 pub mod nval;
 pub mod rnd;
 pub mod tz;

@@ -75,6 +75,7 @@ impl Checker {
                     "Int" | "F64" | "Bool" | "Str" | "Unit" | "List" | "Opt" | "Map" | "Pii" | "#Set" | "#Heap" | "#StrBuf" | "#Time" | "#Duration" | "#Bits" | "#HashMap" | "#HashSet" | "#BigInt" | "#Dec" => None,
                     "Secret" => Some("secrets cannot be encoded".into()),
                     "#Regex" | "#Zone" | "#File" | "#View" => Some(format!("{} has no JSON form", &n[1..])),
+                    "#Locale" if decode => Some("decoding cannot check the locale tag; decode a Str and call locale".into()),
                     "#Ratio" if decode => Some("decoding cannot check that a Ratio is normalized; decode num and den and call ratio_big".into()),
                     _ if seen.contains(n) => None,
                     _ if decode && self.refined_names.contains(n) => Some(format!("{n} has 'where' refinements that decoding cannot check")),

@@ -1,0 +1,43 @@
+fn loc(tag: Str) -> Locale
+= locale(tag).get
+
+fn tags() -> List[Str]
+= ["en-US", "en-GB", "de-DE", "fr-FR", "ja-JP", "hi-IN"]
+
+fn every(f: Locale -> Str) -> List[Str]
+= tags().map(t => f(loc(t)))
+
+fn moment() -> Time
+= datetime(2026, 3, 7, 15, 4, 5).get
+
+fn midnight() -> Time
+= datetime(2026, 12, 25, 0, 30, 0).get
+
+fn words() -> List[Str]
+= ["zebra", "Äpfel", "apfel", "Apfel", "äpfel", "abc", "Zürich", "zurich", "côte", "cote", "coté", "côté", "straße", "strasse", "Ab", "ab", "a b", "10", "9", "Ω", "日本", "éclair", "Eclair", "œuvre", "oeuvre", "Łódź", "lodz"]
+
+fn sign(n: Int) -> Int
+= if n < 0 then -1 else if n > 0 then 1 else 0
+
+fn agrees(l: Locale, xs: List[Str]) -> Bool
+= do
+  ys = l.sort(xs)
+  ys.windows(2).all(p => l.compare(p[0], p[1]) < 0) and xs.all(x => l.compare(x, x) == 0) and xs.all(a => xs.all(b => sign(l.compare(a, b)) == -sign(l.compare(b, a))))
+
+test tags_parse = locale("de-DE").map(l => l.tag) == some("de-DE") and locale("de_DE") == none and locale("xx-YY") == none and locale("") == none
+test collation = loc("en-US").sort(words()) == ["10", "9", "a b", "ab", "Ab", "abc", "apfel", "Apfel", "äpfel", "Äpfel", "cote", "coté", "côte", "côté", "Eclair", "éclair", "lodz", "Łódź", "oeuvre", "œuvre", "strasse", "straße", "zebra", "zurich", "Zürich", "Ω", "日本"]
+test collation_is_total = agrees(loc("fr-FR"), words()) and agrees(loc("ja-JP"), ["カ", "か", "が", "漢字", "a", "A", ""])
+test decomposed = loc("de-DE").compare(from_codes([101, 769]).get, "é") != 0 and loc("de-DE").compare("ée", from_codes([101, 769, 102]).get) < 0 and loc("de-DE").compare("Ä", from_codes([97, 776]).get) > 0
+test same_rules_everywhere = tags().all(t => loc(t).sort(words()) == loc("en-US").sort(words()))
+test integers = every(l => l.format_int(-1234567)) == ["-1,234,567", "-1,234,567", "-1.234.567", "-1{nb()}234{nb()}567", "-1,234,567", "-12,34,567"]
+test small_integers = every(l => l.format_int(999)) == ["999", "999", "999", "999", "999", "999"] and loc("hi-IN").format_int(-9223372036854775807 - 1) == "-92,23,37,20,36,85,47,75,808"
+test floats = every(l => l.format_f64(1234567.891, 2)) == ["1,234,567.89", "1,234,567.89", "1.234.567,89", "1{nb()}234{nb()}567,89", "1,234,567.89", "12,34,567.89"] and loc("de-DE").format_f64(0.5, 0) == "0" and loc("de-DE").format_f64(inf(), 2) == "inf"
+test decimals = loc("fr-FR").format_dec(decimal("-98765.4321").get) == "-98{nb()}765,4321" and loc("hi-IN").format_dec(decimal("100000").get) == "1,00,000"
+test dates = every(l => l.format_date(moment())) == ["3/7/2026", "07/03/2026", "07.03.2026", "07/03/2026", "2026/03/07", "7/3/2026"]
+test long_dates = every(l => l.format_date_long(moment())) == ["March 7, 2026", "7 March 2026", "7. März 2026", "7 mars 2026", "2026年3月7日", "7 मार्च 2026"]
+test times = every(l => l.format_time(moment())) == ["3:04 PM", "15:04", "15:04", "15:04", "15:04", "3:04 pm"] and every(l => l.format_time(midnight())) == ["12:30 AM", "00:30", "00:30", "00:30", "0:30", "12:30 am"]
+test months = loc("hi-IN").format_date_long(midnight()) == "25 दिसंबर 2026" and loc("fr-FR").format_date_long(date(2026, 8, 1).get) == "1 août 2026"
+test encode = json.encode(loc("ja-JP")) == "\{\"tag\":\"ja-JP\"}"
+
+fn nb() -> Str
+= from_codes([8239]).get

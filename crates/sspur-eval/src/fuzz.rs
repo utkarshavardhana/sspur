@@ -350,6 +350,10 @@ impl Interp {
                 let (re, im) = (self.generate(&f_ty, rng, opts, depth)?, self.generate(&f_ty, rng, opts, depth)?);
                 Value::Record("#Complex".into(), Rc::new(vec![("re".into(), re), ("im".into(), im)]))
             }
+            "Locale" if !self.types.contains_key(name) => {
+                let tag = sspur_native::locale::LOCALES[rng.below(6) as usize].tag;
+                Value::Record("#Locale".into(), Rc::new(vec![("tag".into(), Value::str(tag))]))
+            }
             "Ratio" if !self.types.contains_key(name) => {
                 let int_ty = Ty::Named { name: "Int".into(), args: vec![], span: Span::default() };
                 let (Value::Int(n), Value::Int(d)) = (self.generate(&int_ty, rng, opts, depth)?, self.generate(&int_ty, rng, opts, depth)?) else { return None };

@@ -5,6 +5,8 @@ impl Cx<'_> {
         if !matches!(n, "ratio" | "ratio_big" | "parse_ratio") {
             return Ok(None);
         }
+        self.cty(&Type::con("#BigInt"))?;
+        self.cty(&Type::con("#Dec"))?;
         self.std("ratio");
         let rc = self.cty(&Type::con("#Ratio"))?;
         let back = format!("({rc}){{o_.n, o_.d}}");
@@ -19,6 +21,8 @@ impl Cx<'_> {
     }
 
     pub(super) fn ratio_method(&mut self, r: &str, name: &str, args: &[Expr]) -> G {
+        self.cty(&Type::con("#BigInt"))?;
+        self.cty(&Type::con("#Dec"))?;
         self.std("ratio");
         let vals: Vec<String> = args.iter().map(|a| self.expr(a)).collect::<G<_>>()?;
         let rc = self.cty(&Type::con("#Ratio"))?;

@@ -1955,3 +1955,92 @@ static int ss_rat_parse(Str s, SRat* out, Status* st) {
     if (!d.n) return 0;
     *out = ss_rat_mk(n, d, st); return 1;
 }
+//@ locale chrono fmt dec
+static int64_t ss_loc_idx(Str tag) { for (int i = 0; i < 6; i++) { int64_t n = (int64_t)strlen(ss_loc_tag[i]); if (n == tag.len && !memcmp(ss_loc_tag[i], tag.p, (size_t)n)) return i; } return 0; }
+static Str ss_loc_str(const char* c) { return (Str){(int64_t)strlen(c), c}; }
+static Str ss_loc_num(int64_t i, Str s) {
+    int64_t n = s.len, k = 0; int neg = n > 0 && s.p[0] == '-'; if (neg) k = 1;
+    int64_t a = k; while (k < n && s.p[k] >= '0' && s.p[k] <= '9') k++;
+    int64_t len = k - a, fb = -1;
+    if (!len) return s;
+    if (k < n) { if (s.p[k] != '.') return s; k++; fb = k; while (k < n && s.p[k] >= '0' && s.p[k] <= '9') k++; if (k == fb || k != n) return s; }
+    SB_INIT(b); if (neg) sb_put(&b, "-", 1);
+    Str g = ss_loc_str(ss_loc_grp[i]);
+    for (int64_t j = 0; j < len; j++) {
+        int64_t r = len - j;
+        int cut = j > 0 && (ss_loc_ind[i] ? (r == 3 || (r > 3 && (r - 3) % 2 == 0)) : r % 3 == 0);
+        if (cut) sb_put(&b, g.p, g.len);
+        sb_put(&b, s.p + a + j, 1);
+    }
+    if (fb >= 0) { Str d = ss_loc_str(ss_loc_dec[i]); sb_put(&b, d.p, d.len); sb_put(&b, s.p + fb, n - fb); }
+    return sb_done(&b);
+}
+static void ss_loc_2(SB* b, int64_t v) { char t[4] = {(char)('0' + v / 10), (char)('0' + v % 10), 0, 0}; sb_put(b, t, 2); }
+static Str ss_loc_time(int64_t i, int kind, int64_t t) {
+    SsTp p = ss_parts(t); const char* f = ss_loc_pat[i][kind]; SB_INIT(b);
+    for (; *f; f++) {
+        if (*f != '%') { sb_put(&b, f, 1); continue; }
+        f++; if (!*f) break;
+        int64_t h12 = p.h % 12 == 0 ? 12 : p.h % 12; Str w;
+        switch (*f) {
+        case 'd': sb_int(&b, p.d); break;
+        case 'D': ss_loc_2(&b, p.d); break;
+        case 'm': sb_int(&b, p.mo); break;
+        case 'M': ss_loc_2(&b, p.mo); break;
+        case 'Y': sb_int(&b, p.y); break;
+        case 'B': w = ss_loc_str(ss_loc_mon[i][p.mo - 1]); sb_put(&b, w.p, w.len); break;
+        case 'H': ss_loc_2(&b, p.h); break;
+        case 'k': sb_int(&b, p.h); break;
+        case 'I': sb_int(&b, h12); break;
+        case 'N': ss_loc_2(&b, p.mi); break;
+        case 'p': w = ss_loc_str(p.h < 12 ? ss_loc_am[i] : ss_loc_pm[i]); sb_put(&b, w.p, w.len); break;
+        default: break;
+        }
+    }
+    return sb_done(&b);
+}
+static int64_t ss_coll_elems(Str s, uint32_t* o) {
+    int64_t n = 0, i = 0; const unsigned char* q = (const unsigned char*)s.p;
+#define SS_CE(a, b, c) do { o[3 * n] = (a); o[3 * n + 1] = (b); o[3 * n + 2] = (c); n++; } while (0)
+    while (i < s.len) {
+        uint32_t c = q[i], cp; int k;
+        if (c < 0x80) { cp = c; k = 1; }
+        else if (c < 0xE0) { cp = ((c & 0x1F) << 6) | (q[i + 1] & 0x3F); k = 2; }
+        else if (c < 0xF0) { cp = ((c & 0x0F) << 12) | ((uint32_t)(q[i + 1] & 0x3F) << 6) | (q[i + 2] & 0x3F); k = 3; }
+        else { cp = ((c & 7) << 18) | ((uint32_t)(q[i + 1] & 0x3F) << 12) | ((uint32_t)(q[i + 2] & 0x3F) << 6) | (q[i + 3] & 0x3F); k = 4; }
+        i += k;
+        if (cp < 0x20 || (cp >= 0x7F && cp <= 0x9F)) continue;
+        if (cp >= 0x61 && cp <= 0x7A) SS_CE(0x2000 + cp - 0x60, 0x20, 2);
+        else if (cp >= 0x41 && cp <= 0x5A) SS_CE(0x2000 + cp - 0x40, 0x20, 8);
+        else if (cp >= 0x30 && cp <= 0x39) SS_CE(0x1000 + cp - 0x30, 0x20, 2);
+        else if (cp >= 0x966 && cp <= 0x96F) SS_CE(0x1000 + cp - 0x966, 0x20, 4);
+        else if (cp >= 0xC0 && cp <= 0x17F) {
+            const unsigned char* e = ss_coll_lat[cp - 0xC0];
+            if (!e[0]) SS_CE(0x100 + cp, 0x20, 2);
+            else { uint32_t t = e[3] ? 8 : 2; SS_CE(0x2000 + (uint32_t)e[0], 0x20, t); if (e[2]) SS_CE(0, e[2], 2); if (e[1]) SS_CE(0x2000 + (uint32_t)e[1], 0x20, t); }
+        }
+        else if (cp < 0xC0) SS_CE(0x100 + cp, 0x20, 2);
+        else if (cp >= 0x300 && cp <= 0x36F) SS_CE(0, ss_coll_comb[cp - 0x300], 2);
+        else SS_CE(0x10000 + cp, 0x20, 2);
+    }
+#undef SS_CE
+    return n;
+}
+static int ss_coll_cmp(Str a, Str b) {
+    uint32_t* x = (uint32_t*)sspur_alloc_atomic((size_t)(3 * a.len + 3) * 12); uint32_t* y = (uint32_t*)sspur_alloc_atomic((size_t)(3 * b.len + 3) * 12);
+    int64_t nx = ss_coll_elems(a, x), ny = ss_coll_elems(b, y);
+    for (int l = 0; l < 3; l++) {
+        int64_t i = 0, j = 0;
+        for (;;) {
+            while (i < nx && !x[3 * i + l]) i++;
+            while (j < ny && !y[3 * j + l]) j++;
+            if (i == nx || j == ny) { if (i < nx) return 1; if (j < ny) return -1; break; }
+            if (x[3 * i + l] != y[3 * j + l]) return x[3 * i + l] < y[3 * j + l] ? -1 : 1;
+            i++; j++;
+        }
+    }
+    int64_t m = a.len < b.len ? a.len : b.len; int c = m ? memcmp(a.p, b.p, (size_t)m) : 0;
+    if (c) return c < 0 ? -1 : 1;
+    return a.len < b.len ? -1 : a.len > b.len ? 1 : 0;
+}
+static int ss_coll_cmp_p(const void* a, const void* b) { return ss_coll_cmp(*(const Str*)a, *(const Str*)b); }

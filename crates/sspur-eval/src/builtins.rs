@@ -103,6 +103,7 @@ impl Interp {
             Value::Record(n, fs) if &*n == "#Rng" => crate::stdrng::method(name, &fs, &a),
             Value::Record(n, fs) if &*n == "#Complex" => crate::stdcx::method(name, &fs, &a),
             Value::Record(n, fs) if &*n == "#Ratio" => crate::stdratio::method(name, &fs, &a),
+            Value::Record(n, fs) if &*n == "#Locale" => crate::stdlocale::method(name, &fs, &a),
             Value::Record(ref n, _) if &**n == "#Zone" => crate::stdtz::method(name, &recv, &a),
             Value::Record(ref n, _) if &**n == "#File" => self.file_method(name, &recv, &a),
             Value::Record(n, fs) if &*n == "#FlatMap" => crate::stdflat::flat_method(name, &fs, &a),

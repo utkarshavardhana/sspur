@@ -313,6 +313,9 @@ impl Interp {
         if let Some(v) = crate::stdratio::global(n, &a)? {
             return Ok(v);
         }
+        if let Some(v) = crate::stdlocale::global(n, &a)? {
+            return Ok(v);
+        }
         if let Some(v) = crate::stdtz::global(n, &a)? {
             return Ok(v);
         }

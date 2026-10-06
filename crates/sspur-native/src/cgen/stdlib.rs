@@ -46,6 +46,9 @@ impl Cx<'_> {
         for d in deps {
             self.std(d);
         }
+        if key == "locale" {
+            self.protos.push_str(&crate::locale::c_tables());
+        }
         self.protos.push_str(body);
     }
 
@@ -414,6 +417,9 @@ impl Cx<'_> {
             return Ok(Some(x));
         }
         if let Some(x) = self.ratio_global(n, &vals, t)? {
+            return Ok(Some(x));
+        }
+        if let Some(x) = self.locale_global(n, &vals, t)? {
             return Ok(Some(x));
         }
         if let Some(x) = self.flat_global(n, &vals, t)? {

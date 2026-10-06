@@ -1,6 +1,7 @@
 #![allow(clippy::result_large_err)]
 pub mod cache;
 pub mod crdt;
+pub mod pkg;
 pub mod query;
 pub mod sync;
 
@@ -140,6 +141,29 @@ pub struct Loaded {
     pub check: CheckOutput,
     pub hashes: BTreeMap<String, String>,
     pub partial: bool,
+    /// The package's own definitions are `module.defs[..own]`; the rest come from dependencies.
+    pub own: usize,
+    /// Every dependency in the program, for printing names as `pkg.name`.
+    pub pkgs: Vec<String>,
+    /// Mangled names of the public definitions of direct dependencies.
+    pub exports: BTreeSet<String>,
+}
+
+impl Loaded {
+    pub fn own_defs(&self) -> &[Def] {
+        &self.module.defs[..self.own]
+    }
+
+    pub fn is_dep(&self, name: &str) -> bool {
+        !self.pkgs.is_empty() && sspur_syntax::link::demangle_name(name, &|p| self.pkgs.iter().any(|x| x == p)).is_some()
+    }
+
+    pub fn show(&self, text: &str) -> String {
+        if self.pkgs.is_empty() {
+            return text.to_string();
+        }
+        sspur_syntax::link::demangle(text, &|p| self.pkgs.iter().any(|x| x == p))
+    }
 }
 
 #[derive(Clone)]
@@ -223,10 +247,15 @@ fn join_texts(mut parts: Vec<(u8, String, String)>) -> String {
 
 pub fn load_src(src: String) -> Result<Loaded, Vec<Diag>> {
     let module = parse(&src).map_err(|e| vec![syntax_diag(&e)])?;
+    Ok(check_full(src, module))
+}
+
+pub fn check_full(src: String, module: Module) -> Loaded {
     let check = check(&module);
     let res = Resolution { user_methods: Some(&check.user_methods), record_types: Some(&check.record_types) };
     let hashes = hash_module_with(&module, &res).into_iter().collect();
-    Ok(Loaded { src, module, check, hashes, partial: false })
+    let own = module.defs.len();
+    Loaded { src, module, check, hashes, partial: false, own, pkgs: vec![], exports: BTreeSet::new() }
 }
 
 fn text_cache() -> &'static Mutex<HashMap<String, String>> {
@@ -434,10 +463,13 @@ impl Store {
             return Ok(ix);
         }
         let src = self.root_src(&head);
-        let loaded = cache::load_src_cached(src).map_err(|_| "HEAD does not parse".to_string())?;
+        let loaded = self.load_env(src, true).map_err(|_| "HEAD does not parse".to_string())?;
         let ids: BTreeMap<String, String> = head.names.keys().map(|n| (n.clone(), crdt::new_id())).collect();
         let mut writes = Vec::new();
         for (i, s, e) in cache::def_ranges(&loaded.module, &loaded.src) {
+            if i >= loaded.own {
+                continue;
+            }
             let d = &loaded.module.defs[i];
             let Some(entry) = head.names.get(d.name()) else { continue };
             let text = loaded.src[s as usize..e as usize].trim_end();
@@ -488,12 +520,25 @@ impl Store {
 
     pub fn load_head(&self) -> Result<Loaded, Vec<Diag>> {
         let src = self.head_root().map(|r| self.root_src(&r)).unwrap_or_default();
-        load_src(src)
+        self.load_env(src, false)
     }
 
     pub fn check_head(&self) -> Result<Loaded, Vec<Diag>> {
         let src = self.head_root().map(|r| self.root_src(&r)).unwrap_or_default();
-        cache::load_src_cached(src)
+        self.load_env(src, true)
+    }
+
+    /// The directory holding `.sspur`, and `sspur.toml` when the codebase is a package.
+    pub fn root_dir(&self) -> PathBuf {
+        self.dir.parent().map_or_else(|| self.dir.clone(), Path::to_path_buf)
+    }
+
+    pub fn env(&self) -> Result<pkg::Env, Vec<Diag>> {
+        pkg::Env::load(&self.root_dir()).map(Option::unwrap_or_default).map_err(|e| vec![pkg::dep_diag(&e)])
+    }
+
+    pub fn load_env(&self, src: String, cached: bool) -> Result<Loaded, Vec<Diag>> {
+        pkg::load(src, &self.env()?, cached)
     }
 
     pub fn log(&self) -> Vec<Root> {
@@ -610,7 +655,7 @@ impl Store {
                 return Err(r);
             }
         }
-        let next = cache::load_src_cached(render(&defs)).map_err(|d| TxResult::diags(d, None))?;
+        let next = self.load_env(render(&defs), true).map_err(|d| TxResult::diags(d, None))?;
         if next.check.has_errors() {
             return Err(TxResult::diags(next.check.diags, Some(next.src)));
         }
@@ -641,11 +686,14 @@ impl Store {
         let base_by_id: HashMap<String, (String, &Entry, &Ids)> = base
             .map(|r| r.ids.iter().filter_map(|(n, i)| r.names.get(n).map(|e| (i.id.clone(), (n.clone(), e, i)))).collect())
             .unwrap_or_default();
-        let cand_ids: BTreeMap<String, String> = next.module.defs.iter().map(|d| (d.name().to_string(), track.get(d.name()).cloned().unwrap_or_else(crdt::new_id))).collect();
+        let cand_ids: BTreeMap<String, String> = next.own_defs().iter().map(|d| (d.name().to_string(), track.get(d.name()).cloned().unwrap_or_else(crdt::new_id))).collect();
         let mut writes = Vec::new();
         let mut ours = HashMap::new();
         let rename_map: HashMap<&str, &str> = renames.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
         for (i, s, e) in cache::def_ranges(&next.module, &next.src) {
+            if i >= next.own {
+                continue;
+            }
             let d = &next.module.defs[i];
             let name = d.name().to_string();
             let text = next.src[s as usize..e as usize].trim_end().to_string();
@@ -888,21 +936,24 @@ impl Store {
                 .collect();
             return Err(TxResult::diags(diags, None));
         }
-        let next = match known.filter(|k| k.src == mat.src) {
+        let env = self.env().map_err(|d| TxResult::diags(d, None))?;
+        let next = match known.filter(|k| k.src == pkg::merged(&mat.src, &env)) {
             Some(k) => k,
-            None => cache::load_src_cached(mat.src.clone()).map_err(|d| TxResult::diags(d, None))?,
+            None => pkg::load(mat.src.clone(), &env, true).map_err(|d| TxResult::diags(d, None))?,
         };
         if next.check.has_errors() {
             return Err(TxResult::diags(next.check.diags, Some(next.src)));
         }
         if gate == Some("tests") {
-            let full = load_src(next.src.clone()).map_err(|d| TxResult::diags(d, None))?;
+            let full = pkg::load(mat.src.clone(), &env, false).map_err(|d| TxResult::diags(d, None))?;
             let mut it = sspur_eval::Interp::new(&full.module, full.check.record_types.clone(), full.check.user_methods.clone(), full.check.gen_loops.clone());
             it.set_ownership(full.check.own.moves.clone(), full.check.own.inplace.clone());
             it.set_check(&full.check);
+            it.foreign = full.module.defs[full.own..].iter().map(|d| d.name().to_string()).collect();
             let failed: Vec<Diag> = it
                 .run_tests()
                 .into_iter()
+                .filter(|(n, _)| !full.is_dep(n))
                 .filter_map(|(n, r)| r.err().map(|e| Diag { code: "E_TEST_FAILED".into(), severity: "error", def: Some(n.clone()), span: [0, 0], msg: format!("test {n} failed: {e}"), hint: None, fix: vec![] }))
                 .collect();
             if !failed.is_empty() {

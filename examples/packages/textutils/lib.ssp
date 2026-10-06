@@ -1,0 +1,30 @@
+// A small text library. Only `pub` definitions are visible to dependents.
+
+pub type Case = Upper | Lower | Title
+
+pub type TextErr = Empty | TooLong{max: Int}
+
+pub fn words(s: Str) -> List[Str]
+  ex words("a  b") == ["a", "b"]
+= s.split(" ").filter(w => not w.is_empty())
+
+fn cap(w: Str) -> Str = w.take(1).upper + w.drop(1).lower
+
+pub fn title(s: Str) -> Str = words(s).map(cap).join(" ")
+
+pub fn convert(s: Str, c: Case) -> Str = match c
+  | Upper => s.upper
+  | Lower => s.lower
+  | Title => title(s)
+
+pub fn clip(s: Str, max: Int) -> Str ! fail[TextErr]
+  pre max > 0
+  post r.len <= max
+= do
+  if s.is_empty() then raise Empty
+  if s.len > max then s.take(max) else s
+
+test title_mixed = title("hello wORLD") == "Hello World"
+test clip_empty = catch clip("", 3) == ""
+  | Empty => true
+  | TooLong{max} => max < 0

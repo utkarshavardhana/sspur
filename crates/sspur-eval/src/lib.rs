@@ -120,6 +120,8 @@ pub struct Interp {
     kernels: RefCell<HashMap<String, Rc<sspur_check::kernel::Kernel>>>,
     statics: HashMap<String, Expr>,
     static_vals: RefCell<HashMap<String, Value>>,
+    /// Functions from dependencies: their examples are the dependency's tests, not ours.
+    pub foreign: HashSet<String>,
 }
 
 const MAX_DEPTH: u32 = 20_000;
@@ -202,6 +204,7 @@ impl Interp {
             kernels: RefCell::new(HashMap::new()),
             statics: HashMap::new(),
             static_vals: RefCell::new(HashMap::new()),
+            foreign: HashSet::new(),
         };
         for d in &m.defs {
             match d {
@@ -286,7 +289,7 @@ impl Interp {
         let mut cases: Vec<(String, Expr)> = Vec::new();
         let mut names: Vec<&String> = self.fns.keys().collect();
         names.sort();
-        for n in names {
+        for n in names.into_iter().filter(|n| !self.foreign.contains(*n)) {
             for (i, ex) in self.fns[n].examples.iter().enumerate() {
                 cases.push((format!("{n}.ex{}", i + 1), ex.clone()));
             }

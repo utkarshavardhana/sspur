@@ -3,6 +3,7 @@ mod bind;
 mod deploy;
 mod genfuzz;
 mod mcp;
+mod pkgcmd;
 mod sync;
 mod verify;
 
@@ -11,7 +12,7 @@ use sspur_check::Diag;
 use sspur_eval::fuzz::Options;
 use sspur_eval::Interp;
 use sspur_hash::{hash_module_with, Resolution};
-use sspur_store::{load_src, query::Ctx, Loaded, Store, Tx};
+use sspur_store::{pkg, query::Ctx, Loaded, Store, Tx};
 use sspur_syntax::{line_col, print_module};
 use std::io::Read;
 use std::process::ExitCode;
@@ -20,7 +21,9 @@ pub const REFERENCE: &str = include_str!("../../../docs/07-reference-v0.md");
 pub const AGENT_SPEC: &str = include_str!("../../../docs/agent-spec.md");
 
 const USAGE: &str = "usage:
-  sspur init [file.ssp]                 create a codebase in .sspur/ (optionally import a file)
+  sspur init [file.ssp] [--pkg NAME]    create a codebase in .sspur/ (optionally import a file; --pkg also writes sspur.toml)
+  sspur add <path|git-url>[@rev]        add a dependency to sspur.toml and pin it in sspur.lock by the hash of its exports
+  sspur deps fetch | update [NAME...] [--force] | tree   verify and fetch locked deps; upgrade with a semantic diff (refused if it breaks the build); show the graph
   sspur edit [file|-] [-e SRC] [--test] replace or add definitions by name (also 'rename A B', 'remove A' lines)
   sspur apply [tx.json|-] [-e JSON] [--test] apply a transaction of ops
   sspur q <query> [target] [--budget N] query the codebase (list sig body callers callees effects find pack why impact holes diag log)
@@ -72,7 +75,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto" | "--gen" | "--group" | "--keep" | "--modes" | "--reduce" | "--want-skip" | "--want-build" | "--want-hang" | "--from");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto" | "--gen" | "--group" | "--keep" | "--modes" | "--reduce" | "--want-skip" | "--want-build" | "--want-hang" | "--from" | "--pkg");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -104,7 +107,9 @@ fn real_main() -> ExitCode {
             print!("{}", if args.has("--full") { REFERENCE } else { AGENT_SPEC });
             ExitCode::SUCCESS
         }
-        "init" => init(args.pos.get(1), args.has("--json")),
+        "init" => init(args.pos.get(1), args.val("--pkg"), args.has("--json")),
+        "add" => pkgcmd::add(args.pos.get(1)),
+        "deps" => pkgcmd::deps(&args.pos[1..], args.has("--force")),
         "apply" => apply(&args),
         "edit" => edit(&args),
         "q" => {
@@ -225,8 +230,18 @@ fn no_store() -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn init(file: Option<&String>, json: bool) -> ExitCode {
+fn init(file: Option<&String>, name: Option<&String>, json: bool) -> ExitCode {
     let dir = std::env::current_dir().unwrap();
+    if let Some(n) = name {
+        match pkgcmd::init_manifest(&dir, n) {
+            Ok(true) => println!("wrote {}", pkg::MANIFEST),
+            Ok(false) => {}
+            Err(e) => {
+                eprintln!("{e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let store = match Store::init(&dir) {
         Ok(s) => s,
         Err(e) => {
@@ -324,7 +339,14 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
     let json = args.has("--json");
     let (label, text, loaded) = match args.pos.get(1) {
         Some(path) => match std::fs::read_to_string(path) {
-            Ok(src) => (path.clone(), src.clone(), load_src(src)),
+            Ok(src) if cmd == "fmt" => (path.clone(), src.clone(), sspur_syntax::parse(&src).map(|module| Loaded { own: module.defs.len(), src, module, check: Default::default(), hashes: Default::default(), partial: true, pkgs: vec![], exports: Default::default() }).map_err(|e| vec![sspur_check::syntax_diag(&e)])),
+            Ok(src) => match file_env(path) {
+                Ok(env) => (path.clone(), src.clone(), pkg::load(src, &env, false)),
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
+                }
+            },
             Err(e) => {
                 eprintln!("cannot read {path}: {e}");
                 return ExitCode::from(2);
@@ -340,7 +362,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         Err(d) => return fail_diags(&text, &label, &d, json),
     };
     if cmd == "fmt" {
-        let out = print_module(&loaded.module);
+        let out = if loaded.pkgs.is_empty() { print_module(&loaded.module) } else { cwd_store().and_then(|s| s.head_root().map(|r| s.root_src(&r))).unwrap_or_default() };
         if args.has("--write") && label != "HEAD" {
             if let Err(e) = std::fs::write(&label, &out) {
                 eprintln!("cannot write {label}: {e}");
@@ -382,7 +404,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
     match cmd {
         "check" => {
             if !json {
-                println!("ok {} definitions", loaded.module.defs.len());
+                println!("ok {} definitions", loaded.own);
             }
             ExitCode::SUCCESS
         }
@@ -392,7 +414,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         "gpu" => emit_gpu(&loaded, &label, args),
         "hash" => {
             let res = Resolution { user_methods: Some(&loaded.check.user_methods), record_types: Some(&loaded.check.record_types) };
-            for (name, h) in hash_module_with(&loaded.module, &res) {
+            for (name, h) in hash_module_with(&loaded.module, &res).into_iter().take(loaded.own) {
                 println!("#{}  {name}", if args.has("--full") { &h } else { &h[..12] });
             }
             ExitCode::SUCCESS
@@ -407,7 +429,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
                     native_failed(args, &format!("per-definition native build failed {e}"), "using the whole-program build");
                 }
                 for f in &c.functions {
-                    println!("native  {f}");
+                    println!("native  {}", loaded.show(f));
                 }
                 for (f, k) in &loaded.check.kernels {
                     if !c.skipped.contains_key(f) {
@@ -415,12 +437,12 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
                     }
                 }
                 for (f, why) in &c.skipped {
-                    println!("interp  {f}  ({why})");
+                    println!("interp  {}  ({})", loaded.show(f), loaded.show(why));
                 }
                 ExitCode::SUCCESS
             }
             Err(e) => {
-                eprintln!("release compilation failed: {e}");
+                eprintln!("release compilation failed: {}", loaded.show(&e));
                 ExitCode::FAILURE
             }
         },
@@ -453,7 +475,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             match r {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("runtime error: {e}");
+                    eprintln!("runtime error: {}", loaded.show(&e.to_string()));
                     ExitCode::FAILURE
                 }
             }
@@ -462,13 +484,13 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
         "run" => match native_interp(&loaded, args).run_main() {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
-                eprintln!("runtime error: {e}");
+                eprintln!("runtime error: {}", loaded.show(&e.to_string()));
                 ExitCode::FAILURE
             }
         },
         "test" => {
             let (text, ok) = agent::tests_text(&native_interp(&loaded, args).run_tests(), args.has("--full"));
-            println!("{text}");
+            println!("{}", loaded.show(&text));
             if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
         }
         "fuzz" if args.has("--differential") => {
@@ -479,9 +501,9 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
                 match r.mismatch {
                     Some((a, i, n)) => {
                         bad += 1;
-                        println!("DIFF  {}({}): interpreter {i} | native {n}", r.name, a.join(", "));
+                        println!("{}", loaded.show(&format!("DIFF  {}({}): interpreter {i} | native {n}", r.name, a.join(", "))));
                     }
-                    None => println!("same  {} ({} cases)", r.name, r.cases),
+                    None => println!("same  {} ({} cases)", loaded.show(&r.name), r.cases),
                 }
             }
             if bad == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
@@ -492,12 +514,12 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
             let mut failed = 0;
             for r in &reports {
                 match (&r.skipped, &r.failure) {
-                    (Some(why), _) => println!("skip  {} ({why})", r.name),
+                    (Some(why), _) => println!("skip  {} ({why})", loaded.show(&r.name)),
                     (_, Some((args, msg))) => {
                         failed += 1;
-                        println!("FAIL  {}({}): {msg}", r.name, args.join(", "));
+                        println!("{}", loaded.show(&format!("FAIL  {}({}): {msg}", r.name, args.join(", "))));
                     }
-                    _ => println!("ok    {} ({} cases, {} discarded)", r.name, r.cases, r.discarded),
+                    _ => println!("ok    {} ({} cases, {} discarded)", loaded.show(&r.name), r.cases, r.discarded),
                 }
             }
             if failed == 0 { ExitCode::SUCCESS } else { ExitCode::FAILURE }
@@ -711,8 +733,17 @@ pub fn default_interp(l: &Loaded) -> Interp {
     native_interp(l, &Args { pos: vec![], flags: vec![] })
 }
 
+fn file_env(path: &str) -> Result<pkg::Env, String> {
+    let dir = std::path::Path::new(path).parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    match pkg::find_root(dir) {
+        Some(r) => Ok(pkg::Env::load(&r)?.unwrap_or_default()),
+        None => Ok(pkg::Env::default()),
+    }
+}
+
 pub fn interp(l: &Loaded) -> Interp {
     let mut it = Interp::new(&l.module, l.check.record_types.clone(), l.check.user_methods.clone(), l.check.gen_loops.clone());
+    it.foreign = l.module.defs[l.own..].iter().map(|d| d.name().to_string()).collect();
     it.set_check(&l.check);
     it.set_ownership(l.check.own.moves.clone(), l.check.own.inplace.clone());
     it.float_sums = l

@@ -323,7 +323,7 @@ impl Renamer<'_> {
     }
 }
 
-fn children_mut(e: &mut Expr) -> Vec<&mut Expr> {
+pub(crate) fn children_mut(e: &mut Expr) -> Vec<&mut Expr> {
     let mut out = Vec::new();
     match &mut e.kind {
         ExprKind::Str(parts) => {

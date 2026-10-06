@@ -1,0 +1,21 @@
+// Depends on ../textutils by path (see sspur.toml and sspur.lock).
+use textutils.{words, Case}
+
+fn shout(s: Str) -> Str = textutils.convert(s, Upper)
+
+fn headline(s: Str) -> Str ! fail[textutils.TextErr] = textutils.clip(textutils.title(s), 16)
+
+fn safe_headline(s: Str) -> Str = catch headline(s)
+  | textutils.Empty => "(empty)"
+  | textutils.TooLong{max} => "(over {max})"
+
+fn main() -> Unit ! log = do
+  log(shout("packages"))
+  log(safe_headline("the quick brown fox jumps"))
+  log(safe_headline(""))
+  log("{words("one two  three").len} words")
+
+test shout_upper = shout("abc") == "ABC"
+test headline_clipped = safe_headline("the quick brown fox jumps") == "The Quick Brown "
+test headline_empty = safe_headline("") == "(empty)"
+test imported_words = words("x y").len == 2

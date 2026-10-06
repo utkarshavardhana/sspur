@@ -132,8 +132,14 @@ pub fn def_ranges(m: &Module, src: &str) -> Vec<(usize, u32, u32)> {
 /// diagnostics, signatures and hashes are complete, expression tables are not.
 pub fn load_src_cached(src: String) -> Result<Loaded, Vec<Diag>> {
     let module = parse(&src).map_err(|e| vec![syntax_diag(&e)])?;
+    Ok(check_cached(src, module, None))
+}
+
+/// The cached check of an already parsed module. With `linked`, the first that many definitions
+/// were rewritten by the package linker, so their key also covers the names they now refer to.
+pub fn check_cached(src: String, module: Module, linked: Option<usize>) -> Loaded {
     if disabled() || !matches!(module.profile.as_deref(), None | Some("app")) {
-        return crate::load_src(src);
+        return crate::check_full(src, module);
     }
     let ranges = def_ranges(&module, &src);
     let text_of = |i: usize| -> &str {
@@ -166,8 +172,12 @@ pub fn load_src_cached(src: String) -> Result<Loaded, Vec<Diag>> {
             continue;
         }
         let text = text_of(i);
+        let printed = linked.filter(|n| i < *n).map(|_| printer::print_def(d));
         let mut seen: BTreeSet<&str> = BTreeSet::new();
         let mut work: Vec<&str> = idents(text).into_iter().collect();
+        if let Some(p) = &printed {
+            work.extend(idents(p));
+        }
         while let Some(n) = work.pop() {
             if let Some(sig) = ifaces.get(n)
                 && seen.insert(n) {
@@ -177,6 +187,10 @@ pub fn load_src_cached(src: String) -> Result<Loaded, Vec<Diag>> {
         let mut h = blake3::Hasher::new();
         h.update(env.as_bytes());
         h.update(text.as_bytes());
+        if let Some(p) = &printed {
+            h.update(b"\0linked\0");
+            h.update(p.as_bytes());
+        }
         for n in &seen {
             h.update(b"\0");
             h.update(n.as_bytes());
@@ -226,5 +240,6 @@ pub fn load_src_cached(src: String) -> Result<Loaded, Vec<Diag>> {
     }
     let res = Resolution { user_methods: Some(&check.user_methods), record_types: Some(&check.record_types) };
     let hashes = hash_module_with(&module, &res).into_iter().collect();
-    Ok(Loaded { src, module, check, hashes, partial: true })
+    let own = linked.unwrap_or(module.defs.len());
+    Loaded { src, module, check, hashes, partial: true, own, pkgs: vec![], exports: BTreeSet::new() }
 }

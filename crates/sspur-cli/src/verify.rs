@@ -124,10 +124,10 @@ pub fn verify(l: &Loaded, label_path: &str, json: bool) -> ExitCode {
         let mut status = Status::Proved;
         let mut detail = String::new();
         if entry && c.obligations.is_empty() {
-            rows.push(json!({"fn": c.func, "clause": label(c), "status": "no callers"}));
+            rows.push(json!({"fn": l.show(&c.func), "clause": label(c), "status": "no callers"}));
             if !json {
                 if last_fn != c.func {
-                    println!("fn {}", c.func);
+                    println!("fn {}", l.show(&c.func));
                     last_fn = c.func.clone();
                 }
                 println!("  {:<44} no callers", label(c));
@@ -175,10 +175,10 @@ pub fn verify(l: &Loaded, label_path: &str, json: bool) -> ExitCode {
             detail = format!("at {} call site{}", c.obligations.len(), if c.obligations.len() == 1 { "" } else { "s" });
         }
         counts[status as usize] += 1;
-        rows.push(json!({"fn": c.func, "clause": label(c), "status": status.name(), "detail": detail}));
+        rows.push(json!({"fn": l.show(&c.func), "clause": label(c), "status": status.name(), "detail": detail}));
         if !json {
             if last_fn != c.func {
-                println!("fn {}", c.func);
+                println!("fn {}", l.show(&c.func));
                 last_fn = c.func.clone();
             }
             let d = if detail.is_empty() { String::new() } else { format!(": {detail}") };

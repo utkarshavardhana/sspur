@@ -2,6 +2,7 @@ use crate::{Loaded, Store};
 use serde_json::{json, Value as Json};
 use sspur_hash::{dependencies, Resolution};
 use sspur_syntax::*;
+use sspur_syntax::link;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const QUERIES: &[&str] = &["list", "sig", "body", "callers", "callees", "effects", "find", "pack", "why", "impact", "holes", "diag", "log"];
@@ -28,10 +29,26 @@ impl<'a> Ctx<'a> {
     }
 
     fn def(&self, name: &str) -> Result<&Def, Json> {
-        self.loaded.module.defs.iter().find(|d| d.name() == name).ok_or_else(|| {
-            let close: Vec<&str> = self.loaded.module.defs.iter().map(Def::name).filter(|n| n.contains(name) || name.contains(*n)).collect();
+        if let Some((p, x)) = name.split_once('.').filter(|(p, _)| self.loaded.pkgs.iter().any(|q| q == p)) {
+            let m = link::mangle(p, x);
+            if !self.loaded.exports.contains(&m) {
+                let what = if self.loaded.module.defs[self.loaded.own..].iter().any(|d| d.name() == m) { "is private to" } else { "is not exported by" };
+                return Err(json!({"error": "E_PKG_PRIVATE", "msg": format!("{name} {what} {p}; 'q list {p}' shows its exports")}));
+            }
+            return self.loaded.module.defs.iter().find(|d| d.name() == m).ok_or_else(|| json!({"error": "E_NOT_FOUND", "msg": format!("no definition '{name}'")}));
+        }
+        self.loaded.own_defs().iter().find(|d| d.name() == name).ok_or_else(|| {
+            let close: Vec<&str> = self.loaded.own_defs().iter().map(Def::name).filter(|n| n.contains(name) || name.contains(*n)).collect();
             json!({"error": "E_NOT_FOUND", "msg": format!("no definition '{name}'"), "close": close})
         })
+    }
+
+    fn listed(&self, target: Option<&str>) -> Result<Vec<&Def>, Json> {
+        match target {
+            None => Ok(self.loaded.own_defs().iter().collect()),
+            Some(p) if self.loaded.pkgs.iter().any(|q| q == p) => Ok(self.loaded.module.defs[self.loaded.own..].iter().filter(|d| self.loaded.exports.contains(d.name()) && d.name().to_ascii_lowercase().starts_with(&format!("{p}__"))).collect()),
+            Some(p) => Err(json!({"error": "E_PKG_UNKNOWN", "msg": format!("no dependency '{p}'"), "close": self.loaded.pkgs})),
+        }
     }
 
     fn kind(d: &Def) -> &'static str {
@@ -76,10 +93,8 @@ impl<'a> Ctx<'a> {
             Ok(match q {
                 "list" => {
                     let items: Vec<Json> = self
-                        .loaded
-                        .module
-                        .defs
-                        .iter()
+                        .listed(target)?
+                        .into_iter()
                         .map(|d| json!({"name": d.name(), "kind": Self::kind(d), "hash": short(&self.loaded.hashes[d.name()]), "sig": match d { Def::Fn(f) => printer::print_sig(f), Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Svc(_) | Def::Static(_) | Def::Use(_) => printer::print_def(d), Def::Test(_) => String::new() }}))
                         .collect();
                     json!(items)
@@ -105,7 +120,9 @@ impl<'a> Ctx<'a> {
                         .module
                         .defs
                         .iter()
-                        .filter_map(|d| match d {
+                        .enumerate()
+                        .filter(|(i, d)| *i < self.loaded.own || self.loaded.exports.contains(d.name()))
+                        .filter_map(|(_, d)| match d {
                             Def::Fn(f) => {
                                 let params: Vec<String> = f.params.iter().map(|p| printer::ty(&p.ty)).collect();
                                 let ret = f.ret.as_ref().map_or("Unit".to_string(), printer::ty);
@@ -162,7 +179,11 @@ impl<'a> Ctx<'a> {
                 _ => return Err(json!({"error": "E_QUERY_UNKNOWN", "msg": format!("unknown query '{q}'"), "queries": QUERIES})),
             })
         })();
-        r.unwrap_or_else(|e| e)
+        let out = r.unwrap_or_else(|e| e);
+        if self.loaded.pkgs.is_empty() {
+            return out;
+        }
+        serde_json::from_str(&self.loaded.show(&out.to_string())).unwrap_or(out)
     }
 
     fn pack(&self, target: &str, budget: usize) -> Result<Json, Json> {

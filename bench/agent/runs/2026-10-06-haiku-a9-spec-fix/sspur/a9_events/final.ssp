@@ -1,0 +1,102 @@
+type Event = {ts: Int, level: Str, msg: Str}
+
+type EventErr = BadJson{text: Str}
+
+type EventJson = {ts: Int, level: Str, msg: Str}
+
+fn count_by_level(evs: List[Event]) -> List[(Str, Int)]
+= evs.map(_.level).counts
+
+fn from_json(s: Str) -> List[Event] ! fail[EventErr]
+= do
+  arr = match json.decode[List[EventJson]](s)
+  | ok(a) => a
+  | err(_) => raise BadJson{text: s}
+  arr.map(e => Event{ts: e.ts, level: e.level, msg: e.msg})
+
+fn ingest(lines: List[Str]) -> List[Event] ! log
+= do
+  var out = []
+  for l in lines
+    match parse_line(l)
+    | some(e) => out := out.push(e)
+    | none => log("skip: " + l)
+  out
+
+fn main() -> Unit ! log
+= log(count_by_level(ingest(sample())).map(p => "{p.0}={p.1}").join(","))
+
+fn parse_line(line: Str) -> Opt[Event]
+= do
+  pattern = match regex("^\\[(\\d+)\\] ([A-Z]+): (.*)$")
+  | ok(p) => p
+  | err(_) => return none
+  groups = match pattern.captures(line)
+  | some(g) => g
+  | none => return none
+  ts_str = match groups.get(1)
+  | some(t) => t
+  | none => return none
+  level_str = match groups.get(2)
+  | some(l) => l
+  | none => return none
+  msg_str = match groups.get(3)
+  | some(m) => m
+  | none => return none
+  ts = match ts_str.to_int
+  | some(t) => t
+  | none => return none
+  some(Event{ts: ts, level: level_str, msg: msg_str.trim})
+
+fn redact(e: Event) -> Event
+= do
+  pattern = match regex("[A-Za-z0-9._-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+")
+  | ok(p) => p
+  | err(_) => return e
+  redacted_msg = pattern.replace(e.msg, "<email>")
+  e with msg := redacted_msg
+
+fn sample() -> List[Str]
+= ["[1] INFO: start", "[2] WARN: disk low", "oops", "[3] INFO: done"]
+
+fn skipped(lines: List[Str]) -> List[Str]
+= do
+  var out = []
+  for l in lines
+    match parse_line(l)
+    | some(_) => ()
+    | none => out := out.push(l)
+  out
+
+fn to_json(evs: List[Event]) -> Str
+= do
+  items = evs.map(e => "\{\"ts\":{e.ts},\"level\":\"{e.level}\",\"msg\":\"{e.msg}\"}")
+  "[" + items.join(",") + "]"
+
+test counts = count_by_level([Event{ts: 1, level: "B", msg: ""}, Event{ts: 2, level: "A", msg: ""}, Event{ts: 3, level: "B", msg: ""}]) == [("B", 2), ("A", 1)]
+
+test from_json_empty = from_json("[]") == []
+
+test from_json_single = from_json("[\{\"ts\":1,\"level\":\"INFO\",\"msg\":\"up\"}]") == [Event{ts: 1, level: "INFO", msg: "up"}]
+
+test parse_bad = parse_line("x|INFO|up").is_none
+
+test parse_ok_t1 = parse_line("[5] INFO: up") == some(Event{ts: 5, level: "INFO", msg: "up"})
+
+test parse_old_format = parse_line("5|INFO|up").is_none
+
+test redact_empty = redact(Event{ts: 1, level: "INFO", msg: "hello"}) == Event{ts: 1, level: "INFO", msg: "hello"}
+
+test redact_multiple = redact(Event{ts: 1, level: "INFO", msg: "contact a@b.c and d@e.f"}).msg == "contact <email> and <email>"
+
+test redact_single = redact(Event{ts: 1, level: "INFO", msg: "user@example.com"}).msg == "<email>"
+
+test skipped_all_valid = skipped(["[1] INFO: a", "[2] INFO: b"]) == []
+
+test skipped_empty = skipped([]) == []
+
+test skipped_mixed = skipped(["[1] INFO: ok", "bad line", "[2] INFO: ok"]) == ["bad line"]
+
+test to_json_empty = to_json([]) == "[]"
+
+test to_json_single = to_json([Event{ts: 1, level: "INFO", msg: "up"}]) == "[\{\"ts\":1,\"level\":\"INFO\",\"msg\":\"up\"}]"

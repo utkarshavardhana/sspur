@@ -1,0 +1,26 @@
+[
+ {
+  "lang": "sspur",
+  "task": "a1_inventory",
+  "passed": 12,
+  "total": 12,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a2_wordstats",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a6_todo",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ }
+]

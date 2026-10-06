@@ -1,0 +1,90 @@
+type Priority = Low | Med | High
+
+type Task = {id: Int where _ > 0, title: Str, done: Bool, pri: Priority}
+
+type TaskErr = NotFound{id: Int} | AlreadyDone{id: Int}
+
+fn add_task(ts: List[Task], title: Str, pri: Priority) -> List[Task]
+= ts.push(Task{id: next_id(ts), title: title, done: false, pri: pri})
+
+fn box(t: Task) -> Str
+= if t.done then "[x]" else "[ ]"
+
+fn by_priority(ts: List[Task]) -> List[Task]
+= do
+  pending_tasks = pending(ts)
+  high = pending_tasks.filter(t => t.pri == High)
+  med = pending_tasks.filter(t => t.pri == Med)
+  low = pending_tasks.filter(t => t.pri == Low)
+  high.sort_by(_.id).concat(med.sort_by(_.id)).concat(low.sort_by(_.id))
+
+fn clear_done(ts: List[Task]) -> List[Task]
+= ts.filter(t => not t.done)
+
+fn complete(ts: List[Task], id: Int) -> List[Task] ! fail[TaskErr]
+= do
+  task = ts.find(t => t.id == id).ok_or(NotFound{id: id})
+  if task.done then raise AlreadyDone{id: id}
+  ts.map(t => if t.id == id then t with done := true else t)
+
+fn demo() -> List[Task]
+= add_task(add_task(add_task(add_task([], "buy milk", Low), "write report", High), "call bob", Med), "fix sink", High)
+
+fn main() -> Unit ! log, fail[TaskErr]
+= do
+  tasks = demo()
+  completed_tasks = complete(tasks, 1)
+  log(render_all(completed_tasks))
+
+fn next_id(ts: List[Task]) -> Int
+= ts.map(_.id).max.or(0) + 1
+
+fn pending(ts: List[Task]) -> List[Task]
+= ts.filter(t => not t.done)
+
+fn render(t: Task) -> Str
+= do
+  pri_label = match t.pri
+  | Low => "low"
+  | Med => "med"
+  | High => "high"
+  "{box(t)} #{t.id} ({pri_label}) {t.title}"
+
+fn render_all(ts: List[Task]) -> Str
+= ts.map(render).join("\n")
+
+fn retitle(ts: List[Task], id: Int, title: Str) -> List[Task] ! fail[TaskErr]
+= do
+  _ = ts.find(t => t.id == id).ok_or(NotFound{id: id})
+  ts.map(t => if t.id == id then t with title := title else t)
+
+test by_priority_order = by_priority(demo()).map(_.id) == [2, 4, 3, 1]
+
+test clear_done_removes = do
+  tasks = complete(demo(), 1)
+  cleared = clear_done(tasks)
+  cleared.map(_.id) == [2, 3, 4]
+
+test complete_already_done = do
+  tasks = complete(demo(), 1)
+  catch complete(tasks, 1) == []
+  | AlreadyDone{id} => id == 1
+  | _ => false
+
+test complete_not_found = catch complete(demo(), 99) == []
+| NotFound{id} => id == 99
+| _ => false
+
+test complete_one = do
+  tasks = complete(demo(), 2)
+  pending(tasks).map(_.id) == [1, 3, 4]
+
+test ids = demo().map(_.id) == [1, 2, 3, 4]
+
+test render_one = render(Task{id: 5, title: "nap", done: true, pri: Low}) == "[x] #5 (low) nap"
+
+test retitle_not_found = catch retitle(demo(), 99, "test") == []
+| NotFound{id} => id == 99
+| _ => false
+
+test retitle_works = retitle(demo(), 2, "new title")[1].title == "new title"

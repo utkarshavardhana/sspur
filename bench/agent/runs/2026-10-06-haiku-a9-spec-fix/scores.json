@@ -1,0 +1,10 @@
+[
+ {
+  "lang": "sspur",
+  "task": "a9_events",
+  "passed": 16,
+  "total": 17,
+  "ok": false,
+  "msg": "FAIL  hidden_json_round: unhandled error: BadJson{text: \"[{\\\"ts\\\":1,\\\"level\\\":\\\"A\\\",\\\"msg\\\":\\\"q\\\"uote\\\"}]\"}"
+ }
+]

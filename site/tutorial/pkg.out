@@ -1,0 +1,19 @@
+$ cd pkg/shop
+$ sspur add ../money
+added money 0.1.0 #ykhwkl7bxmem (path+../money): Money, MoneyErr, cents, fmt
+$ cat sspur.toml
+[package]
+name = "shop"
+version = "0.1.0"
+src = "main.ssp"
+
+[deps]
+money = { path = "../money" }
+$ sspur run
+$19.99
+invalid: -5
+$ sspur test
+2 passed, 0 failed
+$ sspur deps tree
+shop 0.1.0
+  money 0.1.0 #ykhwkl7bxmem path+../money

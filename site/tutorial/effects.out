@@ -1,0 +1,7 @@
+$ sspur run effects.ssp
+total: 24
+$ sspur test effects.ssp
+1 passed, 0 failed
+$ sspur check unhandled.ssp
+unhandled.ssp:10:12 E_EFFECT_MISSING performs 'price_of' but the signature does not declare it
+  hint: add 'price_of' to the effect row of receipt

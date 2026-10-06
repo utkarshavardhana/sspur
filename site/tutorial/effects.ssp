@@ -1,0 +1,22 @@
+// The cart logic asks for prices but does not know where they come from.
+effect price_of(sku: Str) -> Int
+
+type Line = {sku: Str, qty: Int where _ > 0}
+
+fn total(lines: List[Line]) -> Int ! price_of
+= lines.map(l => price_of(l.sku) * l.qty).sum
+
+// A handler answers the request and resumes the computation.
+fn with_catalog(lines: List[Line]) -> Int
+= handle total(lines)
+  | price_of(sku) => resume(if sku == "pen" then 3 else 12)
+
+fn main() -> Unit ! log
+= log("total: {with_catalog([Line{sku: "pen", qty: 4}, Line{sku: "book", qty: 1}])}")
+
+// A test handles the same effect with a stub.
+fn flat(lines: List[Line]) -> Int
+= handle total(lines)
+  | price_of(_) => resume(10)
+
+test flat_price = flat([Line{sku: "a", qty: 2}, Line{sku: "b", qty: 3}]) == 50

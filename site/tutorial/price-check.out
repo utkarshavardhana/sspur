@@ -1,0 +1,8 @@
+$ sspur fuzz price.ssp
+ok    discount (200 cases, 1210 discarded)
+skip  main (no parameters)
+$ sspur verify price.ssp
+fn discount
+  pre price >= 0 and pct >= 0 and pct <= 100   proved: at 4 call sites
+  post r >= 0 and r <= price                   proved
+2 proved, 0 counterexample, 0 unknown; 3 of 4 runtime checks proved safe

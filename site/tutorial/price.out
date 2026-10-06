@@ -1,0 +1,4 @@
+$ sspur run price.ssp
+a 2000 cent book at 15% off costs 1700
+$ sspur test price.ssp
+3 passed, 0 failed

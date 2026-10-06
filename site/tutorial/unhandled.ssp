@@ -1,0 +1,10 @@
+effect price_of(sku: Str) -> Int
+
+type Line = {sku: Str, qty: Int where _ > 0}
+
+fn total(lines: List[Line]) -> Int ! price_of
+= lines.map(l => price_of(l.sku) * l.qty).sum
+
+// Forgot the handler, and the signature says nothing about prices.
+fn receipt(lines: List[Line]) -> Str
+= "total: {total(lines)}"

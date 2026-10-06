@@ -1,0 +1,3 @@
+$ sspur fuzz price_bug.ssp
+FAIL  discount(0, 0): contract violated: post r < price in discount (r = 0)
+skip  main (no parameters)

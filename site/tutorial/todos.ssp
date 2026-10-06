@@ -1,0 +1,43 @@
+type TodoId = new Str
+
+type Todo = {id: TodoId, title: Str where _.len > 0, done: Bool}
+
+type Change = {title: Str where _.len > 0, done: Bool}
+
+type TodoErr = NotFound{id: Str} | Exists{id: Str}
+
+store Todos = table[TodoId, Todo]
+
+fn create(t: Todo) -> Todo ! db.read[Todos], db.write[Todos], fail[TodoErr]
+= do
+  if db.get(Todos, t.id).is_some then raise Exists{id: t.id.raw}
+  db.put(Todos, t.id, t)
+  t
+
+fn read(id: Str) -> Opt[Todo] ! db.read[Todos]
+= db.get(Todos, TodoId(id))
+
+fn update(id: Str, c: Change) -> Todo ! db.read[Todos], db.write[Todos], fail[TodoErr]
+= do
+  old = db.get(Todos, TodoId(id)).ok_or(NotFound{id})
+  t = old with title := c.title, done := c.done
+  db.put(Todos, TodoId(id), t)
+  t
+
+fn remove(id: Str) -> Unit ! db.write[Todos], fail[TodoErr]
+= if not db.del(Todos, TodoId(id)) then raise NotFound{id}
+
+fn list() -> List[Todo] ! db.read[Todos]
+= db.scan(Todos).sort_by(_.id.raw)
+
+fn open_count(ts: List[Todo]) -> Int
+= ts.filter(t => not t.done).len
+
+svc todos
+  ep post "/todos" = create
+  ep get "/todos/{id}" = read
+  ep put "/todos/{id}" = update
+  ep delete "/todos/{id}" = remove
+  ep get "/todos" = list
+
+test counts_open = open_count([Todo{id: TodoId("a"), title: "a", done: true}, Todo{id: TodoId("b"), title: "b", done: false}]) == 1

@@ -1,8 +1,8 @@
 # Summary
 
+# Learn
 
-# Agents
-
+- [Your first SSPUR program in 10 minutes](tutorial.md)
 - [MCP setup](docs/mcp.md)
 - [Agent reference](docs/agent-spec.md)
 

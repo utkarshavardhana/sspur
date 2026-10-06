@@ -1,0 +1,13 @@
+use money.{Money, fmt}
+
+fn price(n: Int) -> Str
+= catch fmt(money.cents(n))
+  | money.Negative{cents} => "invalid: {cents}"
+
+fn main() -> Unit ! log
+= do
+  log(price(1999))
+  log(price(-5))
+
+test shows_dollars = price(250) == "$2.50"
+test rejects_negative = price(-1) == "invalid: -1"

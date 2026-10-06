@@ -1,0 +1,12 @@
+// Apply a percentage discount to a price in cents.
+fn discount(price: Int, pct: Int) -> Int
+  pre price >= 0 and pct >= 0 and pct <= 100
+  post r < price
+= price - price * pct / 100
+
+fn main() -> Unit ! log
+= log("a 2000 cent book at 15% off costs {discount(2000, 15)}")
+
+test half_off = discount(1000, 50) == 500
+test no_discount = discount(999, 0) == 999
+test free = discount(10, 100) == 0

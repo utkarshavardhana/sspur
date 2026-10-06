@@ -1,0 +1,8 @@
+$ sspur run shapes.ssp
+circle at (0, 0), radius 2: area 12
+square 3x3: area 9
+rect 4x1: area 4
+dot: area 0
+total area 25
+$ sspur test shapes.ssp
+2 passed, 0 failed

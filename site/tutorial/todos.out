@@ -1,0 +1,41 @@
+// ANCHOR: plan
+$ sspur test todos.ssp
+1 passed, 0 failed
+$ sspur deploy plan todos.ssp --out deploy
+svc todos #feee957149d4ad94 -> deploy
+  POST /todos              create     dynamodb:GetItem[Todos] dynamodb:PutItem[Todos]
+  GET /todos/{id}          read       dynamodb:GetItem[Todos]
+  PUT /todos/{id}          update     dynamodb:GetItem[Todos] dynamodb:PutItem[Todos]
+  DELETE /todos/{id}       remove     dynamodb:DeleteItem[Todos]
+  GET /todos               list       dynamodb:Scan[Todos]
+...
+  nothing was deployed; build.sh then deploy.sh ship it with your AWS credentials
+// ANCHOR_END: plan
+// ANCHOR: serve
+$ sspur deploy local todos.ssp --port 8080
+listening on http://127.0.0.1:8080
+  #feee957149d4ad94 live; control: sspur deploy swap|promote|rollback|backfill|status --port 8080
+  POST /todos -> create
+  GET /todos/{id} -> read
+  PUT /todos/{id} -> update
+  DELETE /todos/{id} -> remove
+  GET /todos -> list
+// ANCHOR_END: serve
+// ANCHOR: curl
+$ curl -s -w ' %{http_code}\n' -X POST localhost:8080/todos -d '{"id":"milk","title":"buy milk","done":false}'
+{"id":"milk","title":"buy milk","done":false} 201
+$ curl -s -w ' %{http_code}\n' localhost:8080/todos/milk
+{"id":"milk","title":"buy milk","done":false} 200
+$ curl -s -w ' %{http_code}\n' -X PUT localhost:8080/todos/milk -d '{"title":"buy oat milk","done":true}'
+{"id":"milk","title":"buy oat milk","done":true} 200
+$ curl -s -w ' %{http_code}\n' -X POST localhost:8080/todos -d '{"id":"milk","title":"again","done":false}'
+{"error":{"tag":"Exists","id":"milk"}} 409
+$ curl -s -w ' %{http_code}\n' -X POST localhost:8080/todos -d '{"id":"tea","title":"","done":false}'
+{"error":"invalid request","detail":"contract violated: field 'title' of Todo where _.len > 0"} 400
+$ curl -s -w ' %{http_code}\n' localhost:8080/todos
+[{"id":"milk","title":"buy oat milk","done":true}] 200
+$ curl -s -w ' %{http_code}\n' -X DELETE localhost:8080/todos/milk
+ 204
+$ curl -s -w ' %{http_code}\n' localhost:8080/todos/milk
+{"error":"not found"} 404
+// ANCHOR_END: curl

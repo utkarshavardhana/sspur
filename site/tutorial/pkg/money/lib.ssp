@@ -1,0 +1,16 @@
+// Amounts are in cents. Only `pub` definitions are visible to other packages.
+
+pub type Money = {cents: Int}
+
+pub type MoneyErr = Negative{cents: Int}
+
+pub fn cents(n: Int) -> Money ! fail[MoneyErr]
+= if n < 0 then raise Negative{cents: n} else Money{cents: n}
+
+pub fn fmt(m: Money) -> Str
+= do
+  c = m.cents % 100
+  pad = if c < 10 then "0" else ""
+  "${m.cents / 100}.{pad}{c}"
+
+test fmt_pads = fmt(Money{cents: 105}) == "$1.05"

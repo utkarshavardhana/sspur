@@ -183,14 +183,8 @@ pub fn query_text(q: &str, out: &Json, src: &str) -> String {
     }
     let arr = || out.as_array().cloned().unwrap_or_default();
     match q {
-        "list" => {
-            let (tests, rest): (Vec<Json>, Vec<Json>) = arr().into_iter().partition(|d| d["kind"] == "test");
-            let mut lines: Vec<String> = rest.iter().map(|d| d["sig"].as_str().unwrap_or("").to_string()).collect();
-            if !tests.is_empty() {
-                lines.push(format!("tests: {}", tests.iter().filter_map(|d| d["name"].as_str()).collect::<Vec<_>>().join(" ")));
-            }
-            lines.join("\n")
-        }
+        "list" => list_text(&arr()),
+        "find" | "grep" if out.get("hits").is_some() => hits_text(q, out),
         "sig" => out["sig"].as_str().unwrap_or("").to_string(),
         "body" => out["src"].as_str().unwrap_or("").to_string(),
         "callers" | "callees" | "effects" => names(out),
@@ -215,6 +209,61 @@ pub fn query_text(q: &str, out: &Json, src: &str) -> String {
         }
         _ => out.to_string(),
     }
+}
+
+/// Tests listed by name on one line when there are at most this many; otherwise only counted.
+const INLINE_TESTS: usize = 20;
+
+fn list_text(items: &[Json]) -> String {
+    let kinds = [("use", "uses"), ("type", "types"), ("effect", "effects"), ("store", "stores"), ("static", "statics"), ("svc", "svcs"), ("fn", "fns"), ("test", "tests")];
+    let only_tests = !items.is_empty() && items.iter().all(|d| d["kind"] == "test");
+    let mut lines = Vec::new();
+    for (k, plural) in kinds {
+        let group: Vec<&Json> = items.iter().filter(|d| d["kind"] == k).collect();
+        if group.is_empty() {
+            continue;
+        }
+        let names = || group.iter().filter_map(|d| d["name"].as_str()).collect::<Vec<_>>();
+        if k != "test" {
+            lines.push(format!("# {plural} {}", group.len()));
+            lines.extend(group.iter().map(|d| d["sig"].as_str().unwrap_or("").to_string()));
+        } else if only_tests {
+            lines.push(format!("# tests {}", group.len()));
+            lines.extend(names().into_iter().map(String::from));
+        } else if group.len() <= INLINE_TESTS {
+            lines.push(format!("# tests {}: {}", group.len(), names().join(" ")));
+        } else {
+            lines.push(format!("# tests {} (q list tests, or q find WORD)", group.len()));
+        }
+    }
+    if lines.is_empty() { "(none)".into() } else { lines.join("\n") }
+}
+
+fn hits_text(q: &str, out: &Json) -> String {
+    let hits = out["hits"].as_array().cloned().unwrap_or_default();
+    let total = out["total"].as_u64().unwrap_or(hits.len() as u64) as usize;
+    let mut lines = Vec::new();
+    let mut tests = Vec::new();
+    for h in &hits {
+        if q == "find" && h["kind"] == "test" {
+            tests.push(h["name"].as_str().unwrap_or("").to_string());
+            continue;
+        }
+        lines.push(h["sig"].as_str().unwrap_or("").to_string());
+        for l in h["lines"].as_array().into_iter().flatten() {
+            lines.push(format!("  {}", l.as_str().unwrap_or("").trim()));
+        }
+        if let Some(n) = h["more"].as_u64().filter(|n| *n > 0) {
+            lines.push(format!("  .. {n} more lines (q body {})", h["name"].as_str().unwrap_or("")));
+        }
+    }
+    if !tests.is_empty() {
+        lines.push(format!("tests: {}", tests.join(" ")));
+    }
+    if total > hits.len() {
+        lines.push(format!("-- {} of {total} shown; narrow the pattern", hits.len()));
+    }
+    if lines.is_empty() { "(none)".into() } else { lines.join("\n") }
 }
 
 fn diag_of_json(d: &Json) -> Diag {

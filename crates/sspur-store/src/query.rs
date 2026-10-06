@@ -5,7 +5,38 @@ use sspur_syntax::*;
 use sspur_syntax::link;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const QUERIES: &[&str] = &["list", "sig", "body", "callers", "callees", "effects", "find", "pack", "why", "impact", "holes", "diag", "log"];
+pub const QUERIES: &[&str] = &["list", "sig", "body", "callers", "callees", "effects", "find", "grep", "pack", "why", "impact", "holes", "diag", "log"];
+
+/// Most hits `find` and `grep` return before they say how many more there are.
+pub const MAX_HITS: usize = 60;
+const GREP_LINES: usize = 3;
+const PACK_FULL_CALLERS: usize = 3;
+const PACK_SIG_CALLERS: usize = 5;
+const PACK_TESTS: usize = 3;
+
+const KINDS: &[(&str, &str)] = &[("types", "type"), ("type", "type"), ("fns", "fn"), ("fn", "fn"), ("tests", "test"), ("test", "test"), ("effects", "effect"), ("stores", "store"), ("svcs", "svc"), ("statics", "static"), ("uses", "use")];
+
+/// `a|b*c`: any alternative matches; `*` is a wildcard (then the whole name must match), otherwise a substring. Case-insensitive.
+pub fn name_matches(pattern: &str, name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    pattern.split('|').map(|a| a.trim().to_ascii_lowercase()).filter(|a| !a.is_empty()).any(|a| if a.contains('*') { glob(&a, &name) } else { name.contains(&a) })
+}
+
+fn glob(p: &str, s: &str) -> bool {
+    let parts: Vec<&str> = p.split('*').collect();
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !s.starts_with(first) || s.len() < first.len() + last.len() || !s[first.len()..].ends_with(last) {
+        return false;
+    }
+    let mut rest = &s[first.len()..s.len() - last.len()];
+    for mid in &parts[1..parts.len() - 1] {
+        match rest.find(mid) {
+            Some(i) => rest = &rest[i + mid.len()..],
+            None => return false,
+        }
+    }
+    true
+}
 
 pub struct Ctx<'a> {
     pub loaded: &'a Loaded,
@@ -46,8 +77,12 @@ impl<'a> Ctx<'a> {
     fn listed(&self, target: Option<&str>) -> Result<Vec<&Def>, Json> {
         match target {
             None => Ok(self.loaded.own_defs().iter().collect()),
+            Some(k) if !self.loaded.pkgs.iter().any(|q| q == k) && KINDS.iter().any(|(w, _)| *w == k) => {
+                let kind = KINDS.iter().find(|(w, _)| *w == k).map(|(_, kd)| *kd).unwrap_or("fn");
+                Ok(self.loaded.own_defs().iter().filter(|d| Self::kind(d) == kind).collect())
+            }
             Some(p) if self.loaded.pkgs.iter().any(|q| q == p) => Ok(self.loaded.module.defs[self.loaded.own..].iter().filter(|d| self.loaded.exports.contains(d.name()) && d.name().to_ascii_lowercase().starts_with(&format!("{p}__"))).collect()),
-            Some(p) => Err(json!({"error": "E_PKG_UNKNOWN", "msg": format!("no dependency '{p}'"), "close": self.loaded.pkgs})),
+            Some(p) => Err(json!({"error": "E_PKG_UNKNOWN", "msg": format!("no dependency or kind '{p}' (kinds: types fns tests); to search names use 'q find {p}'"), "close": self.loaded.pkgs})),
         }
     }
 
@@ -83,6 +118,19 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    fn searchable(&self) -> impl Iterator<Item = &Def> {
+        self.loaded.module.defs.iter().enumerate().filter(|(i, d)| *i < self.loaded.own || self.loaded.exports.contains(d.name())).map(|(_, d)| d)
+    }
+
+    /// One line per definition: a fn signature, `test NAME`, or the first line of anything else.
+    fn head(d: &Def) -> String {
+        match d {
+            Def::Fn(f) => printer::print_sig(f),
+            Def::Test(_) => format!("test {}", d.name()),
+            other => printer::print_def(other).lines().next().unwrap_or("").to_string(),
+        }
+    }
+
     fn callers_of(&self, name: &str) -> Vec<String> {
         self.deps.iter().filter(|(_, ds)| ds.iter().any(|d| d == name)).map(|(n, _)| n.clone()).collect()
     }
@@ -103,6 +151,13 @@ impl<'a> Ctx<'a> {
                     let d = self.def(need.clone()?)?;
                     json!({"name": d.name(), "kind": Self::kind(d), "hash": self.loaded.hashes[d.name()], "sig": Self::sig_text(d)})
                 }
+                "body" if need.clone()?.contains(',') => {
+                    let mut srcs = Vec::new();
+                    for n in need.clone()?.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+                        srcs.push(printer::print_def(self.def(n)?));
+                    }
+                    json!({"name": need.clone()?, "src": srcs.join("\n\n")})
+                }
                 "body" => {
                     let d = self.def(need.clone()?)?;
                     json!({"name": d.name(), "hash": self.loaded.hashes[d.name()], "src": printer::print_def(d)})
@@ -113,6 +168,33 @@ impl<'a> Ctx<'a> {
                     Def::Fn(f) => json!(f.effects.iter().map(printer::effect).collect::<Vec<_>>()),
                     _ => json!([]),
                 },
+                "find" if need.clone()?.chars().all(|c| c.is_alphanumeric() || "_*|. ".contains(c)) => {
+                    let pat = need.clone()?;
+                    let mut hits: Vec<&Def> = self.searchable().filter(|d| name_matches(pat, d.name())).collect();
+                    hits.sort_by_key(|d| (!pat.split('|').any(|a| a.trim().eq_ignore_ascii_case(d.name())), Self::kind(d) == "test"));
+                    let total = hits.len();
+                    let items: Vec<Json> = hits.into_iter().take(MAX_HITS).map(|d| json!({"name": d.name(), "kind": Self::kind(d), "sig": Self::head(d)})).collect();
+                    json!({"hits": items, "total": total})
+                }
+                "grep" => {
+                    let alts: Vec<&str> = need.clone()?.split('|').map(str::trim).filter(|a| !a.is_empty()).collect();
+                    let mut items = Vec::new();
+                    let mut total = 0;
+                    for d in self.searchable() {
+                        let src = printer::print_def(d);
+                        let head = Self::head(d);
+                        let lines: Vec<&str> = src.lines().filter(|l| alts.iter().any(|a| l.contains(a))).collect();
+                        if lines.is_empty() {
+                            continue;
+                        }
+                        total += 1;
+                        if items.len() < MAX_HITS {
+                            let shown: Vec<&str> = lines.iter().copied().filter(|l| l.trim() != head.trim()).take(GREP_LINES).collect();
+                            items.push(json!({"name": d.name(), "kind": Self::kind(d), "sig": head, "lines": shown, "more": lines.len().saturating_sub(shown.len() + usize::from(lines.iter().any(|l| l.trim() == head.trim())))}));
+                        }
+                    }
+                    json!({"hits": items, "total": total})
+                }
                 "find" => {
                     let want: String = need.clone()?.split_whitespace().collect();
                     let hits: Vec<Json> = self
@@ -204,14 +286,21 @@ impl<'a> Ctx<'a> {
             }
         }
         let callers = self.callers_of(&name);
-        for c in &callers {
-            if let Ok(cd @ Def::Test(_)) = self.def(c) {
-                parts.push((c.clone(), "test", printer::print_def(cd)));
+        let tests: Vec<&String> = callers.iter().filter(|c| matches!(self.def(c), Ok(Def::Test(_)))).collect();
+        let fns: Vec<&String> = callers.iter().filter(|c| matches!(self.def(c), Ok(Def::Fn(_)))).collect();
+        let many = fns.len() > PACK_FULL_CALLERS + PACK_SIG_CALLERS;
+        let mut skipped = (0, 0);
+        for (i, c) in tests.iter().enumerate() {
+            match self.def(c) {
+                Ok(cd) if i < PACK_TESTS || !many => parts.push(((*c).clone(), "test", printer::print_def(cd))),
+                _ => skipped.1 += 1,
             }
         }
-        for c in &callers {
-            if let Ok(cd @ Def::Fn(_)) = self.def(c) {
-                parts.push((c.clone(), "caller", printer::print_def(cd)));
+        for (i, c) in fns.iter().enumerate() {
+            match self.def(c) {
+                Ok(cd) if i < PACK_FULL_CALLERS || !many => parts.push(((*c).clone(), "caller", printer::print_def(cd))),
+                Ok(cd) if i < PACK_FULL_CALLERS + PACK_SIG_CALLERS => parts.push(((*c).clone(), "caller_sig", Self::sig_text(cd))),
+                _ => skipped.0 += 1,
             }
         }
         let mut used = 0;
@@ -224,7 +313,7 @@ impl<'a> Ctx<'a> {
                 used += t;
                 text.push(src);
                 included.push(json!({"name": n, "part": part}));
-            } else if part == "caller" {
+            } else if part == "caller" || part == "caller_sig" {
                 if let Ok(cd) = self.def(&n) {
                     let sig = Self::sig_text(cd);
                     let st = tokens(&sig) + 1;
@@ -240,6 +329,18 @@ impl<'a> Ctx<'a> {
                 omitted.push(json!({"name": n, "part": part}));
             }
         }
-        Ok(json!({"target": name, "hash": self.loaded.hashes[&name], "budget": budget, "est_tokens": used, "text": text.join("\n\n"), "included": included, "omitted": omitted}))
+        let over = omitted.iter().filter(|o| o["part"] == "caller" || o["part"] == "caller_sig").count() + skipped.0;
+        let over_tests = omitted.iter().filter(|o| o["part"] == "test").count() + skipped.1;
+        let others = omitted.len() - omitted.iter().filter(|o| ["caller", "caller_sig", "test"].contains(&o["part"].as_str().unwrap_or(""))).count();
+        if over + over_tests + others > 0 {
+            let mut what = Vec::new();
+            for (n, w) in [(over, "callers"), (over_tests, "tests"), (others, "dependencies")] {
+                if n > 0 {
+                    what.push(format!("{n} {w}"));
+                }
+            }
+            text.push(format!("-- not shown: {} (q callers {name}, q grep {name})", what.join(", ")));
+        }
+        Ok(json!({"target": name, "hash": self.loaded.hashes[&name], "budget": budget, "est_tokens": used, "text": text.join("\n\n"), "included": included, "omitted": omitted, "skipped": {"callers": skipped.0, "tests": skipped.1}}))
     }
 }

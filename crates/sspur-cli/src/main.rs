@@ -26,7 +26,8 @@ const USAGE: &str = "usage:
   sspur deps fetch | update [NAME...] [--force] | tree   verify and fetch locked deps; upgrade with a semantic diff (refused if it breaks the build); show the graph
   sspur edit [file|-] [-e SRC] [--test] replace or add definitions by name (also 'rename A B', 'remove A' lines)
   sspur apply [tx.json|-] [-e JSON] [--test] apply a transaction of ops
-  sspur q <query> [target] [--budget N] query the codebase (list sig body callers callees effects find pack why impact holes diag log)
+  sspur q <query> [target] [--budget N] query the codebase (list [types|fns|tests] sig body callers callees effects find grep pack why impact holes diag log)
+    q find 'a|b*'  names matching, with signatures   q grep TEXT  definitions whose source contains TEXT, with the lines   q body A,B  several bodies
   sspur src | log | export | spec [--full] | mcp | --version
   sspur bind header.h [--lib NAME] [-o out.ssp]   generate extern declarations from a C header (uses clang)
   sspur export-c file.ssp [-o libfoo] [--shared] [--prefix P]  build a C library and header from the C-compatible functions
@@ -119,7 +120,8 @@ fn real_main() -> ExitCode {
                 Err(d) => return fail_diags("", "HEAD", &d, true),
             };
             let q = args.pos.get(1).map_or("list", String::as_str);
-            let out = Ctx::new(&loaded, Some(&store)).run(q, args.pos.get(2).map(String::as_str), args.num("--budget", 2000));
+            let target = if q == "list" && args.has("--tests") { Some("tests".to_string()) } else if args.pos.len() > 3 && matches!(q, "body" | "find" | "grep") { Some(args.pos[2..].join(if q == "body" { "," } else { "|" })) } else { args.pos.get(2).cloned() };
+            let out = Ctx::new(&loaded, Some(&store)).run(q, target.as_deref(), args.num("--budget", 2000));
             if args.has("--json") {
                 println!("{out}");
             } else {

@@ -274,7 +274,7 @@ fn codebase_mode_understands_dependencies() {
     let out = w.ok("cb", &["edit", "--test", "-e", "use geo.{area, Shape}\nfn sq(n: Int) -> Int = area(Box{w: n})\nfn up(n: Int) -> Int = geo.bump(n)\ntest t = sq(3) == 9"]);
     assert!(out.contains("+use geo") && out.ends_with("1 passed, 0 failed"), "{out}");
     let list = w.ok("cb", &["q", "list"]);
-    assert!(list.starts_with("use geo.{area, Shape}") && !list.contains("geo.loud"), "{list}");
+    assert!(list.starts_with("# uses 1\nuse geo.{area, Shape}") && !list.contains("geo.loud"), "{list}");
     let lib = w.ok("cb", &["q", "list", "geo"]);
     assert!(lib.contains("fn geo.loud(s: Str) -> Str ! fail[geo.Shape]") && !lib.contains("helper"), "{lib}");
     assert_eq!(w.ok("cb", &["q", "sig", "geo.bump"]), "fn geo.bump(n: Int) -> Int\n  pre n >= 0");

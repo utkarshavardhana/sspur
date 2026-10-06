@@ -117,6 +117,30 @@ fn queries_answer_from_the_graph() {
     assert!(pack["text"].as_str().unwrap().contains("fn double(x: Int) -> Int"));
     assert!(!pack["text"].as_str().unwrap().contains("x * 2"), "callee bodies are never packed");
     assert_eq!(c.run("why", Some("quad"), 0)["history"].as_array().unwrap().len(), 1);
+    let found = c.run("find", Some("QUAD|dou*"), 0);
+    let names: Vec<&str> = found["hits"].as_array().unwrap().iter().map(|h| h["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["quad", "double", "quad_t1"], "exact names first, tests last");
+    assert_eq!(found["hits"][1]["sig"], "fn double(x: Int) -> Int");
+    let grep = c.run("grep", Some("double("), 0);
+    assert_eq!(grep["total"], 2);
+    assert_eq!(grep["hits"][1]["lines"], json!(["= double(double(x))"]));
+    assert_eq!(c.run("list", Some("tests"), 0).as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn pack_caps_callers_in_large_codebases() {
+    let (s, _d) = fresh("pack_cap");
+    let mut ops = vec![json!({"op": "add", "path": "base", "src": "fn base(x: Int) -> Int\n= x + 1"})];
+    for i in 0..20 {
+        ops.push(json!({"op": "add", "path": format!("user{i:02}"), "src": format!("fn user{i:02}(x: Int) -> Int\n= base(x) * {i}")}));
+    }
+    assert!(s.apply(tx(json!(ops))).ok);
+    let l = s.load_head().unwrap();
+    let pack = Ctx::new(&l, Some(&s)).run("pack", Some("base"), 2000);
+    let text = pack["text"].as_str().unwrap();
+    assert!(text.contains("= base(x) * 2") && !text.contains("= base(x) * 3"), "{text}");
+    assert!(text.contains("fn user07(x: Int) -> Int") && !text.contains("user08"), "{text}");
+    assert!(text.ends_with("-- not shown: 12 callers (q callers base, q grep base)"), "{text}");
 }
 
 #[test]

@@ -630,12 +630,14 @@ Queries (`sspur q <query> [target] [--budget N]`, or the MCP tool `sspur_query`)
 
 | Query | Returns |
 |---|---|
-| `list` | Every definition with its kind, hash, and signature |
-| `sig X`, `body X` | X's signature, or its full source |
+| `list [types\|fns\|tests]` | Signatures grouped by kind with counts; tests are named only when there are at most 20 (`list tests` or `--tests` names them all, one per line) |
+| `sig X`, `body X` | X's signature, or its full source (`body A,B` gives several) |
 | `callers X`, `callees X` | Definitions that use X, or that X uses |
 | `effects X` | X's declared effects |
-| `find "List[Int] -> Int"` | Functions whose type matches |
-| `pack X --budget N` | The minimal context for editing X: its source, callee signatures, its tests, and its callers, trimmed to N tokens |
+| `find 'ship\|tax_*'` | Definitions whose name contains a word or matches a `*` pattern (case-insensitive, `\|` separates alternatives), with signatures; exact names first, at most 60 |
+| `find "List[Int] -> Int"` | Functions whose type matches (any pattern with `->`, `[` or `(`) |
+| `grep TEXT` | Definitions whose source contains TEXT, each with its signature and up to 3 matching lines |
+| `pack X --budget N` | The minimal context for editing X: its source, callee signatures, its tests, and its callers, trimmed to N tokens; with more than 8 callers, 3 tests, 3 callers in full and 5 as signatures, then a count of the rest |
 | `why X` | X's provenance and edit history |
 | `impact X` | Everything that depends on X, including tests |
 | `holes`, `diag`, `log` | Open holes, all diagnostics, or the edit history |

@@ -47,7 +47,11 @@ fn apply_accepts_inline_ops_and_keeps_json() {
     assert_eq!(out, "ok +one_t1\n2 passed, 0 failed");
     let (out, ok) = sspur(&d, &["apply", "--json"], r#"{"ops": [{"op": "remove", "path": "one_t1"}]}"#);
     assert!(ok && out.starts_with(r#"{"ok":true,"root":""#), "{out}");
-    assert_eq!(sspur(&d, &["q", "list"], "").0, "fn one() -> Int\nfn two() -> Int\ntests: two_t");
+    assert_eq!(sspur(&d, &["q", "list"], "").0, "# fns 2\nfn one() -> Int\nfn two() -> Int\n# tests 1: two_t");
+    assert_eq!(sspur(&d, &["q", "list", "--tests"], "").0, "# tests 1\ntwo_t");
+    assert_eq!(sspur(&d, &["q", "find", "TWO"], "").0, "fn two() -> Int\ntests: two_t");
+    assert_eq!(sspur(&d, &["q", "grep", "one()"], "").0, "fn one() -> Int\nfn two() -> Int\n  = one() + one()");
+    assert_eq!(sspur(&d, &["q", "body", "one", "two"], "").0, "fn one() -> Int\n= 1\n\nfn two() -> Int\n= one() + one()");
 }
 
 #[test]

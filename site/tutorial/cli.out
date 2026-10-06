@@ -1,0 +1,38 @@
+$ sspur --help
+usage:
+  sspur init [file.ssp] [--pkg NAME]    create a codebase in .sspur/ (optionally import a file; --pkg also writes sspur.toml)
+  sspur add <path|git-url>[@rev]        add a dependency to sspur.toml and pin it in sspur.lock by the hash of its exports
+  sspur deps fetch | update [NAME...] [--force] | tree   verify and fetch locked deps; upgrade with a semantic diff (refused if it breaks the build); show the graph
+  sspur edit [file|-] [-e SRC] [--test] replace or add definitions by name (also 'rename A B', 'remove A' lines)
+  sspur apply [tx.json|-] [-e JSON] [--test] apply a transaction of ops
+  sspur q <query> [target] [--budget N] query the codebase (list [types|fns|tests] sig body callers callees effects find grep pack why impact holes diag log; body and pack take A,B,C)
+    q find 'a|b*'  names matching, with signatures   q grep TEXT  definitions whose source contains TEXT, with the lines   q body A,B  several bodies
+  sspur start [NAME|PATTERN...]         the agent spec plus this codebase: all of it if small, else counts, q pack of NAMEs, q find of the rest
+  sspur spec [--full] [src] [QUERY TARGET...]  the spec, then optionally src and queries (spec find 'a|b' pack A,B), in one call
+  sspur src | log | export | mcp [--dir PATH] | --version
+  sspur bind header.h [--lib NAME] [-o out.ssp]   generate extern declarations from a C header (uses clang)
+  sspur export-c file.ssp [-o libfoo] [--shared] [--prefix P]  build a C library and header from the C-compatible functions
+  add --json for machine output (apply, edit, q, check)
+  sspur check|run|test|fuzz|verify|hash|fmt|native [file.ssp] [--json] [--cases N] [--seed N] [--edge] [--write] [--full]
+  verify proves pre/post/where clauses with z3 and reports proved, counterexample, or unknown per clause
+  run/test compile to native code by default (cached); --interp forces the interpreter, --native uses the Cranelift JIT,
+  --O3 raises the optimization level; fuzz --differential compares native against the interpreter
+  a failed native build prints one warning and falls back (--quiet hides it); --strict-native or SSPUR_STRICT_NATIVE=1 makes it an error
+  sspur fuzz --gen N [--seed S] [--cases C] [--group G] [--modes O2,O2-whole,O3] [--keep DIR] [--print]  generate N random programs and compare interpreter and native
+  run/test/build --pgo [--retrain] train once, then build with clang profile data; --lto off|thin|full (ADR 0024)
+  sspur build --backend llvm file.ssp [-o prog]  direct LLVM IR prototype for the scalar and record subset (ADR 0024)
+  sspur explain-opt file.ssp [--all]    show the proven rewrites applied before native codegen (--all adds rejected candidates)
+  sspur run --profile file.ssp          run in the interpreter and record call counts that guide inlining (ADR 0022)
+  sspur build --target riscv64-qemu|aarch64-qemu|thumbv7em-mps2 file.ssp [-o kernel.elf]  build a 'profile bare' kernel or Cortex-M4 firmware (freestanding C, clang, ld.lld)
+  sspur gpu file.ssp [--emit metal|opencl|spirv|ptx] [-o out]  emit the kernel fns as Metal, OpenCL C, SPIR-V or PTX (ADR 0020)
+  sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status   (sspur deploy for details; ADR 0016, 0019; never calls AWS)
+  sspur sync serve [--port N] | push REMOTE | pull REMOTE | status | resolve ours|theirs [PATH]   replicate by hash (REMOTE: dir or tcp://host:port; ADR 0021)
+$ sspur deploy
+usage (nothing here calls AWS):
+  sspur deploy plan <file.ssp> [--out DIR]          write template.json, iam/*.json, plan.json, bootstrap.c, build.sh, deploy.sh, rollback.sh, backfill.sh and a host build to DIR (default deploy/)
+  sspur deploy local <file.ssp> [--port N] [--record FILE]   serve on 127.0.0.1 with emulated Lambda and DynamoDB; --record appends requests, responses and db calls as JSON lines
+  sspur deploy migrate <old.ssp> <new.ssp> [--out DIR] [--json]   classify store schema changes, check migrate_/unmigrate_ functions, write migrate.json and backfill.sh
+  sspur deploy replay <recording> <new.ssp> [--strict] [--json]   re-run a recording against new.ssp and report behavior differences (exit 1 if any)
+  sspur deploy swap <new.ssp> [--weight P] [--port N]   hot swap a running deploy local to new.ssp (P% canary, default 100)
+  sspur deploy promote|rollback|status [--port N]   promote the canary, roll back to the previous version, or show versions
+  sspur deploy backfill [--store S] [--port N]       migrate every stored item of the live version's migrated stores in the emulated table

@@ -1,0 +1,11 @@
+type Item = {name: Str, price: Int where _ >= 0, qty: Int where _ > 0}
+
+fn total(items: List[Item]) -> Int
+= items.map(_.price * _.qty).sum
+
+fn main() -> Unit ! log
+= do
+  cart = [Item{name: "pen", price: 3, qty: 4}, Item{name: "book", price: 12, qty: 1}]
+  log("total: {total(cart)}")
+
+test empty = total([]) == 0

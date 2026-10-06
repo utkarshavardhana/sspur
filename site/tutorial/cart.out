@@ -1,0 +1,4 @@
+$ sspur run cart.ssp
+total: 24
+$ sspur test cart.ssp
+1 passed, 0 failed

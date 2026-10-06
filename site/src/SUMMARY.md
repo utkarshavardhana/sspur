@@ -1,5 +1,7 @@
 # Summary
 
+[SSPUR](index.md)
+
 # Learn
 
 - [Your first SSPUR program in 10 minutes](tutorial.md)
@@ -10,9 +12,12 @@
 # Reference
 
 - [Language reference](docs/07-reference-v0.md)
+- [Standard library](stdlib.md)
+- [Command line](cli.md)
 
 # Performance
 
+- [Native performance versus C++](performance.md)
 - [Agent token benchmark](agent-bench.md)
 
 # Design

@@ -28,7 +28,9 @@ const USAGE: &str = "usage:
   sspur apply [tx.json|-] [-e JSON] [--test] apply a transaction of ops
   sspur q <query> [target] [--budget N] query the codebase (list [types|fns|tests] sig body callers callees effects find grep pack why impact holes diag log; body and pack take A,B,C)
     q find 'a|b*'  names matching, with signatures   q grep TEXT  definitions whose source contains TEXT, with the lines   q body A,B  several bodies
-  sspur src | log | export | spec [--full] | mcp [--dir PATH] | --version
+  sspur start [NAME|PATTERN...]         the agent spec plus this codebase: all of it if small, else counts, q pack of NAMEs, q find of the rest
+  sspur spec [--full] [src] [QUERY TARGET...]  the spec, then optionally src and queries (spec find 'a|b' pack A,B), in one call
+  sspur src | log | export | mcp [--dir PATH] | --version
   sspur bind header.h [--lib NAME] [-o out.ssp]   generate extern declarations from a C header (uses clang)
   sspur export-c file.ssp [-o libfoo] [--shared] [--prefix P]  build a C library and header from the C-compatible functions
   add --json for machine output (apply, edit, q, check)
@@ -106,6 +108,22 @@ fn real_main() -> ExitCode {
     match cmd.as_str() {
         "spec" => {
             print!("{}", if args.has("--full") { REFERENCE } else { AGENT_SPEC });
+            if args.pos.len() == 1 {
+                return ExitCode::SUCCESS;
+            }
+            match agent::spec_queries(cwd_store().as_ref(), &args.pos[1..]) {
+                Ok(t) => {
+                    println!("\n{t}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        "start" => {
+            println!("{}\n{}", AGENT_SPEC.trim_end(), agent::start_text(cwd_store().as_ref(), &args.pos[1..]));
             ExitCode::SUCCESS
         }
         "init" => init(args.pos.get(1), args.val("--pkg"), args.has("--json")),

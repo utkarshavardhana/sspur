@@ -8,7 +8,9 @@ use std::process::ExitCode;
 
 const PROTOCOL: &str = "2025-06-18";
 
-const INSTRUCTIONS: &str = "SSPUR is a programming language whose code lives in a typechecked store (.sspur/), not in files. Workflow: call spec once, then read code with src (small codebases) or query (find, grep, body, callers, pack), then make every change in ONE edit call with test: true. An edit is atomic: if it is rejected nothing changed, so fix the listed errors (each has a hint) and resend the whole edit. Do not edit .ssp files or .sspur/ directly.";
+/// Kept under 2,048 characters: Claude Code truncates longer server instructions, so the spec
+/// itself comes from the `start` tool.
+const INSTRUCTIONS: &str = "SSPUR is a programming language whose code lives in a typechecked store (.sspur/), not in files. The language is new to you, so make your first call start, with the definition names your task mentions (names: 'a,b,c'): one call returns the language spec and this codebase, all of it if it is small, otherwise counts plus pack (each named definition with what it uses, its tests and callers). If you need more, use query (find, grep, body, callers, pack; body and pack take A,B,C). Then make every change in ONE edit call with test: true. An edit is atomic: if it is rejected nothing changed, so fix the listed errors (each has a hint) and resend the whole edit. Do not edit .ssp files or .sspur/ directly. The spec's CLI commands are these tools: `./sspur src` is src, `q X T` is query, `edit --test` is edit with test: true.";
 
 fn tool(name: &str, title: &str, desc: &str, props: Json, required: &[&str], read_only: bool) -> Json {
     json!({
@@ -23,7 +25,8 @@ fn tool(name: &str, title: &str, desc: &str, props: Json, required: &[&str], rea
 fn tools() -> Json {
     let none = json!({});
     json!([
-        tool("spec", "SSPUR language spec", "The compact SSPUR language reference (about 1.8k tokens). Read it once before writing code. full: true returns the long reference.", json!({"full": {"type": "boolean"}}), &[], true),
+        tool("start", "Spec and codebase overview", "Call this first. The compact language spec (about 1.8k tokens) plus this codebase: all of it if small; otherwise counts, then pack of the definitions in names and find of other words in names.", json!({"names": {"type": "string", "description": "definition names or words from the task, comma-separated"}}), &[], true),
+        tool("spec", "SSPUR language spec", "The compact SSPUR language reference (about 1.8k tokens; start includes it). full: true returns the long reference.", json!({"full": {"type": "boolean"}}), &[], true),
         tool("src", "Read all source", "The whole codebase as SSPUR source. Fine for small codebases; for large ones use query.", none.clone(), &[], true),
         tool("query", "Query the codebase", "Search and read code without printing all of it. query is one of: list (signatures by kind; target 'tests' lists tests), find (target 'a|b*': names matching, with signatures; or a type shape like 'List[Int] -> Int'), grep (target TEXT: definitions containing it, with the lines), body (target 'A' or 'A,B'), sig, callers, callees, effects, impact, pack (target with the context to edit it), why, holes, diag, log.", json!({"query": {"type": "string"}, "target": {"type": "string"}, "budget": {"type": "integer", "description": "token budget for pack (default 2000)"}, "json": {"type": "boolean"}}), &["query"], true),
         tool("edit", "Edit definitions", "Add or replace definitions by name: src holds SSPUR definitions (type, fn, test), optionally after lines 'rename OLD NEW' or 'remove NAME'. Put every change in one call. Atomic and typechecked; a rejected edit changes nothing and lists errors with fix hints. test: true also runs all tests.", json!({"src": {"type": "string"}, "test": {"type": "boolean"}}), &["src"], false),
@@ -65,6 +68,11 @@ fn call(srv: &mut Server, name: &str, a: &Json) -> (String, bool) {
     let name = canonical(name);
     if name == "spec" {
         return ((if flag("full") { REFERENCE } else { AGENT_SPEC }).to_string(), false);
+    }
+    if name == "start" {
+        let names: Vec<String> = a.get("names").and_then(Json::as_str).map(String::from).into_iter().collect();
+        let _ = srv.store(false);
+        return (format!("{}\n{}", AGENT_SPEC.trim_end(), agent::start_text(srv.store.as_ref(), &names)), false);
     }
     let store = match srv.store(matches!(name, "edit" | "apply")) {
         Ok(s) => s,
@@ -145,7 +153,7 @@ fn call(srv: &mut Server, name: &str, a: &Json) -> (String, bool) {
             lines.push(format!("{} functions, {failed} with counterexamples", reports.len()));
             (lines.join("\n"), failed > 0)
         }
-        _ => (format!("unknown tool '{name}'; tools: spec src query edit test check run fuzz apply"), true),
+        _ => (format!("unknown tool '{name}'; tools: start spec src query edit test check run fuzz apply"), true),
     }
 }
 

@@ -65,11 +65,15 @@ fn edit_and_test_cycle_over_stdio() {
     c.notify("notifications/initialized");
     let tools = c.request("tools/list", json!({}));
     let names: Vec<&str> = tools["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["spec", "src", "query", "edit", "test", "check", "run", "fuzz", "apply"]);
+    assert_eq!(names, ["start", "spec", "src", "query", "edit", "test", "check", "run", "fuzz", "apply"]);
     assert_eq!(c.request("prompts/list", json!({}))["result"]["prompts"], json!([]));
 
+    let ins = init["result"]["instructions"].as_str().unwrap();
+    assert!(ins.len() < 2048 && ins.contains("first call start"), "Claude Code truncates instructions at 2,048 characters: {}", ins.len());
     let (spec, err) = c.tool("spec", json!({}));
     assert!(!err && spec.starts_with("# SSPUR agent spec"));
+    let (out, err) = c.tool("start", json!({"names": "double"}));
+    assert!(!err && out.starts_with("# SSPUR agent spec") && out.ends_with("the first edit creates it."), "{out}");
     let (none, err) = c.tool("test", json!({}));
     assert!(err && none.contains("no SSPUR codebase"), "{none}");
 
@@ -97,6 +101,8 @@ fn edit_and_test_cycle_over_stdio() {
     assert!(!err && out.starts_with("ok 4 definitions"), "{out}");
     let (src, _) = c.tool("src", json!({}));
     assert!(src.contains("fn quad(x: Int) -> Int"));
+    let (out, err) = c.tool("start", json!({}));
+    assert!(!err && out.ends_with(&format!("## This codebase: 2 fns, 2 tests, all of it\n{}", src.trim_end())), "{out}");
     let (out, err) = c.tool("sspur_test", json!({}));
     assert!(!err && out == "2 passed, 0 failed", "old tool names still work: {out}");
     let (out, err) = c.tool("edit", json!({"src": "fn main() -> Unit ! log\n= log(\"q={quad(2)}\")"}));

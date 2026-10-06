@@ -79,6 +79,53 @@ fn find_and_grep_cap_their_text_output() {
 }
 
 #[test]
+fn start_prints_the_spec_and_a_small_codebase_whole() {
+    let spec = sspur(&std::env::temp_dir(), &["spec"], "").0;
+    let d = fresh("start_small");
+    let (out, ok) = sspur(&d, &["start", "one"], "");
+    assert!(ok);
+    let src = sspur(&d, &["src"], "").0;
+    assert_eq!(out, format!("{spec}\n## This codebase: 2 fns, 1 test, all of it\n{src}"));
+    let empty = std::env::temp_dir().join(format!("sspur-cli-start-none-{}", std::process::id()));
+    std::fs::create_dir_all(&empty).unwrap();
+    let (out, ok) = sspur(&empty, &["start"], "");
+    assert!(ok && out.starts_with(&spec) && out.ends_with("or the first edit creates it."), "{out}");
+}
+
+#[test]
+fn start_packs_named_definitions_of_a_large_codebase() {
+    let d = fresh("start_large");
+    let mut src = String::new();
+    for i in 0..300 {
+        src.push_str(&format!("fn padding_function_number_{i:03}(x: Int) -> Int\n= one() + x * {i}\n\n"));
+    }
+    let (out, ok) = sspur(&d, &["edit", "-e", &src], "");
+    assert!(ok, "{out}");
+    let (out, ok) = sspur(&d, &["start", "two,one", "number_00*"], "");
+    assert!(ok, "{out}");
+    let rest = &out[out.find("## This codebase").expect("a codebase section")..];
+    let (head, rest) = rest.split_once("\n\n").unwrap();
+    assert!(head.starts_with("## This codebase: 302 fns, 1 test, about ") && head.ends_with("too much to print. Search it with `q find|grep|body|callers|pack`."), "{head}");
+    let pack = sspur(&d, &["q", "pack", "two,one"], "").0;
+    let find = sspur(&d, &["q", "find", "number_00*"], "").0;
+    assert_eq!(rest, format!("## q pack two,one\n{pack}\n\n## q find 'number_00*'\n{find}"));
+    let (out, _) = sspur(&d, &["start"], "");
+    assert!(out.ends_with("also packs the named definitions (and finds other words) in this output."), "{out}");
+}
+
+#[test]
+fn spec_runs_queries_after_the_spec() {
+    let spec = sspur(&std::env::temp_dir(), &["spec"], "").0;
+    let d = fresh("spec_q");
+    let (out, ok) = sspur(&d, &["spec", "src", "find", "tw*", "callers", "one"], "");
+    assert!(ok, "{out}");
+    let src = sspur(&d, &["src"], "").0;
+    assert_eq!(out, format!("{spec}\n\n## src\n{src}\n\n## q find 'tw*'\nfn two() -> Int\ntests: two_t\n\n## q callers one\ntwo"));
+    let (out, ok) = sspur(&d, &["spec", "pack"], "");
+    assert!(!ok && out.trim_end().ends_with("query 'pack' needs a target: spec pack TARGET"), "{out}");
+}
+
+#[test]
 fn explain_opt_lists_proven_rewrites() {
     let d = fresh("explain");
     let prog = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/rewrites.ssp");

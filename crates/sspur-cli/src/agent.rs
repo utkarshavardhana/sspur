@@ -1,8 +1,8 @@
 use serde_json::{json, Value as Json};
 use sspur_check::Diag;
 use sspur_eval::Interp;
-use sspur_store::{Change, Store, Tx, TxResult};
-use sspur_syntax::{line_col, printer::print_def};
+use sspur_store::{query::Ctx, Change, Loaded, Store, Tx, TxResult};
+use sspur_syntax::{ast::Def, line_col, printer::print_def};
 use std::collections::BTreeSet;
 
 /// Ends a rejected edit: weak models otherwise retry one definition per call.
@@ -308,4 +308,92 @@ fn diag_of_json(d: &Json) -> Diag {
     let span = [d["span"][0].as_u64().unwrap_or(0) as u32, d["span"][1].as_u64().unwrap_or(0) as u32];
     let s = |k: &str| d[k].as_str().map(String::from);
     Diag { code: s("code").unwrap_or_default(), severity, def: s("def"), span, msg: s("msg").unwrap_or_default(), hint: s("hint"), fix: vec![] }
+}
+
+/// `start` prints a codebase of at most this many bytes of source (about 3.7k tokens) whole.
+pub const START_SRC: usize = 12_000;
+
+fn counts_line(l: &Loaded) -> String {
+    let kinds = [("use", "uses"), ("type", "types"), ("effect", "effects"), ("store", "stores"), ("static", "statics"), ("svc", "svcs"), ("fn", "fns"), ("test", "tests")];
+    let kind = |d: &Def| match d {
+        Def::Use(_) => "use",
+        Def::Type(_) => "type",
+        Def::Effect(_) => "effect",
+        Def::Store(_) => "store",
+        Def::Static(_) => "static",
+        Def::Svc(_) => "svc",
+        Def::Fn(_) => "fn",
+        Def::Test(_) => "test",
+    };
+    let parts: Vec<String> = kinds
+        .iter()
+        .filter_map(|(k, plural)| {
+            let n = l.own_defs().iter().filter(|d| kind(d) == *k).count();
+            (n > 0).then(|| format!("{n} {}", if n == 1 { k } else { plural }))
+        })
+        .collect();
+    if parts.is_empty() { "empty".into() } else { parts.join(", ") }
+}
+
+/// One query as text under a `## q ...` heading.
+fn query_section(l: &Loaded, store: &Store, q: &str, target: Option<&str>) -> String {
+    let out = Ctx::new(l, Some(store)).run(q, target, 2000);
+    let head = match target {
+        Some(t) if t.contains(|c: char| " |*^$".contains(c)) => format!("## q {q} '{t}'"),
+        Some(t) => format!("## q {q} {t}"),
+        None => format!("## q {q}"),
+    };
+    format!("{head}\n{}", query_text(q, &out, &l.src, target.unwrap_or("")))
+}
+
+/// Queries that `spec` runs without a target.
+const BARE_QUERIES: [&str; 4] = ["list", "holes", "diag", "log"];
+
+/// `spec [src] [QUERY TARGET]...`: the text to print after the spec, so one call reads the spec and searches.
+pub fn spec_queries(store: Option<&Store>, args: &[String]) -> Result<String, String> {
+    let Some(store) = store else { return Err("no .sspur codebase here; run 'sspur init'".into()) };
+    let l = store.load_head().map_err(|d| diag_lines("", &d, None).join("\n"))?;
+    let mut parts = Vec::new();
+    let mut it = args.iter();
+    while let Some(q) = it.next() {
+        if q == "src" {
+            parts.push(format!("## src\n{}", l.src.trim_end()));
+        } else if BARE_QUERIES.contains(&q.as_str()) {
+            parts.push(query_section(&l, store, q, None));
+        } else {
+            let t = it.next().ok_or_else(|| format!("query '{q}' needs a target: spec {q} TARGET"))?;
+            parts.push(query_section(&l, store, q, Some(t)));
+        }
+    }
+    Ok(parts.join("\n\n"))
+}
+
+/// `start [NAME|PATTERN]...`: what an agent needs before its first edit, printed after the spec.
+/// A small codebase is printed whole; a large one gets its counts, `q pack` of the arguments
+/// that name a definition and `q find` of the others.
+pub fn start_text(store: Option<&Store>, terms: &[String]) -> String {
+    let Some(store) = store else {
+        return "## This codebase\nnone yet (no .sspur/ here or above): `./sspur init file.ssp` imports a file, or the first edit creates it.".into();
+    };
+    let l = match store.load_head() {
+        Ok(l) => l,
+        Err(d) => return format!("## This codebase does not load\n{}", diag_lines("", &d, None).join("\n")),
+    };
+    let src = l.src.trim_end();
+    if src.len() <= START_SRC {
+        return format!("## This codebase: {}, all of it\n{src}", counts_line(&l));
+    }
+    let mut out = vec![format!("## This codebase: {}, about {}k tokens of source, too much to print. Search it with `q find|grep|body|callers|pack`.", counts_line(&l), (src.len() * 10 / 32).div_ceil(1000))];
+    let words: Vec<&str> = terms.iter().flat_map(|t| t.split([',', ' '])).map(str::trim).filter(|t| !t.is_empty()).collect();
+    let (names, patterns): (Vec<&str>, Vec<&str>) = words.iter().partition(|w| l.own_defs().iter().any(|d| d.name() == **w));
+    if !names.is_empty() {
+        out.push(query_section(&l, store, "pack", Some(&names.join(","))));
+    }
+    if !patterns.is_empty() {
+        out.push(query_section(&l, store, "find", Some(&patterns.join("|"))));
+    }
+    if words.is_empty() {
+        out.push("`./sspur start NAME...` also packs the named definitions (and finds other words) in this output.".into());
+    }
+    out.join("\n\n")
 }

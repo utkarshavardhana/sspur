@@ -1,0 +1,42 @@
+[
+ {
+  "model": "sonnet",
+  "lang": "sspur",
+  "task": "s1_shop",
+  "cell": "s1_shop",
+  "passed": 10,
+  "total": 10,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "model": "sonnet",
+  "lang": "sspur",
+  "task": "s1_shop",
+  "cell": "s1_shop_run2",
+  "passed": 10,
+  "total": 10,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "model": "sonnet",
+  "lang": "sspur",
+  "task": "a1_inventory",
+  "cell": "a1_inventory",
+  "passed": 12,
+  "total": 12,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "model": "sonnet",
+  "lang": "sspur",
+  "task": "a7_grades",
+  "cell": "a7_grades",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ }
+]

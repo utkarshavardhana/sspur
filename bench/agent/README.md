@@ -2,13 +2,15 @@
 
 This measures the Phase 3 exit criterion: an agent completes multi-step feature tasks using SSPUR (CLI ops only) with fewer total tokens than the same agent using Python.
 
-**Latest result (run 6, 2026-10-06): after the error-hint and query changes, Haiku 4.5 is at 0.83x on the 8 tasks (was 1.21x); the large codebase is unchanged at 1.33x.** Only 4 SSPUR cells were rerun, against the run 5 Python cells. Details in [Results, run 6](#results-run-6).
+**Latest result (run 7, 2026-10-06): the large codebase is at 1.04x over two runs (was 1.33x), after `q pack A,B,C` and a cap on `q find` and `q grep` text output.** Sonnet now solves it in 5 calls, the same as Python, and still passes 10/10; it does not win the task. The 8-task numbers are unchanged (Sonnet 0.70x, Opus 0.76x, Haiku 0.83x), and a1 and a7 were rerun to confirm no regression. Details in [Results, run 7](#results-run-7).
+
+**Run 6 (2026-10-06): after the error-hint and query changes, Haiku 4.5 is at 0.83x on the 8 tasks (was 1.21x).** Only 4 SSPUR cells were rerun, against the run 5 Python cells. Details in [Results, run 6](#results-run-6).
 
 **Run 5 (2026-10-06): the claim holds for Sonnet 5.5 and Opus 5.5, not for Haiku 4.5, and not on the one large codebase tried.** Details in [Results, run 5](#results-run-5).
 - Opus 5.5, the 8 tasks: SSPUR used **0.76x** Python's total tokens (median 0.76x), 28 API calls against 38, 95/95 hidden tests on both sides.
 - Haiku 4.5, the 8 tasks: **2.31x** (median 1.22x), 150 calls against 93. SSPUR passed 95/95 and Python 84/95. After a spec fix and 3 SSPUR reruns: 1.21x (median 0.97x).
 - Sonnet 5.5, 8 new tasks taken from neutral sources (LeetCode 146, 224 and 227, RFC 7396, the AWK book, ...): **0.74x** (median 0.60x), 141/141 on both sides; 0.66x after the spec fix (one cell rerun).
-- Sonnet 5.5, one codebase of 1,117 definitions with four targeted changes: **1.34x** (6 calls against 5), 10/10 on both sides.
+- Sonnet 5.5, one codebase of 1,117 definitions with four targeted changes: **1.34x** (6 calls against 5), 10/10 on both sides; 1.04x in run 7.
 - The optional regex and JSON task (a9) costs more in SSPUR for every model tried: Opus 1.69x (1.37x after the fix), Haiku 43x (5.2x after the fix, still failing 1 of 17 hidden tests).
 
 **Run 4 (2026-10-04, Sonnet 5.5): still met, after a spec fix.** With the agent spec as it stood after Phases 4 to 7 (1,799 tokens), SSPUR regressed to **1.24x** Python's total tokens (median 0.80x), although both languages still passed all 95 hidden tests. The spec had lost rules the tasks need. After restoring them (spec now 1,782 tokens) and rerunning the 4 affected SSPUR cells against the same Python cells, SSPUR used **0.70x** (median **0.61x**, range 0.42x to 1.35x), 26 API calls against 38, and both sides were again 95/95. SSPUR was cheaper on 6 of 8 tasks.
@@ -23,6 +25,8 @@ This measures the Phase 3 exit criterion: an agent completes multi-step feature 
 | 5, Opus 5.5 | spec at `cfc9ace` (1,798 tokens) | 95/95 / 95/95 | 28 / 38 | **0.76x** (median 0.76x) |
 | 5, Haiku 4.5 | same | 95/95 / 84/95 | 150 / 93 | **2.31x** (median 1.22x) |
 | 5, Haiku 4.5, spec fix | spec at `4b75361` (1,798 tokens), 3 SSPUR cells rerun | 95/95 / 84/95 | 98 / 93 | **1.21x** (median 0.97x) |
+| 6, Haiku 4.5 | fix hints, `q find|grep|body`, 3 SSPUR cells rerun | 95/95 / 84/95 | 71 / 93 | **0.83x** (median 0.88x) |
+| 7, Sonnet 5.5, s1_shop only | `q pack A,B,C`, capped `find` and `grep` text, 2 runs | 10/10 / 10/10 | 5 / 5 | **1.04x** (1.33x before) |
 
 Python's side was identical in all runs; its totals were 1.27M, 1.20M, 1.48M and 1.22M. Against Python's cheapest run, SSPUR run 3 is 0.73x and run 4 after the fix is 0.71x.
 
@@ -112,6 +116,67 @@ So the 53.6k gap is:
 - **23%: the spec**, 1,798 cl100k tokens (about 2.4k Claude tokens) re-read by 5 later calls.
 - **21%: exploration in three rounds instead of two**, with broad answers that stay in the context: `q grep tax_rate` returned all 44 callers with their lines (about 900 tokens), `q find 'restock|active'` 88 signatures. What the agent was looking for in rounds 2 and 3 is what `q pack` gives (the bodies, the record type, the callers, the tests), but `q pack` takes one name and the agent had five.
 - Not a cost: `edit --test` on 187 tests printed two lines (the `ok` line and `187 passed, 0 failed`, 199 tokens with the `q body` before it); there were no rejections in run 6 (run 5 had one, 65 tokens); re-reading bodies just before the edit cost about 70 tokens. Running only the affected tests or capping failure output would save nothing measurable on this task.
+
+### What changed, and the result
+
+Two changes, both in the query output, none in the language, the checker or the `--json` formats:
+- **`q pack A,B,C`** packs several definitions in one call: each one with the types and signatures it uses, its tests and its callers, with every definition printed only once (a target that is also another's caller is shown in full, not twice). The five definitions this task changes cost 540 tokens in one call. `q pack NAME` is unchanged.
+- **`q find` prints 25 signatures and `q grep` 12 definitions in full**, then the names of the rest on one line (`-- 33 more: invoice_line_tax invoice_tax ...`), and definitions whose name is exactly the pattern come first. A broad pattern on a repetitive codebase no longer fills the context with near-identical matches.
+
+Measured on `s1_shop` (cl100k tokens of the command output; "before" renders the same hits the way run 6 did):
+
+| Command | Before | After |
+|---|---|---|
+| `q grep tax_rate` (44 callers) | 1,012 | 331 |
+| `q find 'restock\|active'` (88 matches) | 869 | 472 |
+| `q find 'tax_rate\|money\|ship_fee\|order_shipping\|warehouse_restock\|Warehouse'` | 351 | 351 |
+| `q grep 19` | 275 | 275 |
+| `q pack ship_fee,money,tax_rate,warehouse_restock,order_shipping` | not available | 540 |
+
+The s1 prompt's search hint now names `q pack A,B,C` instead of `q pack NAME`. Nothing else in the prompts, the harness or the method changed; the Python cell is run 5's, rerun on nothing.
+
+Run: `runs/2026-10-06-r7-s1/`, compiler frozen at `9be5226`. Two fresh Sonnet 5.5 `general-purpose` subagents on s1_shop, one at a time, and one each on a1_inventory and a7_grades as a regression check.
+
+| Cell | Calls SSPUR / Py | Total SSPUR | Total Py | SSPUR / Py | Net SSPUR / Py | Tool I/O SSPUR / Py | Hidden tests |
+|---|---|---|---|---|---|---|---|
+| s1_shop, run 5 | 6 / 5 | 217,181 | 162,362 | 1.34x | 62,681 / 33,612 | 5,495 / 2,997 | 10/10 / 10/10 |
+| s1_shop, run 6 | 6 / 5 | 215,964 | 162,362 | 1.33x | 61,464 / 33,612 | 6,153 / 2,997 | 10/10 / 10/10 |
+| **s1_shop, run 7, first run** | 5 / 5 | 170,039 | 162,362 | **1.05x** | 41,289 / 33,612 | 4,067 / 2,997 | 10/10 / 10/10 |
+| **s1_shop, run 7, second run** | 5 / 5 | 167,624 | 162,362 | **1.03x** | 38,874 / 33,612 | 3,556 / 2,997 | 10/10 / 10/10 |
+
+**s1_shop is 1.04x over the two runs (1.05x and 1.03x), from 1.33x.** SSPUR still does not win this task; it is now within noise of Python. The remaining 6k tokens are the spec read in call 1 and carried by 4 later calls (9,692 of the 170,039) against Python's 0, partly offset by SSPUR's cheaper searches.
+
+Where the two runs went (same attribution as above):
+
+| Where the tokens went | Run 6 | Run 7, first | Run 7, second |
+|---|---|---|---|
+| Harness context, once per call | 177,434 (6 calls) | 147,180 (5) | 147,180 (5) |
+| Task prompt, every call | 4,122 | 3,430 | 3,430 |
+| Spec | 12,121 | 9,692 | 9,692 |
+| Search output | 17,908 | 6,596 | 4,441 |
+| Edit and test output | 320 | 102 | 98 |
+| The agent's own commands and text | 3,078 | 2,209 | 2,014 |
+| Output tokens | 965 | 830 | 769 |
+| Total | 215,948 | 170,025 | 167,610 |
+
+From the two transcripts:
+- Both agents explored in **one round instead of three**: `q find` with all five names plus `Warehouse`, `q callers ship_fee`, `q grep`, then `q body A,B,..` of what they found, and then the edit. Both wrote one `edit --test` with all four changes and five tests, accepted first time, 187 tests passing. That is 5 calls: spec, search, search, edit, DONE.
+- Neither used `q pack A,B,C`, although the prompt names it: both preferred `q find` plus `q body A,B`, which costs about the same here (cell B's whole search was 863 tokens). So the gain came from the caps and from the broad answers no longer inviting another round, not from `pack`.
+- The caps bit where predicted: cell A's `q grep 19` and `q grep tax_rate` returned 639 and 331 tokens where run 6's equivalents returned 685 and about 900.
+- One call is still spent on the spec alone, because the prompt tells the agent to start with it. Fusing the spec read with the first search would save about 30k (one call's harness context) and would make this task cheaper than Python; it needs a prompt change, which is a harness change, so it is not done here.
+
+### Small-task regression check
+
+The same two changes could have hurt the small tasks (the a-task prompts tell agents to read the whole codebase with `src`, so `q` is rarely used, but `edit` output and the spec are shared). Reran a1 and a7 in SSPUR with Sonnet, same prompts as run 4, against run 4's Python cells:
+
+| Cell | Before: calls, total, ratio | After: calls, total, ratio | Hidden tests |
+|---|---|---|---|
+| a1_inventory | 3, 96,943, 0.76x | 3, 96,557, **0.76x** | 12/12 |
+| a7_grades | 3, 96,327, 0.61x | 3, 96,418, **0.61x** | 11/11 |
+
+Both still take the minimum 3 calls and pass every hidden test; the totals move by under 0.5%, which is noise. No regression.
+
+Caveats: two runs for the new s1 number and one for each old one, so part of the 1.33x to 1.04x move could be variance; the two run 7 runs agree within 1.4% of each other, which bounds it loosely. The Python cell has not been rerun since run 5. The s1 prompt's search hint changed one phrase.
 
 ## Results, run 6
 

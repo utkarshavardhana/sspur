@@ -9,6 +9,7 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ### Changed
 - `q find` prints 25 signatures in full and `q grep` 12 definitions, then the names of the rest on one line (`-- 21 more: f11 f12 ...`), so a broad pattern on a large codebase no longer fills the context with near-identical matches. Definitions whose name is exactly the pattern come first. `--json` is unchanged.
+- Agent benchmark run 7 (`bench/agent/README.md`): the large-codebase task went from 1.33x to 1.04x of Python's total tokens over two Sonnet 5.5 runs, 5 API calls instead of 6, still 10/10 hidden tests. The token attribution of the old run is in the README: one extra call was 57% of the gap, the spec 23% and broad query answers 21%. a1 and a7 were rerun unchanged (0.76x, 0.61x, 3 calls each).
 
 ## [0.3.1] - 2026-10-06
 

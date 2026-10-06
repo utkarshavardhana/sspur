@@ -46,5 +46,85 @@
   "total": 13,
   "ok": true,
   "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a4_calc",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a4_calc",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a5_orders",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a5_orders",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a6_todo",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a6_todo",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a7_grades",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a7_grades",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a8_config",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a8_config",
+  "passed": 2,
+  "total": 13,
+  "ok": false,
+  "msg": "FAILED h_suite.py::test_hidden_len - AssertionError: assert 1 == 9"
  }
 ]

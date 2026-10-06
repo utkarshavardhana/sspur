@@ -1,0 +1,87 @@
+type CfgErr = Missing{key: Str} | NotInt{key: Str, value: Str} | NotBool{key: Str, value: Str}
+
+type Entry = {key: Str, value: Str}
+
+fn get_bool(cfg: List[Entry], key: Str, default: Bool) -> Bool ! fail[CfgErr]
+= do
+  opt_entry = cfg.reverse.find(_.key == key)
+  match opt_entry
+  | some(entry) => do
+    lower_val = entry.value.lower
+    if lower_val == "true" or lower_val == "yes" or lower_val == "1" then true else if lower_val == "false" or lower_val == "no" or lower_val == "0" then false else raise NotBool{key: key, value: entry.value}
+  | none => default
+
+fn get_int(cfg: List[Entry], key: Str) -> Int ! fail[CfgErr]
+= do
+  value = get_str(cfg, key)
+  try_parse_int(value).ok_or(NotInt{key: key, value: value})
+
+fn get_str(cfg: List[Entry], key: Str) -> Str ! fail[CfgErr]
+= lookup(cfg, key).ok_or(Missing{key: key})
+
+fn keys(cfg: List[Entry]) -> List[Str]
+= cfg.map(_.key).unique
+
+fn lookup(cfg: List[Entry], key: Str) -> Opt[Str]
+= cfg.reverse.find(_.key == key).map(_.value)
+
+fn main() -> Unit ! log
+= log(keys(parse(sample_text())).join(","))
+
+fn parse(text: Str) -> List[Entry]
+= text.split(";").map(parse_line).filter(_.is_some).map(_.get)
+
+fn parse_line(line: Str) -> Opt[Entry]
+= do
+  trimmed = line.trim
+  if trimmed.is_empty then return none
+  if trimmed.starts_with("#") then return none
+  parts = trimmed.split("=")
+  if parts.len < 2 then return none
+  key_str = parts[0].trim
+  if key_str.is_empty then return none
+  value_str = parts.drop(1).join("=").trim
+  some(Entry{key: key_str, value: value_str})
+
+fn sample_text() -> Str
+= "host=localhost;port=8080;debug=true"
+
+fn try_parse_int(s: Str) -> Opt[Int]
+= do
+  trimmed = s.trim
+  if trimmed.is_empty then return none
+  trimmed.to_int
+
+test comment_skip = parse("#comment;port=8080").len == 1
+
+test first_equals_only = lookup(parse("url=a=b"), "url") == some("a=b")
+
+test get_bool_case_insensitive = get_bool(parse("flag=TRUE"), "flag", false) == true and get_bool(parse("flag=False"), "flag", true) == false
+
+test get_bool_false_variants = get_bool(parse("flag=false"), "flag", true) == false and get_bool(parse("flag=no"), "flag", true) == false and get_bool(parse("flag=0"), "flag", true) == false
+
+test get_bool_invalid = catch get_bool(parse("flag=invalid"), "flag", false) == false
+| NotBool{key, value} => key == "flag" and value == "invalid"
+
+test get_bool_missing_uses_default = get_bool(parse(sample_text()), "missing_flag", true) == true and get_bool(parse(sample_text()), "missing_flag", false) == false
+
+test get_bool_true_variants = get_bool(parse("flag=true"), "flag", false) == true and get_bool(parse("flag=yes"), "flag", false) == true and get_bool(parse("flag=1"), "flag", false) == true
+
+test get_int_missing = catch get_int(parse(sample_text()), "nope") == 0
+| Missing{key} => key == "nope"
+
+test get_int_not_int = catch get_int(parse("count=abc"), "count") == 0
+| NotInt{key, value} => key == "count" and value == "abc"
+
+test get_int_success = get_int(parse("count=42"), "count") == 42
+
+test last_entry_wins = lookup(parse("key=val1;key=val2"), "key") == some("val2")
+
+test lookup_host = lookup(parse(sample_text()), "host") == some("localhost")
+
+test missing = catch get_str(parse(sample_text()), "nope") == ""
+| Missing{key} => key == "nope"
+
+test parse_sample = parse(sample_text()).len == 3
+
+test whitespace_trim = parse("  host = localhost  ").len == 1

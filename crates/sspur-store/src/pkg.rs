@@ -916,7 +916,7 @@ impl Resolver<'_> {
     fn record(&mut self, e: LockEntry, p: Arc<Pkg>, direct: bool) -> Result<Arc<Pkg>, String> {
         if let Some((old, q)) = self.out.get_mut(&e.name) {
             if q.hash != p.hash {
-                return Err(format!("E_DEP_CONFLICT two versions of {}: #{} ({}) and #{} ({}); depend on one version", e.name, &q.hash[..12], old.source, &p.hash[..12], e.source));
+                return Err(format!("E_DEP_CONFLICT two versions of {}: #{} ({}) and #{} ({}); a graph holds one version of each package, so run 'sspur deps update {}' where the older one is pinned", e.name, &q.hash[..12], old.source, &p.hash[..12], e.source, e.name));
             }
             if direct {
                 old.source = e.source;

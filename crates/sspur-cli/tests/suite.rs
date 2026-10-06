@@ -523,3 +523,44 @@ test t_ok = gam(2.0) > 0.0 and bin(10) <= 10 and wpick([0.0, 1.0]) == 1 and mdba
     ];
     assert_trap_parity("std_round3", src, &expected);
 }
+
+#[test]
+fn std_round4_traps_are_identical_in_both_tiers() {
+    if std::process::Command::new("clang").arg("--version").output().is_err() {
+        return;
+    }
+    let src = "fn rz(d: Int) -> Ratio
+= ratio(1, d)
+fn rdiv(n: Int) -> Ratio
+= ratio(1, 2).div(ratio(n, 3))
+fn rinv(n: Int) -> Ratio
+= ratio(n, 5).inv
+fn rpow(e: Int) -> Ratio
+= ratio(0, 1).pow(e)
+fn rbig(e: Int) -> Ratio
+= ratio(3, 2).pow(e)
+fn rdec(k: Int) -> Str
+= ratio(1, 3).to_dec(k).str
+fn lf(d: Int) -> Str
+= locale(\"de-DE\").get.format_f64(1.5, d)
+test t_rz = rz(0) == ratio(1, 1)
+test t_rdiv = rdiv(0) == ratio(1, 1)
+test t_rinv = rinv(0) == ratio(1, 1)
+test t_rpow = rpow(-2) == ratio(1, 1)
+test t_rbig = rbig(9223372036854775807) == ratio(1, 1)
+test t_rdec = rdec(10001) == \"\"
+test t_lf = lf(21) == \"\"
+test t_ok = rz(-4) == ratio(-1, 4) and rpow(0) == ratio(1, 1) and lf(1) == \"1,5\"
+";
+    let expected = [
+        "FAIL  t_rz: division by zero",
+        "FAIL  t_rdiv: division by zero",
+        "FAIL  t_rinv: division by zero",
+        "FAIL  t_rpow: division by zero",
+        "FAIL  t_rbig: out of memory",
+        "FAIL  t_rdec: decimal scale must be in 0..=10000",
+        "FAIL  t_lf: fmt digits must be in 0..=20",
+        "1 passed, 7 failed",
+    ];
+    assert_trap_parity("std_round4", src, &expected);
+}

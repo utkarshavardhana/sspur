@@ -99,6 +99,17 @@ fn effects_and_contracts_cross_the_boundary() {
 }
 
 #[test]
+fn user_effects_are_handled_across_packages() {
+    let w = Ws::new("useffect");
+    w.pkg("lib", "cfg", &[], "pub effect ask() -> Int\n\npub fn twice() -> Int ! ask = ask() + ask()\n");
+    w.pkg("app", "app", &[("cfg", "{ path = \"../lib\" }")], "use cfg.{ask}\n\nfn run() -> Int = handle cfg.twice()\n  | ask() => resume(21)\n\nfn q() -> Int ! cfg.ask = cfg.twice()\n\ntest t = run() == 42\n");
+    assert_eq!(w.ok("app", &["test", "lib.ssp"]), "1 passed, 0 failed");
+    assert_eq!(w.ok("app", &["test", "--interp", "lib.ssp"]), "1 passed, 0 failed");
+    w.write("app/lib.ssp", "fn r() -> Int = cfg.twice()\n");
+    assert!(w.err("app", &["check", "lib.ssp"]).contains("performs 'cfg.ask' but the signature does not declare it"));
+}
+
+#[test]
 fn private_and_unknown_names_are_rejected() {
     let w = Ws::new("privacy");
     lib_and_app(&w, "fn a() -> Int = geo.helper(1)\n");

@@ -262,7 +262,7 @@ impl R<'_> {
             }
             Pat::Tuple(xs) => xs.iter_mut().for_each(|x| self.pat(x, binds, span)),
             Pat::Ctor { name, args } => {
-                self.qual(name, span, &[Kind::Ctor, Kind::Type, Kind::Op]);
+                self.qual(name, span, &[Kind::Ctor, Kind::Type, Kind::Op, Kind::Effect]);
                 match args {
                     CtorArgs::Positional(xs) => xs.iter_mut().for_each(|x| self.pat(x, binds, span)),
                     CtorArgs::Record(fs) => fs.iter_mut().for_each(|(_, x)| self.pat(x, binds, span)),
@@ -293,7 +293,7 @@ impl R<'_> {
         match &mut e.kind {
             ExprKind::Name(n) => {
                 if !bound(l, n) {
-                    self.qual(n, span, &[Kind::Fn, Kind::Ctor, Kind::Type, Kind::Op]);
+                    self.qual(n, span, &[Kind::Fn, Kind::Ctor, Kind::Type, Kind::Op, Kind::Effect]);
                 }
             }
             ExprKind::Field(x, f) => {
@@ -316,7 +316,7 @@ impl R<'_> {
                 args.iter_mut().for_each(|a| self.expr(a, l));
                 if let Some(p) = self.pkg_of(recv, l) {
                     match self.s.lookup(&p, name, span) {
-                        Ok(it) if matches!(it.kind, Kind::Fn | Kind::Op) => {
+                        Ok(it) if matches!(it.kind, Kind::Fn | Kind::Op | Kind::Effect) => {
                             if !targs.is_empty() {
                                 self.errs.push(SyntaxError::new("E_PKG_TARGS", format!("{p}.{name} takes no type arguments here; annotate the result instead"), span));
                             }

@@ -28,7 +28,7 @@ const USAGE: &str = "usage:
   sspur apply [tx.json|-] [-e JSON] [--test] apply a transaction of ops
   sspur q <query> [target] [--budget N] query the codebase (list [types|fns|tests] sig body callers callees effects find grep pack why impact holes diag log)
     q find 'a|b*'  names matching, with signatures   q grep TEXT  definitions whose source contains TEXT, with the lines   q body A,B  several bodies
-  sspur src | log | export | spec [--full] | mcp | --version
+  sspur src | log | export | spec [--full] | mcp [--dir PATH] | --version
   sspur bind header.h [--lib NAME] [-o out.ssp]   generate extern declarations from a C header (uses clang)
   sspur export-c file.ssp [-o libfoo] [--shared] [--prefix P]  build a C library and header from the C-compatible functions
   add --json for machine output (apply, edit, q, check)
@@ -76,7 +76,7 @@ fn parse_args() -> Args {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(a) = it.next() {
         if a.starts_with("--") || a == "-e" || a == "-o" {
-            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto" | "--gen" | "--group" | "--keep" | "--modes" | "--reduce" | "--want-skip" | "--want-build" | "--want-hang" | "--from" | "--pkg");
+            let takes = matches!(a.as_str(), "--budget" | "--cases" | "--seed" | "-e" | "-o" | "--lib" | "--prefix" | "--out" | "--port" | "--target" | "--record" | "--weight" | "--store" | "--emit" | "--max" | "--agent" | "--backend" | "--lto" | "--gen" | "--group" | "--keep" | "--modes" | "--reduce" | "--want-skip" | "--want-build" | "--want-hang" | "--from" | "--pkg" | "--dir");
             flags.push(a);
             if takes
                 && let Some(v) = it.next() {
@@ -145,7 +145,7 @@ fn real_main() -> ExitCode {
             print!("{}", store.head_root().map(|r| store.root_src(&r)).unwrap_or_default());
             ExitCode::SUCCESS
         }
-        "mcp" => mcp::serve(),
+        "mcp" => mcp::serve(args.val("--dir")),
         "bind" => {
             let Some(h) = args.pos.get(1) else {
                 eprintln!("usage: sspur bind header.h [--lib NAME] [-o out.ssp]");

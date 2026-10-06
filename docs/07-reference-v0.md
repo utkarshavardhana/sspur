@@ -626,7 +626,7 @@ A crash at any point leaves the old or the new state. Check results are cached p
 
 `sspur sync serve [--port N] [--max N]` serves the codebase over TCP (one JSON line per request). `sspur sync pull REMOTE` and `sspur sync push REMOTE` exchange commits and texts by hash with a directory or `tcp://host:port` and merge them by the rules above. A pull with conflicts, or whose merge doesn't typecheck, leaves HEAD unchanged and prints both sides; settle it with `sspur sync resolve ours|theirs [PATH...]`, or with a transaction that has `"merge": true` (and `resolve` ops). A push that would conflict is refused: pull, resolve, push again. `sspur sync status` shows HEAD, heads and any pending merge. Replicas that have exchanged all commits have the same root hash.
 
-Queries (`sspur q <query> [target] [--budget N]`, or the MCP tool `sspur_query`):
+Queries (`sspur q <query> [target] [--budget N]`, or the MCP tool `query`; see `docs/mcp.md`):
 
 | Query | Returns |
 |---|---|

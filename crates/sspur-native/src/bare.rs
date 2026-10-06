@@ -601,24 +601,6 @@ SECTIONS {{
     )
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn soft_double_matches_hardware_bit_for_bit() {
-        if Command::new("clang").arg("--version").output().is_err() {
-            return;
-        }
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bare_softfp_test.c");
-        let exe = std::env::temp_dir().join(format!("sspur_softfp_{}", std::process::id()));
-        let o = Command::new("clang").args(["-O2", "-ffp-contract=off", "-o"]).arg(&exe).arg(&src).output().unwrap();
-        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-        let r = Command::new(&exe).output().unwrap();
-        let _ = std::fs::remove_file(&exe);
-        assert_eq!(String::from_utf8_lossy(&r.stdout), "ok 3000000\n");
-    }
-    use std::process::Command;
-}
-
 pub struct Toolchain {
     pub cc: PathBuf,
     pub ld: PathBuf,
@@ -702,4 +684,23 @@ pub fn build(c_body: &str, target: &str, out: &Path) -> Result<Artifacts, String
     run(Command::new(&tc.cc).args(flags).args(common).arg("-o").arg(&so).arg(&s), "clang (start.S)")?;
     run(Command::new(&tc.ld).arg("-T").arg(&ld).arg("--gc-sections").arg("-o").arg(out).arg(&so).arg(&co), "ld.lld")?;
     Ok(Artifacts { elf: out.to_path_buf(), dir })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    #[test]
+    fn soft_double_matches_hardware_bit_for_bit() {
+        if Command::new("clang").arg("--version").output().is_err() {
+            return;
+        }
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bare_softfp_test.c");
+        let exe = std::env::temp_dir().join(format!("sspur_softfp_{}", std::process::id()));
+        let o = Command::new("clang").args(["-O2", "-ffp-contract=off", "-o"]).arg(&exe).arg(&src).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let r = Command::new(&exe).output().unwrap();
+        let _ = std::fs::remove_file(&exe);
+        assert_eq!(String::from_utf8_lossy(&r.stdout), "ok 3000000\n");
+    }
 }

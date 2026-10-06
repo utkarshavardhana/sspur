@@ -697,7 +697,7 @@ mod tests {
         }
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bare_softfp_test.c");
         let exe = std::env::temp_dir().join(format!("sspur_softfp_{}", std::process::id()));
-        let o = Command::new("clang").args(["-O2", "-ffp-contract=off", "-o"]).arg(&exe).arg(&src).output().unwrap();
+        let o = Command::new("clang").args(["-O2", "-ffp-contract=off", "-o"]).arg(&exe).arg(&src).arg("-lm").output().unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         let r = Command::new(&exe).output().unwrap();
         let _ = std::fs::remove_file(&exe);

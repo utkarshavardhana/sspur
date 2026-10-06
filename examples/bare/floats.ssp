@@ -1,0 +1,132 @@
+profile bare
+
+fn newton(a: F64, steps: Int) -> F64
+= do
+  var x = 1.0
+  for i in 0..steps
+    x := (x + a / x) / 2.0
+  x
+
+fn leibniz(n: Int) -> F64
+= do
+  var s = 0.0
+  var sign = 1.0
+  for k in 0..n
+    s := s + sign / (2 * k + 1).to_f64
+    sign := -sign
+  4.0 * s
+
+fn harmonic(n: Int) -> F64
+= do
+  var s = 0.0
+  for k in 1..n + 1
+    s := s + 1.0 / k.to_f64
+  s
+
+fn tenths() -> F64
+= do
+  var s = 0.0
+  for i in 0..10
+    s := s + 0.1
+  (s - 1.0) * 1000000000000000000.0
+
+fn pow2(k: Int) -> F64
+= do
+  var x = 1.0
+  for i in 0..k
+    x := x * 2.0
+  x
+
+fn subnormal() -> F64
+= do
+  tiny = 1.0 / pow2(1022) / 3.0
+  tiny * pow2(1022) * 1000.0
+
+fn rounding() -> F64
+= (-7.5).floor.to_f64 + (2.5).round.to_f64 * 10.0 + (-2.7).trunc.to_f64 * 100.0 + (2.1).ceil.to_f64 * 1000.0 + (-2.5).round.to_f64 * 10000.0
+
+fn convert() -> F64
+= (9007199254740993.to_f64 - 9007199254740990.0) + (-123456789).to_f64 / 1000.0
+
+fn flag(b: Bool, w: F64) -> F64
+= if b then w else 0.0
+
+fn special() -> F64
+= do
+  z = 0.0
+  flag((1.0 / z).is_inf, 1.0) + flag((z / z).is_nan, 2.0) + flag(-z < z, 4.0) + flag(pi() > 3.14159, 8.0) + flag((1.0 / 3.0) * 3.0 == 1.0, 16.0) + flag(inf() > pow2(1023), 32.0) + flag(-(z.copysign(-1.0)) == z, 64.0)
+
+fn horner(x: F64) -> F64
+= ((((0.5 * x - 1.25) * x + 3.0) * x - 0.75) * x + 2.0) * x - 0.125
+
+fn count() -> Int
+= 13
+
+fn value(k: Int) -> F64
+= if k == 0 then newton(2.0, 30)
+  else if k == 1 then 2.0.sqrt - newton(2.0, 30)
+  else if k == 2 then leibniz(100000)
+  else if k == 3 then harmonic(1000)
+  else if k == 4 then tenths()
+  else if k == 5 then subnormal()
+  else if k == 6 then rounding()
+  else if k == 7 then convert()
+  else if k == 8 then special()
+  else if k == 9 then 22.0 / 7.0 - pi()
+  else if k == 10 then horner(1.1)
+  else if k == 11 then (harmonic(1000) - 7.48547086055) * 1000000000000.0
+  else (leibniz(100000) - 3.14158265358) * 1000000000000.0
+
+fn label(k: Int) -> Str
+= if k == 0 then "sqrt2" else if k == 1 then "fsqrt" else if k == 2 then "pi" else if k == 3 then "harmonic" else if k == 4 then "tenths" else if k == 5 then "subnormal" else if k == 6 then "rounding" else if k == 7 then "convert" else if k == 8 then "special" else if k == 9 then "22/7" else if k == 10 then "horner" else if k == 11 then "harmonic-ulps" else "pi-ulps"
+
+fn parts(x: F64) -> (Bool, Int, Int)
+= do
+  a = x.abs
+  whole = a.trunc
+  frac = ((a - whole.to_f64) * 1000000000.0).round
+  (x < 0.0, whole, frac)
+
+// host: everything above this line is pure and also runs in the interpreter
+
+fn putc(c: Int) ! mmio, div
+= if arch() == "riscv64" then mmio[U8](0x10000000).write(c)
+  else if arch() == "thumbv7em" then do
+    mmio[U32](0x40004008).write(1)
+    while mmio[U32](0x40004004).read.band(1) != 0
+      ()
+    mmio[U32](0x40004000).write(c)
+  else do
+    fr = mmio[U32](0x09000018)
+    while fr.read.band(0x20) != 0
+      ()
+    mmio[U32](0x09000000).write(c)
+
+fn puts(s: Str) ! mmio, div
+= do
+  for i in 0..s.byte_len
+    putc(s.byte(i))
+
+fn put_int(n: Int) ! mmio, div
+= do
+  if n >= 10 then put_int(n / 10)
+  putc(48 + n % 10)
+
+fn put_frac(n: Int, width: Int) ! mmio, div
+= do
+  if width > 1 then put_frac(n / 10, width - 1)
+  putc(48 + n % 10)
+
+fn main() ! mmio, div
+= do
+  for k in 0..count()
+    p = parts(value(k))
+    puts(label(k))
+    putc(32)
+    if p.0 then putc(45)
+    put_int(p.1)
+    putc(46)
+    put_frac(p.2, 9)
+    putc(10)
+
+test bits = rounding() == -27178.0 and special() == 127.0

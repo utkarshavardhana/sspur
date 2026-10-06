@@ -165,7 +165,8 @@ fn bare_rejects_runtime_features() {
         ("fn f(n: Int) -> Str\n= \"n={n}\"", "E_PROFILE_BARE", "interpolation"),
         ("fn f() ! log\n= log(\"x\")", "E_PROFILE_BARE", "no host log"),
         ("fn f(s: Str) -> Str\n= s.upper", "E_PROFILE_BARE", "'.upper' on Str"),
-        ("fn f(x: F64) -> F64\n= x", "E_PROFILE_BARE", "floating point"),
+        ("fn f(x: F64) -> F64\n= x.sin", "E_PROFILE_BARE", "'.sin' on F64 needs libm"),
+        ("fn f(x: F64) -> F64\n= x % 2.0", "E_PROFILE_BARE", "'%' on F64 needs libm"),
         ("fn f() -> Int\n= (x => x)(1)", "E_PROFILE_BARE", "lambdas"),
         ("type S = A | B\n\nfn f(s: S) -> Int\n= 1", "E_PROFILE_BARE", "heap-allocated"),
         ("fn f() -> Int ! unsafe\n= alloc(4, 0).load(0)", "E_PROFILE_BARE", "no heap"),
@@ -290,6 +291,35 @@ fn statics_and_arrays_reject_unsafe_access() {
     std::fs::write(&f, ok_src).unwrap();
     let (out, err, ok) = sspur(&["check", f.to_str().unwrap()]);
     assert!(ok, "a handler's own read-modify-write is not preempted by main: {out}{err}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+fn host_floats() -> String {
+    let src = std::fs::read_to_string(root().join("examples/bare/floats.ssp")).unwrap();
+    let pure = src.split("// host:").next().unwrap().trim_start_matches("profile bare\n");
+    let d = scratch("floats-host");
+    let f = d.join("host.ssp");
+    std::fs::write(&f, format!("{pure}\nfn main() ! log\n= do\n  for k in 0..count()\n    p = parts(value(k))\n    log(\"{{label(k)}} {{if p.0 then \"-\" else \"\"}}{{p.1}}.{{p.2.format(\"09\")}}\")\n")).unwrap();
+    let interp = sspur(&["run", "--interp", f.to_str().unwrap()]);
+    let native = sspur(&["run", f.to_str().unwrap()]);
+    assert!(interp.2, "{interp:?}");
+    assert_eq!(interp, native, "host tiers disagree");
+    let _ = std::fs::remove_dir_all(&d);
+    interp.0
+}
+
+#[test]
+fn f64_on_fpu_targets_matches_the_host_interpreter() {
+    let expect = host_floats();
+    assert!(expect.starts_with("sqrt2 1.414213562\nfsqrt 0.000000000\n") && expect.contains("\nspecial 127.000000000\n"), "{expect}");
+    for target in ["aarch64-qemu", "thumbv7em-mps2"] {
+        boots(target, "floats", &expect);
+    }
+    let (out, err, ok) = sspur(&["test", "examples/bare/floats.ssp"]);
+    assert!(ok && out.contains("1 passed, 0 failed"), "{out}{err}");
+    let d = scratch("floats-rv");
+    let (_, err, ok) = sspur(&["build", "--target", "riscv64-qemu", "examples/bare/floats.ssp", "-o", d.join("k.elf").to_str().unwrap()]);
+    assert!(!ok && err.contains("F64 needs a floating-point unit"), "{err}");
     let _ = std::fs::remove_dir_all(&d);
 }
 

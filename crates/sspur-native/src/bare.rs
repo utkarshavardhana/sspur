@@ -20,6 +20,94 @@ pub fn timer_irq(arch: &str) -> u32 {
     }
 }
 
+/// riscv64-qemu is built as rv64imac, so it has no FPU; the Arm targets do.
+pub fn has_fpu(arch: &str) -> bool {
+    arch != "riscv64"
+}
+
+/// Marks a kernel that uses `F64`; `build` then enables the FPU and the float runtime.
+pub const FPU_MARK: &str = "#define SS_FPU 1\n";
+
+const SOFT_DOUBLE: &str = include_str!("bare_softfp.c");
+
+const FLOAT_PRELUDE: &str = r#"static inline int64_t dbits(double x) { int64_t b; memcpy(&b, &x, 8); return b; }
+static inline double bitsd(int64_t b) { double x; memcpy(&x, &b, 8); return x; }
+static inline int64_t dkey(double x) { int64_t b = x != x ? 0x7ff8000000000000LL : dbits(x); b ^= (int64_t)(((uint64_t)(b >> 63)) >> 1); return b; }
+static inline int cmp_D(double a, double b) { int64_t x = dkey(a), y = dkey(b); return (x > y) - (x < y); }
+static inline int64_t f2i(double x) {
+    if (x != x) return 0;
+    if (x >= 9223372036854775807.0) return 9223372036854775807LL;
+    if (x <= -9223372036854775808.0) return INT64_MIN;
+    return (int64_t)x;
+}
+#ifdef __aarch64__
+static inline double ss_sqrt(double x) { double r; __asm__("fsqrt %d0, %d1" : "=w"(r) : "w"(x)); return r; }
+#endif
+static inline double ss_fabs(double x) { return bitsd(dbits(x) & 0x7FFFFFFFFFFFFFFFLL); }
+static inline double ss_copysign(double x, double y) { return bitsd((dbits(x) & 0x7FFFFFFFFFFFFFFFLL) | (dbits(y) & INT64_MIN)); }
+static double ss_trunc(double x) {
+    int64_t b = dbits(x); int e = (int)((b >> 52) & 0x7FF) - 1023;
+    if (e >= 52) return x;
+    if (e < 0) return bitsd(b & INT64_MIN);
+    return bitsd(b & ~((1LL << (52 - e)) - 1));
+}
+static double ss_floor(double x) { double t = ss_trunc(x); return x < t ? t - 1.0 : t; }
+static double ss_ceil(double x) { double t = ss_trunc(x); return x > t ? t + 1.0 : t; }
+static double ss_round(double x) { double t = ss_trunc(x); return ss_fabs(x - t) >= 0.5 ? t + ss_copysign(1.0, x) : t; }
+#define fabs(x) ss_fabs(x)
+#define trunc(x) ss_trunc(x)
+#define floor(x) ss_floor(x)
+#define ceil(x) ss_ceil(x)
+#define round(x) ss_round(x)
+#define sqrt(x) ss_sqrt(x)
+#define copysign(x, y) ss_copysign(x, y)
+#define isfinite(x) ((dbits(x) & 0x7FF0000000000000LL) != 0x7FF0000000000000LL)
+#define isinf(x) ((dbits(x) & 0x7FFFFFFFFFFFFFFFLL) == 0x7FF0000000000000LL)
+"#;
+
+const FP_SAVE: &str = "  sub sp, sp, #400
+  stp q0, q1, [sp, #0]
+  stp q2, q3, [sp, #32]
+  stp q4, q5, [sp, #64]
+  stp q6, q7, [sp, #96]
+  stp q16, q17, [sp, #128]
+  stp q18, q19, [sp, #160]
+  stp q20, q21, [sp, #192]
+  stp q22, q23, [sp, #224]
+  stp q24, q25, [sp, #256]
+  stp q26, q27, [sp, #288]
+  stp q28, q29, [sp, #320]
+  stp q30, q31, [sp, #352]
+  mrs x9, fpcr
+  mrs x10, fpsr
+  stp x9, x10, [sp, #384]
+  bl \\fn
+  ldp x9, x10, [sp, #384]
+  msr fpcr, x9
+  msr fpsr, x10
+  ldp q0, q1, [sp, #0]
+  ldp q2, q3, [sp, #32]
+  ldp q4, q5, [sp, #64]
+  ldp q6, q7, [sp, #96]
+  ldp q16, q17, [sp, #128]
+  ldp q18, q19, [sp, #160]
+  ldp q20, q21, [sp, #192]
+  ldp q22, q23, [sp, #224]
+  ldp q24, q25, [sp, #256]
+  ldp q26, q27, [sp, #288]
+  ldp q28, q29, [sp, #320]
+  ldp q30, q31, [sp, #352]
+  add sp, sp, #400
+";
+
+/// The aarch64 start code with FP/SIMD access enabled at EL1 and the vector entries
+/// saving the caller-saved FP registers, FPCR and FPSR around the C handler.
+fn start_aarch64_fpu() -> String {
+    START_AARCH64
+        .replace("2:\n  ldr x0, =__stack_top\n", "2:\n  mov x0, #(3 << 20)\n  msr cpacr_el1, x0\n  isb\n  ldr x0, =__stack_top\n")
+        .replace("  bl \\fn\n", FP_SAVE)
+}
+
 pub fn qemu_args(target: &str, elf: &str) -> Vec<String> {
     let base: &[&str] = match target {
         "riscv64-qemu" => &["qemu-system-riscv64", "-machine", "virt", "-bios", "none", "-m", "64M"],
@@ -461,6 +549,24 @@ SECTIONS {{
     )
 }
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn soft_double_matches_hardware_bit_for_bit() {
+        if Command::new("clang").arg("--version").output().is_err() {
+            return;
+        }
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bare_softfp_test.c");
+        let exe = std::env::temp_dir().join(format!("sspur_softfp_{}", std::process::id()));
+        let o = Command::new("clang").args(["-O2", "-ffp-contract=off", "-o"]).arg(&exe).arg(&src).output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let r = Command::new(&exe).output().unwrap();
+        let _ = std::fs::remove_file(&exe);
+        assert_eq!(String::from_utf8_lossy(&r.stdout), "ok 3000000\n");
+    }
+    use std::process::Command;
+}
+
 pub struct Toolchain {
     pub cc: PathBuf,
     pub ld: PathBuf,
@@ -501,15 +607,24 @@ pub fn build(c_body: &str, target: &str, out: &Path) -> Result<Artifacts, String
     let tc = toolchain(arch)?;
     let dir = PathBuf::from(format!("{}.build", out.display()));
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let rest = c_body.strip_prefix(PRELUDE).unwrap_or(c_body);
+    let fpu = rest.starts_with(FPU_MARK);
+    if fpu && !has_fpu(arch) {
+        return Err(format!("F64 needs a floating-point unit, and the {arch} target is built without one"));
+    }
+    let start_fpu = start_aarch64_fpu();
     let (rt, start, base, flags): (&str, &str, &str, &[&str]) = match arch {
         "riscv64" => (RT_RISCV, START_RISCV, "0x80000000", &["--target=riscv64-unknown-elf", "-march=rv64imac_zicsr", "-mabi=lp64", "-mcmodel=medany", "-mno-relax"]),
         "thumbv7em" => (RT_THUMB, START_THUMB, "", &["--target=thumbv7em-none-eabihf", "-mcpu=cortex-m4", "-mfpu=fpv4-sp-d16", "-mfloat-abi=hard", "-mthumb"]),
+        _ if fpu => (RT_AARCH64, &start_fpu, "0x40100000", &["--target=aarch64-none-elf", "-mstrict-align"]),
         _ => (RT_AARCH64, START_AARCH64, "0x40100000", &["--target=aarch64-none-elf", "-mgeneral-regs-only", "-mstrict-align"]),
     };
-    let c_src = match c_body.strip_prefix(PRELUDE) {
-        Some(rest) => format!("{PRELUDE}{rt}{rest}"),
-        None => format!("{PRELUDE}{rt}{c_body}"),
+    let float_rt = match (fpu, arch) {
+        (false, _) => String::new(),
+        (true, "thumbv7em") => format!("{SOFT_DOUBLE}{FLOAT_PRELUDE}"),
+        (true, _) => FLOAT_PRELUDE.to_string(),
     };
+    let c_src = format!("{PRELUDE}{rt}{float_rt}{rest}");
     let c = dir.join("kernel.c");
     let s = dir.join("start.S");
     let ld = dir.join("link.ld");

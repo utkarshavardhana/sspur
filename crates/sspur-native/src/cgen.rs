@@ -951,7 +951,26 @@ pub fn bare_c(m: &Module, check: &CheckOutput, arch: &str) -> Result<String, Str
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    generate(m, check, None, Some(arch), false).map(|(src, _)| src)
+    let src = generate(m, check, None, Some(arch), false).map(|(src, _)| src)?;
+    if !check.expr_types.values().chain(check.fn_types.values().flat_map(|(ps, r)| ps.iter().chain([r]))).any(uses_f64) {
+        return Ok(src);
+    }
+    if !crate::bare::has_fpu(arch) {
+        return Err(format!("F64 needs a floating-point unit, and the {arch} target is built without one (rv64imac); use aarch64-qemu or thumbv7em-mps2, or scale to Int"));
+    }
+    Ok(match src.strip_prefix(crate::bare::PRELUDE) {
+        Some(rest) => format!("{}{}{rest}", crate::bare::PRELUDE, crate::bare::FPU_MARK),
+        None => src,
+    })
+}
+
+fn uses_f64(t: &Type) -> bool {
+    match t {
+        Type::Con(n, a) => n == "F64" || a.iter().any(uses_f64),
+        Type::Tuple(xs) => xs.iter().any(uses_f64),
+        Type::Fn(ps, r, ..) => ps.iter().any(uses_f64) || uses_f64(r),
+        _ => false,
+    }
 }
 
 fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Option<&str>, stable: bool) -> Result<(String, Plan), String> {

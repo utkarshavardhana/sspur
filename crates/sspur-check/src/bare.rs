@@ -11,6 +11,8 @@ pub struct Tables<'a> {
 }
 
 const STR_METHODS: &[&str] = &["len", "byte_len", "byte", "is_empty"];
+const F64_METHODS: &[&str] = &["abs", "sqrt", "floor", "ceil", "round", "trunc", "is_nan", "is_finite", "is_inf", "copysign"];
+const F64_HINT: &str = "bare F64 has + - * /, comparisons, abs sqrt floor ceil round trunc is_nan is_finite is_inf copysign, Int.to_f64, and pi() inf() nan()";
 
 struct Cx<'a> {
     t: &'a Tables<'a>,
@@ -60,7 +62,7 @@ impl Cx<'_> {
         match t {
             Type::Con(n, a) => match n.as_str() {
                 "Int" | "Bool" | "Unit" | "Str" | "I8" | "I16" | "I32" | "U8" | "U16" | "U32" | "U64" | "Mmio" | "Ptr" => None,
-                "F64" | "F32" => Some("floating point is not available in bare code".into()),
+                "F32" => Some("F32 is a GPU kernel type; bare code uses F64".into()),
                 "List" => Some("lists need the GC heap; bare code has none".into()),
                 "Map" => Some("maps need the GC heap; bare code has none".into()),
                 "Res" | "Guess" => Some(format!("{n} values need the app runtime")),
@@ -142,6 +144,12 @@ impl Cx<'_> {
                 self.err("E_PROFILE_BARE", e.span, format!("'.{name}' on Str is not available in bare code"), Some("bare strings are static: use len, byte_len, byte(i) and is_empty"));
             }
             ExprKind::Method { name, .. } | ExprKind::Field(_, name) if name == "str" && !self.t.fns.contains_key("str") => self.err("E_PROFILE_BARE", e.span, msg("'.str' allocates a string"), None),
+            ExprKind::Method { recv, name, .. } | ExprKind::Field(recv, name) if self.t.exprs.get(&expr_key(recv)).is_some_and(|t| *t == Type::con("F64")) && !F64_METHODS.contains(&name.as_str()) && !self.t.fns.contains_key(name) => {
+                self.err("E_PROFILE_BARE", e.span, format!("'.{name}' on F64 needs libm, which bare code doesn't have"), Some(F64_HINT));
+            }
+            ExprKind::Binary(op @ (BinOp::Rem | BinOp::Pow), a, _) if self.t.exprs.get(&expr_key(a)).is_some_and(|t| *t == Type::con("F64")) => {
+                self.err("E_PROFILE_BARE", e.span, format!("'{}' on F64 needs libm, which bare code doesn't have", op.symbol()), Some(F64_HINT));
+            }
             ExprKind::Call(f, _) => {
                 if let ExprKind::Name(n) = &f.kind
                     && !self.t.fns.contains_key(n) {

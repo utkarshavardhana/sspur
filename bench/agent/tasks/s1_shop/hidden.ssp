@@ -1,0 +1,19 @@
+test hidden_eu_rate = tax_rate("EU") == 21 and tax_rate("US") == 7 and tax_rate("UK") == 20 and tax_rate("APAC") == 0
+
+test hidden_eu_used = customer_tax(customer_new(1, "a", 10, 100, "EU")) == 210 and invoice_gross(invoice_new(1, "a", 1, 1000, "EU")) == 1210
+
+test hidden_money = money(1005) == "10.05" and money(7) == "0.07" and money(123400) == "1234.00" and money(1999) == "19.99" and money(0) == "0.00"
+
+test hidden_money_used = product_line(product_new(4, "pen", 1, 105, "APAC")) == "pen #4: 1.05"
+
+test hidden_ship_fee = ship_fee(10, false) == 449 and ship_fee(10, true) == 898 and ship_fee(0, true) == 0
+
+test hidden_shipping_callers = order_shipping(order_new(1, "o", 10, 1, "US")) == 449 and parcel_shipping(parcel_new(2, "p", 4, 1, "US")) == 359 and rma_shipping(rma_new(3, "r", 1, 1, "UK")) == 314
+
+test hidden_express = order_express_shipping(order_new(1, "o", 10, 1, "US")) == 898 and order_express_shipping(order_new(2, "z", 0, 1, "US")) == 0
+
+test hidden_restock_all = warehouse_restock_all([warehouse_new(1, "a", 5, 1, "US"), warehouse_deactivate(warehouse_new(2, "b", 5, 1, "US")), warehouse_new(3, "c", 0, 1, "EU")], 4).map(_.qty) == [9, 5, 4]
+
+test hidden_restock_all_keeps = warehouse_restock_all([warehouse_new(7, "x", 1, 2, "US"), warehouse_new(8, "y", 2, 3, "UK")], 1).map(_.id) == [7, 8] and warehouse_restock_all([], 3) == []
+
+test hidden_unchanged = customer_total(customer_sample()) == 886 and route_total(route_sample()) == 1308 and lesson_bucket(lesson_new(1, "l", 1, 1, "US")) == "small"

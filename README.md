@@ -1,8 +1,11 @@
 # SSPUR
 
 [![CI](https://github.com/utkarshavardhana/sspur/actions/workflows/ci.yml/badge.svg)](https://github.com/utkarshavardhana/sspur/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-utkarshavardhana.github.io%2Fsspur-blue)](https://utkarshavardhana.github.io/sspur/)
 
 **A programming language for AI agents to write, read, and maintain.**
+
+Documentation, a 10-minute tutorial and a guide for AI agents: **[utkarshavardhana.github.io/sspur](https://utkarshavardhana.github.io/sspur/)**
 
 SSPUR is a statically typed, effect-tracked language whose primary users are AI coding agents rather than people. Programs are stored as a typed, content-addressed graph of definitions. Agents change code through atomic, typechecked operations instead of text diffs, and the compiler treats contracts, effects, and tests as first-class data. The surface syntax is designed to spend as few tokens as possible while still compiling to native code that outperforms idiomatic C++.
 
@@ -208,6 +211,8 @@ The recommended loop is one call per change: read what you need with `sspur q`, 
 
 ## Documentation
 
+Everything below is also published as a searchable site at [utkarshavardhana.github.io/sspur](https://utkarshavardhana.github.io/sspur/), together with [the tutorial](https://utkarshavardhana.github.io/sspur/tutorial.html) and [SSPUR for AI agents](https://utkarshavardhana.github.io/sspur/agents.html). The site source is in [`site/`](site/).
+
 | Document | Contents |
 |---|---|
 | [Vision](docs/00-vision.md) | Why SSPUR exists and the principles behind it |
@@ -253,7 +258,8 @@ See the [roadmap](docs/roadmap.md) for details and exit criteria.
 | `bench/` | Token, agent, evaluation, and native performance benchmarks |
 | `tests/` | Suite programs, the ownership soundness suite, bare-metal tests |
 | `schema/` | JSON schemas for definitions, operations, and diagnostics |
-| `tools/` | The corpus differential check run by CI |
+| `site/` | The documentation site (mdBook): pages, the tutorial's checked snippets, the SSPUR highlighter |
+| `tools/` | The corpus differential check and the site link check run by CI |
 | `packaging/` | Homebrew formula template |
 
 ## Contributing

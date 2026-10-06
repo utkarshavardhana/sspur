@@ -126,9 +126,10 @@ pub fn handle(s: &Store, req: &Json) -> Json {
         }
         "fetch" => {
             let ids: Vec<String> = req.get("ids").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
-            bundle(s, &ids)
+            let mut b = bundle(s, &ids);
+            b["pkgs"] = crate::pkg::bundle(&s.root_dir());
+            b
         }
-        "deps" => crate::pkg::bundle(&s.root_dir()),
         "push" => {
             if let Some(d) = req.get("pkgs")
                 && let Err(e) = crate::pkg::ingest_bundle(&s.root_dir(), d) {
@@ -161,11 +162,10 @@ pub fn pull(local: &Store, remote: &Remote, agent: &str) -> Result<Report, Strin
     if want.is_empty() {
         return Ok(Report { sent: 0, received: 0, result: json!({"ok": true, "root": local.head(), "up_to_date": true}) });
     }
-    let d = remote.call(&json!({"op": "deps"}))?;
-    if d.get("error").is_none() {
-        crate::pkg::ingest_bundle(&local.root_dir(), &d)?;
-    }
     let b = remote.call(&json!({"op": "fetch", "ids": want}))?;
+    if let Some(d) = b.get("pkgs") {
+        crate::pkg::ingest_bundle(&local.root_dir(), d)?;
+    }
     let n = ingest(local, &b)?;
     Ok(Report { sent: 0, received: n, result: result(&local.merge_remote(&rheads, agent, true)) })
 }

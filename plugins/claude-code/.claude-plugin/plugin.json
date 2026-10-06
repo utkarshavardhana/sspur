@@ -1,0 +1,12 @@
+{
+  "name": "sspur",
+  "version": "0.2.1",
+  "description": "Write and change SSPUR code: the workflow skill (spec, query, one atomic edit with tests, verify, deploy local) and the sspur MCP server.",
+  "author": {
+    "name": "Utkarsha Vardhana"
+  },
+  "homepage": "https://github.com/utkarshavardhana/sspur/blob/main/docs/mcp.md",
+  "repository": "https://github.com/utkarshavardhana/sspur",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["sspur", "language", "mcp", "codebase", "typechecked-edits"]
+}

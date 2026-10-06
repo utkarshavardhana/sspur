@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "sspur": {
+      "type": "stdio",
+      "command": "sspur",
+      "args": ["mcp"]
+    }
+  }
+}

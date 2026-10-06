@@ -1,0 +1,17 @@
+{
+  "name": "sspur",
+  "owner": {
+    "name": "Utkarsha Vardhana"
+  },
+  "metadata": {
+    "description": "Claude Code plugins for the SSPUR language"
+  },
+  "plugins": [
+    {
+      "name": "sspur",
+      "source": "./plugins/claude-code",
+      "description": "The SSPUR workflow skill and the sspur MCP server",
+      "category": "development"
+    }
+  ]
+}

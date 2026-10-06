@@ -94,5 +94,37 @@
   "total": 11,
   "ok": true,
   "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a7_grades",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a7_grades",
+  "passed": 11,
+  "total": 11,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "a8_config",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "python",
+  "task": "a8_config",
+  "passed": 13,
+  "total": 13,
+  "ok": true,
+  "msg": ""
  }
 ]

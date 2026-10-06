@@ -130,6 +130,30 @@ fn queries_answer_from_the_graph() {
 }
 
 #[test]
+fn pack_takes_several_names_and_shows_each_definition_once() {
+    let (s, _d) = fresh("pack_many");
+    let ops = vec![
+        json!({"op": "add", "path": "base", "src": "fn base(x: Int) -> Int\n= x + 1"}),
+        json!({"op": "add", "path": "mid", "src": "fn mid(x: Int) -> Int\n= base(x) * 2"}),
+        json!({"op": "add", "path": "top", "src": "fn top(x: Int) -> Int\n= mid(x) + base(x)"}),
+        json!({"op": "add", "path": "top_t", "src": "test top_t = top(1) == 6"}),
+    ];
+    assert!(s.apply(tx(json!(ops))).ok);
+    let l = s.load_head().unwrap();
+    let c = Ctx::new(&l, Some(&s));
+    let out = c.run("pack", Some("base,mid"), 2000);
+    let text = out["text"].as_str().unwrap();
+    assert_eq!(out["targets"], json!(["base", "mid"]));
+    assert!(text.contains("= x + 1") && text.contains("= base(x) * 2"), "both targets in full: {text}");
+    assert_eq!(text.matches("fn mid(x: Int) -> Int").count(), 1, "a later target is not also packed as a caller: {text}");
+    assert_eq!(text.matches("fn top(x: Int) -> Int").count(), 1, "a shared caller is shown once: {text}");
+    assert!(out["est_tokens"].as_u64().unwrap() > 0);
+    let one = c.run("pack", Some("base"), 2000);
+    assert!(one["target"] == "base" && one["text"].as_str().unwrap().contains("fn mid(x: Int) -> Int"), "one name is unchanged: {one}");
+    assert_eq!(c.run("pack", Some("base,nope"), 2000)["error"], "E_NOT_FOUND");
+}
+
+#[test]
 fn pack_caps_callers_in_large_codebases() {
     let (s, _d) = fresh("pack_cap");
     let mut ops = vec![json!({"op": "add", "path": "base", "src": "fn base(x: Int) -> Int\n= x + 1"})];

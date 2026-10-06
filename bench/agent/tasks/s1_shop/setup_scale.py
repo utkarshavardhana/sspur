@@ -27,7 +27,7 @@ SSPUR_INTRO = """You are working on a large codebase written in SSPUR, a new pro
 
 - The code lives in a store in .sspur/, and the CLI is ./sspur (run commands as `cd {dir} && ./sspur ...`; ./sspur runs under a 300 s timeout).
 - Start with `cd {dir} && ./sspur spec`: the language reference (the only documentation).
-- The codebase has about 1,100 definitions (31k tokens of source), so don't print all of it. Find what you need with `./sspur q find 'WORD|OTHER'` (matching names with their signatures), `./sspur q grep TEXT` (definitions whose source contains TEXT, with those lines), `./sspur q body A,B`, `./sspur q callers NAME` and `./sspur q pack NAME` (a definition with the signatures it uses, its tests and its callers).
+- The codebase has about 1,100 definitions (31k tokens of source), so don't print all of it. Find what you need with `./sspur q find 'WORD|OTHER'` (matching names with their signatures), `./sspur q grep TEXT` (definitions whose source contains TEXT, with those lines), `./sspur q body A,B`, `./sspur q callers NAME` and `./sspur q pack A,B,C` (each definition with the signatures it uses, its tests and its callers, several at a time).
 - Change code only with `./sspur edit` as the reference describes. `./sspur test` and `./sspur check` are also available.
 - Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."""
 

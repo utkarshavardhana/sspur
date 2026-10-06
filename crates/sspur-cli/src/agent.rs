@@ -181,7 +181,8 @@ fn names(v: &Json) -> String {
     if xs.is_empty() { "(none)".into() } else { xs.join(" ") }
 }
 
-pub fn query_text(q: &str, out: &Json, src: &str) -> String {
+/// `pattern` is the `find` or `grep` argument; definitions with exactly that name are printed first.
+pub fn query_text(q: &str, out: &Json, src: &str, pattern: &str) -> String {
     if let Some(e) = out.get("error") {
         let mut s = format!("{} {}", e.as_str().unwrap_or("E_QUERY"), out["msg"].as_str().unwrap_or(""));
         if let Some(c) = out.get("close").filter(|c| c.as_array().is_some_and(|a| !a.is_empty())) {
@@ -198,7 +199,7 @@ pub fn query_text(q: &str, out: &Json, src: &str) -> String {
     let arr = || out.as_array().cloned().unwrap_or_default();
     match q {
         "list" => list_text(&arr()),
-        "find" | "grep" if out.get("hits").is_some() => hits_text(q, out),
+        "find" | "grep" if out.get("hits").is_some() => hits_text(q, out, pattern),
         "sig" => out["sig"].as_str().unwrap_or("").to_string(),
         "body" => out["src"].as_str().unwrap_or("").to_string(),
         "callers" | "callees" | "effects" => names(out),
@@ -253,29 +254,46 @@ fn list_text(items: &[Json]) -> String {
     if lines.is_empty() { "(none)".into() } else { lines.join("\n") }
 }
 
-fn hits_text(q: &str, out: &Json) -> String {
-    let hits = out["hits"].as_array().cloned().unwrap_or_default();
+/// `find` prints this many signatures and `grep` this many matching definitions; then only names.
+const FIND_HITS: usize = 25;
+const GREP_HITS: usize = 12;
+const TEXT_NAMES: usize = 40;
+
+fn hits_text(q: &str, out: &Json, pattern: &str) -> String {
+    let mut hits = out["hits"].as_array().cloned().unwrap_or_default();
+    hits.sort_by_key(|h| !pattern.split('|').any(|a| h["name"].as_str().is_some_and(|n| a.trim().trim_start_matches('^').trim_end_matches('$').eq_ignore_ascii_case(n))));
     let total = out["total"].as_u64().unwrap_or(hits.len() as u64) as usize;
     let mut lines = Vec::new();
     let mut tests = Vec::new();
+    let mut rest = Vec::new();
+    let mut shown = 0;
     for h in &hits {
+        let name = h["name"].as_str().unwrap_or("");
         if q == "find" && h["kind"] == "test" {
-            tests.push(h["name"].as_str().unwrap_or("").to_string());
+            tests.push(name.to_string());
             continue;
         }
+        if shown == if q == "grep" { GREP_HITS } else { FIND_HITS } {
+            rest.push(name);
+            continue;
+        }
+        shown += 1;
         lines.push(h["sig"].as_str().unwrap_or("").to_string());
         for l in h["lines"].as_array().into_iter().flatten() {
             lines.push(format!("  {}", l.as_str().unwrap_or("").trim()));
         }
         if let Some(n) = h["more"].as_u64().filter(|n| *n > 0) {
-            lines.push(format!("  .. {n} more lines (q body {})", h["name"].as_str().unwrap_or("")));
+            lines.push(format!("  .. {n} more lines (q body {name})"));
         }
     }
     if !tests.is_empty() {
         lines.push(format!("tests: {}", tests.join(" ")));
     }
-    if total > hits.len() {
-        lines.push(format!("-- {} of {total} shown; narrow the pattern", hits.len()));
+    let more = rest.len() + total.saturating_sub(hits.len());
+    if more > 0 {
+        let listed = &rest[..rest.len().min(TEXT_NAMES)];
+        let unlisted = if more > listed.len() { format!(" (+{}; narrow the pattern)", more - listed.len()) } else { String::new() };
+        lines.push(format!("-- {more} more: {}{unlisted}", listed.join(" ")));
     }
     if lines.is_empty() { "(none)".into() } else { lines.join("\n") }
 }

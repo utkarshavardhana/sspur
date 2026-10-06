@@ -230,6 +230,7 @@ impl<'a> Ctx<'a> {
                         .collect();
                     json!(hits)
                 }
+                "pack" if need.clone()?.contains(',') => self.pack_many(need.clone()?, budget)?,
                 "pack" => self.pack(need.clone()?, budget)?,
                 "why" => {
                     let name = self.def(need.clone()?)?.name().to_string();
@@ -281,7 +282,33 @@ impl<'a> Ctx<'a> {
         serde_json::from_str(&self.loaded.show(&out.to_string())).unwrap_or(out)
     }
 
+    /// `q pack A,B,..`: one pack per name, each definition shown once (a target that is also another's caller is shown in full).
+    fn pack_many(&self, targets: &str, budget: usize) -> Result<Json, Json> {
+        let names: Vec<String> = targets.split(',').map(str::trim).filter(|n| !n.is_empty()).map(|n| self.def(n).map(|d| d.name().to_string())).collect::<Result<_, _>>()?;
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let (mut text, mut included, mut omitted, mut used) = (Vec::new(), Vec::new(), Vec::new(), 0);
+        for (i, n) in names.iter().enumerate() {
+            let (parts, skipped) = self.pack_parts(n)?;
+            let parts = parts.into_iter().filter(|(m, part, _)| (*part == "full" || !names[i + 1..].contains(m)) && !seen.contains(m)).collect();
+            let p = self.pack_render(n, parts, skipped, budget, &mut seen);
+            used += p["est_tokens"].as_u64().unwrap_or(0);
+            if let Some(t) = p["text"].as_str().filter(|t| !t.is_empty()) {
+                text.push(t.to_string());
+            }
+            included.extend(p["included"].as_array().cloned().unwrap_or_default());
+            omitted.extend(p["omitted"].as_array().cloned().unwrap_or_default());
+        }
+        Ok(json!({"targets": names, "budget": budget, "est_tokens": used, "text": text.join("\n\n"), "included": included, "omitted": omitted}))
+    }
+
     fn pack(&self, target: &str, budget: usize) -> Result<Json, Json> {
+        let name = self.def(target)?.name().to_string();
+        let (parts, skipped) = self.pack_parts(&name)?;
+        Ok(self.pack_render(&name, parts, skipped, budget, &mut BTreeSet::new()))
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn pack_parts(&self, target: &str) -> Result<(Vec<(String, &'static str, String)>, (usize, usize)), Json> {
         let d = self.def(target)?;
         let name = d.name().to_string();
         let mut parts: Vec<(String, &'static str, String)> = vec![(name.clone(), "full", printer::print_def(d))];
@@ -316,11 +343,18 @@ impl<'a> Ctx<'a> {
                 _ => skipped.0 += 1,
             }
         }
+        Ok((parts, skipped))
+    }
+
+    fn pack_render(&self, name: &str, parts: Vec<(String, &'static str, String)>, skipped: (usize, usize), budget: usize, seen: &mut BTreeSet<String>) -> Json {
         let mut used = 0;
         let mut text = Vec::new();
         let mut included = Vec::new();
         let mut omitted = Vec::new();
         for (i, (n, part, src)) in parts.into_iter().enumerate() {
+            if !seen.insert(n.clone()) {
+                continue;
+            }
             let t = tokens(&src) + 1;
             if i == 0 || used + t <= budget {
                 used += t;
@@ -354,6 +388,6 @@ impl<'a> Ctx<'a> {
             }
             text.push(format!("-- not shown: {} (q callers {name}, q grep {name})", what.join(", ")));
         }
-        Ok(json!({"target": name, "hash": self.loaded.hashes[&name], "budget": budget, "est_tokens": used, "text": text.join("\n\n"), "included": included, "omitted": omitted, "skipped": {"callers": skipped.0, "tests": skipped.1}}))
+        json!({"target": name, "hash": self.loaded.hashes[name], "budget": budget, "est_tokens": used, "text": text.join("\n\n"), "included": included, "omitted": omitted, "skipped": {"callers": skipped.0, "tests": skipped.1}})
     }
 }

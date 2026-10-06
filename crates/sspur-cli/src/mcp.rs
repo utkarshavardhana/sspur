@@ -108,7 +108,7 @@ fn call(srv: &mut Server, name: &str, a: &Json) -> (String, bool) {
             let budget = a.get("budget").and_then(Json::as_u64).unwrap_or(2000) as usize;
             let out = Ctx::new(&loaded, Some(store)).run(q, a.get("target").and_then(Json::as_str), budget);
             let err = out.get("error").is_some();
-            if flag("json") { (serde_json::to_string(&out).unwrap(), err) } else { (agent::query_text(q, &out, &loaded.src), err) }
+            if flag("json") { (serde_json::to_string(&out).unwrap(), err) } else { (agent::query_text(q, &out, &loaded.src, a.get("target").and_then(Json::as_str).unwrap_or("")), err) }
         }
         "check" => {
             let lines = agent::diag_lines(&loaded.src, &loaded.check.diags, None);

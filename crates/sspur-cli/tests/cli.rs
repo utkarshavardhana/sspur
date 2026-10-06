@@ -55,6 +55,30 @@ fn apply_accepts_inline_ops_and_keeps_json() {
 }
 
 #[test]
+fn find_and_grep_cap_their_text_output() {
+    let d = fresh("hits_cap");
+    let mut src = String::new();
+    for i in 0..30 {
+        src.push_str(&format!("fn f{i:02}(x: Int) -> Int\n= one() + {i}\n\n"));
+    }
+    src.push_str("fn f(x: Int) -> Int\n= one()\n");
+    let (out, ok) = sspur(&d, &["edit", "-e", &src], "");
+    assert!(ok, "{out}");
+    let (out, _) = sspur(&d, &["q", "grep", "one()"], "");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.iter().filter(|l| l.starts_with("fn ")).count(), 12, "12 definitions in full: {out}");
+    let last = lines.last().unwrap();
+    assert!(last.starts_with("-- 21 more: f") && last.contains(" f29"), "{last}");
+    let (out, _) = sspur(&d, &["q", "find", "f"], "");
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "fn f(x: Int) -> Int", "the exact name first");
+    assert_eq!(lines.iter().filter(|l| l.starts_with("fn ")).count(), 25, "25 signatures: {out}");
+    assert!(lines.last().unwrap().starts_with("-- 6 more: f"), "{out}");
+    let (full, _) = sspur(&d, &["q", "grep", "one()", "--json"], "");
+    assert!(full.contains("\"f29\""), "--json is uncapped past the text cap: {full}");
+}
+
+#[test]
 fn explain_opt_lists_proven_rewrites() {
     let d = fresh("explain");
     let prog = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/rewrites.ssp");

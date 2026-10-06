@@ -26,7 +26,7 @@ const USAGE: &str = "usage:
   sspur deps fetch | update [NAME...] [--force] | tree   verify and fetch locked deps; upgrade with a semantic diff (refused if it breaks the build); show the graph
   sspur edit [file|-] [-e SRC] [--test] replace or add definitions by name (also 'rename A B', 'remove A' lines)
   sspur apply [tx.json|-] [-e JSON] [--test] apply a transaction of ops
-  sspur q <query> [target] [--budget N] query the codebase (list [types|fns|tests] sig body callers callees effects find grep pack why impact holes diag log)
+  sspur q <query> [target] [--budget N] query the codebase (list [types|fns|tests] sig body callers callees effects find grep pack why impact holes diag log; body and pack take A,B,C)
     q find 'a|b*'  names matching, with signatures   q grep TEXT  definitions whose source contains TEXT, with the lines   q body A,B  several bodies
   sspur src | log | export | spec [--full] | mcp [--dir PATH] | --version
   sspur bind header.h [--lib NAME] [-o out.ssp]   generate extern declarations from a C header (uses clang)
@@ -125,7 +125,7 @@ fn real_main() -> ExitCode {
             if args.has("--json") {
                 println!("{out}");
             } else {
-                println!("{}", agent::query_text(q, &out, &loaded.src));
+                println!("{}", agent::query_text(q, &out, &loaded.src, target.as_deref().unwrap_or("")));
                 if args.has("--full") && out.get("est_tokens").is_some() {
                     eprintln!("-- {} tokens, included {}, omitted {}", out["est_tokens"], out["included"], out["omitted"]);
                 }

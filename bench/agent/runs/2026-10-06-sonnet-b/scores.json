@@ -118,5 +118,13 @@
   "total": 17,
   "ok": true,
   "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "b6_adventure",
+  "passed": 17,
+  "total": 17,
+  "ok": true,
+  "msg": ""
  }
 ]

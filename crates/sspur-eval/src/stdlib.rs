@@ -104,6 +104,59 @@ fn io_res(path: &str, r: Result<Value, std::io::Error>) -> Value {
     }
 }
 
+fn fs_msg(path: &str, m: &str) -> Value {
+    Value::Res(Err(Rc::new(Value::str(&format!("{path}: {m}")))))
+}
+
+fn copy_file(from: &str, to: &str) -> Value {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+    let err = |p: &str, e: std::io::Error| fs_msg(p, &os_reason(&e));
+    if from.contains('\0') {
+        return fs_msg(from, "invalid path");
+    }
+    if to.contains('\0') {
+        return fs_msg(to, "invalid path");
+    }
+    let mut src = match std::fs::File::open(from) {
+        Ok(f) => f,
+        Err(e) => return err(from, e),
+    };
+    let meta = match src.metadata() {
+        Ok(m) => m,
+        Err(e) => return err(from, e),
+    };
+    if meta.is_dir() {
+        return fs_msg(from, "is a directory");
+    }
+    if std::fs::metadata(to).is_ok_and(|m| m.dev() == meta.dev() && m.ino() == meta.ino()) {
+        return fs_msg(from, "same file");
+    }
+    let mode = meta.mode() & 0o7777;
+    let mut dst = match std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(mode).open(to) {
+        Ok(f) => f,
+        Err(e) => return err(to, e),
+    };
+    let mut buf = vec![0u8; 65536];
+    loop {
+        let k = match src.read(&mut buf) {
+            Ok(k) => k,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return err(from, e),
+        };
+        if k == 0 {
+            break;
+        }
+        if let Err(e) = dst.write_all(&buf[..k]) {
+            return err(to, e);
+        }
+    }
+    if let Err(e) = dst.set_permissions(std::fs::Permissions::from_mode(mode)) {
+        return err(to, e);
+    }
+    Value::Res(Ok(Rc::new(Value::Unit)))
+}
+
 unsafe extern "C" {
     fn read(fd: i32, buf: *mut std::ffi::c_void, n: usize) -> isize;
     fn clock_gettime(clk: i32, tp: *mut [i64; 2]) -> i32;
@@ -437,6 +490,42 @@ impl Interp {
                     return Ok(Value::Res(Err(Rc::new(Value::str(&format!("{p}: invalid path"))))));
                 }
                 io_res(p, std::fs::rename(p, q).map(|_| Value::Unit))
+            }
+            "copy_file" => copy_file(s(&a[0])?, s(&a[1])?),
+            "symlink" => {
+                let (t, l) = (s(&a[0])?, s(&a[1])?);
+                if t.contains('\0') {
+                    return Ok(fs_msg(l, "invalid path"));
+                }
+                io_res(l, std::os::unix::fs::symlink(t, l).map(|_| Value::Unit))
+            }
+            "read_link" => {
+                let p = s(&a[0])?;
+                match std::fs::read_link(p) {
+                    Err(e) if e.raw_os_error() == Some(22) && !p.contains('\0') => fs_msg(p, "not a symlink"),
+                    Ok(t) => match t.into_os_string().into_string() {
+                        Ok(t) => Value::Res(Ok(Rc::new(Value::str(&t)))),
+                        Err(_) => fs_msg(p, "invalid UTF-8"),
+                    },
+                    Err(e) => io_res(p, Err(e)),
+                }
+            }
+            "is_symlink" => {
+                let p = s(&a[0])?;
+                Value::Bool(!p.contains('\0') && std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()))
+            }
+            "file_mode" => {
+                use std::os::unix::fs::MetadataExt;
+                let p = s(&a[0])?;
+                io_res(p, std::fs::metadata(p).map(|m| Value::Int(i64::from(m.mode() & 0o7777))))
+            }
+            "set_mode" => {
+                use std::os::unix::fs::PermissionsExt;
+                let (p, m) = (s(&a[0])?, int(&a[1])?);
+                if !(0..=0o7777).contains(&m) && !p.contains('\0') {
+                    return Ok(fs_msg(p, "mode out of range"));
+                }
+                io_res(p, std::fs::set_permissions(p, std::fs::Permissions::from_mode(m as u32)).map(|_| Value::Unit))
             }
             "exists" | "is_dir" => {
                 let p = s(&a[0])?;

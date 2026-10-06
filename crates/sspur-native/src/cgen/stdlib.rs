@@ -513,6 +513,26 @@ impl Cx<'_> {
                 self.std("fsx");
                 format!("({{ Str p_ = {}; Str q_ = {}; Str e_ = {{0, 0}}; int k_ = ss_rename(p_, q_, &e_); {}}})", v(0), v(1), res("k_", "e_"))
             }
+            "copy_file" | "symlink" => {
+                self.std("fsl");
+                format!("({{ Str p_ = {}; Str q_ = {}; Str e_ = {{0, 0}}; int k_ = ss_{n}(p_, q_, &e_); {}}})", v(0), v(1), res("k_", "e_"))
+            }
+            "read_link" => {
+                self.std("fsl");
+                format!("({{ Str p_ = {}; Str o_ = {{0, 0}}; Str e_ = {{0, 0}}; int k_ = ss_read_link(p_, &o_, &e_); {}}})", v(0), res("k_", "e_").replace("r_.ok = 1;", "{ r_.ok = 1; r_.v = o_; }"))
+            }
+            "is_symlink" => {
+                self.std("fsl");
+                format!("ss_is_symlink({})", v(0))
+            }
+            "file_mode" => {
+                self.std("fsl");
+                format!("({{ Str p_ = {}; int64_t o_ = 0; Str e_ = {{0, 0}}; int k_ = ss_file_mode(p_, &o_, &e_); {}}})", v(0), res("k_", "e_").replace("r_.ok = 1;", "{ r_.ok = 1; r_.v = o_; }"))
+            }
+            "set_mode" => {
+                self.std("fsl");
+                format!("({{ Str p_ = {}; int64_t m_ = {}; Str e_ = {{0, 0}}; int k_ = ss_set_mode(p_, m_, &e_); {}}})", v(0), v(1), res("k_", "e_"))
+            }
             "exists" | "is_dir" => {
                 self.std("fsx");
                 format!("((int64_t)(ss_path_kind({}) {}))", v(0), if n == "exists" { "!= 0" } else { "== 2" })

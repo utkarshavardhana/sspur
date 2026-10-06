@@ -43,7 +43,7 @@ static uint32_t ss_utf8_get(Str s, int64_t* i) {
 //@ fs fail utf8 sys
 static Str ss_why(Str path, int e) {
     SB_INIT(b); sb_put(&b, path.p, path.len); sb_put(&b, ": ", 2);
-    const char* w = e == -1 ? "invalid path" : e == -2 ? "invalid UTF-8" : e == -3 ? "byte out of range" : e == ENOENT ? "not found" : (e == EACCES || e == EPERM) ? "permission denied" : e == EISDIR ? "is a directory" : e == ENOTDIR ? "not a directory" : e == EEXIST ? "already exists" : e == ENOTEMPTY ? "directory not empty" : 0;
+    const char* w = e == -1 ? "invalid path" : e == -2 ? "invalid UTF-8" : e == -3 ? "byte out of range" : e == -4 ? "not a symlink" : e == -5 ? "same file" : e == -6 ? "mode out of range" : e == ENOENT ? "not found" : (e == EACCES || e == EPERM) ? "permission denied" : e == EISDIR ? "is a directory" : e == ENOTDIR ? "not a directory" : e == EEXIST ? "already exists" : e == ENOTEMPTY ? "directory not empty" : 0;
     if (w) sb_put(&b, w, (int64_t)strlen(w)); else { sb_put(&b, "os error ", 9); sb_int(&b, e); }
     return sb_done(&b);
 }
@@ -514,6 +514,59 @@ static int ss_stat_num(Str path, int mtime, int64_t* out, Str* err) {
     struct timespec m = sb.st_mtim;
 #endif
     *out = mtime ? (int64_t)m.tv_sec * 1000 + (int64_t)m.tv_nsec / 1000000 : (int64_t)sb.st_size; return 1;
+}
+//@ fsl fs
+#include <sys/stat.h>
+static int ss_copy_file(Str from, Str to, Str* err) {
+    char* a = ss_cpath(from); if (!a) { *err = ss_why(from, -1); return 0; }
+    char* b = ss_cpath(to); if (!b) { *err = ss_why(to, -1); return 0; }
+    int in = open(a, O_RDONLY | O_CLOEXEC); if (in < 0) { *err = ss_why(from, errno); return 0; }
+    struct stat sa, sb;
+    if (fstat(in, &sa) != 0) { int e = errno; close(in); *err = ss_why(from, e); return 0; }
+    if (S_ISDIR(sa.st_mode)) { close(in); *err = ss_why(from, EISDIR); return 0; }
+    if (stat(b, &sb) == 0 && sb.st_dev == sa.st_dev && sb.st_ino == sa.st_ino) { close(in); *err = ss_why(from, -5); return 0; }
+    int mode = (int)(sa.st_mode & 07777);
+    int out = open(b, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, mode); if (out < 0) { int e = errno; close(in); *err = ss_why(to, e); return 0; }
+    char buf[65536];
+    for (;;) {
+        ssize_t k = read(in, buf, sizeof buf);
+        if (k < 0) { if (errno == EINTR) continue; int e = errno; close(in); close(out); *err = ss_why(from, e); return 0; }
+        if (k == 0) break;
+        ssize_t off = 0;
+        while (off < k) { ssize_t w = write(out, buf + off, (size_t)(k - off)); if (w < 0) { if (errno == EINTR) continue; int e = errno; close(in); close(out); *err = ss_why(to, e); return 0; } off += w; }
+    }
+    close(in);
+    if (fchmod(out, (mode_t)mode) != 0) { int e = errno; close(out); *err = ss_why(to, e); return 0; }
+    if (close(out) != 0) { *err = ss_why(to, errno); return 0; }
+    return 1;
+}
+static int ss_symlink(Str target, Str link, Str* err) {
+    char* a = ss_cpath(target); char* b = ss_cpath(link); if (!a || !b) { *err = ss_why(link, -1); return 0; }
+    if (symlink(a, b) != 0) { *err = ss_why(link, errno); return 0; }
+    return 1;
+}
+static int ss_read_link(Str path, Str* out, Str* err) {
+    char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
+    int64_t cap = 256;
+    for (;;) {
+        char* buf = (char*)sspur_alloc_atomic((size_t)cap);
+        ssize_t n = readlink(c, buf, (size_t)cap);
+        if (n < 0) { *err = ss_why(path, errno == EINVAL ? -4 : errno); return 0; }
+        if (n < cap) { if (!ss_utf8_ok((const unsigned char*)buf, n)) { *err = ss_why(path, -2); return 0; } *out = (Str){n, buf}; return 1; }
+        cap *= 2;
+    }
+}
+static int64_t ss_is_symlink(Str path) { char* c = ss_cpath(path); struct stat sb; return c && lstat(c, &sb) == 0 && S_ISLNK(sb.st_mode); }
+static int ss_file_mode(Str path, int64_t* out, Str* err) {
+    char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
+    struct stat sb; if (stat(c, &sb) != 0) { *err = ss_why(path, errno); return 0; }
+    *out = (int64_t)(sb.st_mode & 07777); return 1;
+}
+static int ss_set_mode(Str path, int64_t mode, Str* err) {
+    char* c = ss_cpath(path); if (!c) { *err = ss_why(path, -1); return 0; }
+    if (mode < 0 || mode > 07777) { *err = ss_why(path, -6); return 0; }
+    if (chmod(c, (mode_t)mode) != 0) { *err = ss_why(path, errno); return 0; }
+    return 1;
 }
 //@ eprint
 static void ss_eprint(Str s) { int64_t off = 0; while (off < s.len) { ssize_t k = write(2, s.p + off, (size_t)(s.len - off)); if (k <= 0) break; off += k; } (void)!write(2, "\n", 1); }

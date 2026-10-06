@@ -4,6 +4,13 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+- Packages (ADR 0026). `sspur.toml` names a package and its dependencies (a local path, or a git URL with a tag or revision); `sspur.lock` pins each one by the hash of its exports. `pub fn`, `pub type` and `pub effect` export definitions; dependents call `lib.f(x)`, name `lib.T` and `lib.Ctor`, or import with `use lib.{f, T}` (a type brings its variants). Private names, unknown names and undeclared packages are diagnostics (`E_PKG_PRIVATE`, `E_PKG_NAME`, `E_PKG_UNKNOWN`).
+- `sspur add <path|git-url>[@rev]`, `sspur deps fetch|update|tree`, and `sspur init --pkg NAME`. Fetches are verified: a dependency whose content hash differs from the lock fails with `E_DEP_HASH`. Dependencies are cached by hash in `~/.cache/sspur/pkgs`.
+- `sspur deps update` prints a semantic diff of each dependency's exports (signatures, effects, contracts, body-only changes, added and removed names), typechecks the dependent against the new versions, and refuses the upgrade with the exact diagnostics unless `--force` is given.
+- `check`, `run`, `test`, `native`, `verify` and `fuzz --differential` work across packages. Dependencies' effects appear in dependents' signatures and their contracts are proved at the dependent's call sites. Native objects of dependency definitions are shared between dependents through the per-definition cache.
+- Codebase mode: `edit` accepts `use` lines and refuses to touch dependency code (`E_DEP_READONLY`), `q list lib` and `q sig lib.f` show a dependency's exports, and `sync push|pull` carries the dependencies with the commits, verified by hash.
+
 ## [0.2.1] - 2026-10-06
 
 This release closes the open items of the 0.2.0 hardening pass (ADR 0025). Native build failures are no longer silent, the program generator covers more of the language, and most effect handlers now compile to native code.

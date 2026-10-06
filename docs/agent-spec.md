@@ -1,6 +1,6 @@
 # SSPUR agent spec
 
-A program is `type`, `fn`, `test` definitions in any order. No imports, 2-space indent.
+A program is `type`, `fn`, `test` definitions in any order, 2-space indent.
 
 ```
 type Item = {sku: Str, qty: Int where _ >= 0}
@@ -52,5 +52,8 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 ## C, sys, bare, GPU
 `extern fn cbrt(x: F64) -> F64 ! ffi from "m"`; `profile sys` (`res type` moved and dropped, `&x`/`&mut x`, `! unsafe`); `profile bare` (no heap, `static`, `mmio`, `asm`); `kernel fn k(y: &mut [F32]) @grid(y.len, 64)` (`gid`, `barrier()`, callers `! dev`). Details: `./sspur spec --full`.
 
+## Packages
+`./sspur add ../lib|URL@tag`. `pub` exports; use `lib.f(x)`, `lib.T`, `use lib.{f, T}`; callers declare `fail[lib.E]`.
+
 ## CLI
-`./sspur src`, `q body|sig|callers NAME`. `./sspur edit --test -e '<defs>'` (all defs in one single-quoted multi-line argument) adds or replaces each definition by name (`rename A B`, `remove NAME` lines first), atomically, prints errors as `def:line:col CODE msg`, then runs every test. Put all changes in one edit. If the shell refuses that command, save the defs to a file in the work dir with your file-writing tool and run `./sspur edit --test FILE`. On `E_CONFLICT` read theirs, merge, resend. `./sspur test|check`, `sync pull|push DIR`, `deploy plan|local`.
+`./sspur src`, `q body|sig|callers NAME`. `./sspur edit --test -e '<defs>'` (all defs in one single-quoted multi-line argument) adds or replaces each definition by name (`rename A B`, `remove NAME` lines first), atomically, then runs every test. Put all changes in one edit. Or save them to FILE: `./sspur edit --test FILE`. On `E_CONFLICT` read theirs, merge, resend. `./sspur test|check`, `sync pull|push DIR`, `deploy plan|local`.

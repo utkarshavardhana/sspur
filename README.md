@@ -167,12 +167,26 @@ sspur edit --test -e 'fn total(items: List[Item]) -> Int = items.map(_.price * _
 sspur log
 ```
 
+### Packages
+
+A package is a directory with an `sspur.toml`. `pub` marks what it exports; dependents write `lib.f(x)` and `lib.T`, or import names with `use lib.{f, T}`. A dependency is pinned in `sspur.lock` by the hash of its exports, so a build never changes until you upgrade, and its effects and contracts show up in your own signatures.
+
+```
+sspur add ../textutils                      # or a git URL: sspur add file:///srv/textutils.git@v0.1.0
+sspur deps tree
+sspur deps update                           # semantic diff; refused if it breaks your code (--force to override)
+sspur q sig textutils.clip                  # a dependency's signature, without its body
+```
+
+See [`examples/packages/`](examples/packages) and [ADR 0026](docs/adr/0026-packages.md).
+
 More examples:
 
 | Example | What it shows |
 |---|---|
 | [`examples/crud/`](examples/crud) | A CRUD HTTP service, with `sspur deploy plan` and `sspur deploy local` |
 | [`examples/ffi/`](examples/ffi) | Calling libc and libm, and calling SSPUR from C |
+| [`examples/packages/`](examples/packages) | A text library and an app that depends on it by path, with its lockfile |
 | [`examples/bare/`](examples/bare) | Bare-metal hello world, a timer interrupt, inline asm, and statics shared with an interrupt handler on QEMU riscv64 and aarch64 and a Cortex-M4 (MPS2 AN386) |
 | [`tests/programs/`](tests/programs) | 47 runnable programs covering every language feature and library area |
 
@@ -229,7 +243,7 @@ See the [roadmap](docs/roadmap.md) for details and exit criteria.
 | `crates/sspur-eval` | Reference interpreter and fuzzer |
 | `crates/sspur-native` | Cranelift JIT and the native C compiler with its runtime |
 | `crates/sspur-smt` | SMT encoding and Z3 integration |
-| `crates/sspur-store` | Content-addressed codebase, transactions, queries |
+| `crates/sspur-store` | Content-addressed codebase, transactions, queries, packages |
 | `crates/sspur-cli` | The `sspur` command, MCP server, deployer |
 | `bench/` | Token, agent, evaluation, and native performance benchmarks |
 | `tests/` | Suite programs, the ownership soundness suite, bare-metal tests |

@@ -49,6 +49,7 @@ A namespace is a mutable map from paths to hashes, for example `shop.orders.plac
 
 - The **root** of a namespace is a Merkle hash over its entries. A root hash identifies an exact program state, like a git commit.
 - Branches are named roots. Deploying means pointing an environment at a root.
+- As built (ADR 0026): a package's definitions are the paths `pkg.name` of its dependents, pinned in `sspur.lock` by the Merkle root over its exported (name, hash) pairs. Only `pub` definitions are visible.
 - Namespaces are **CRDTs**: an observed-remove map whose entries are multi-value registers. Concurrent writes to different paths always merge. Concurrent writes to the same path keep both values and raise a `conflict` diagnostic that an agent resolves with one op.
 
 ## 4. Operations

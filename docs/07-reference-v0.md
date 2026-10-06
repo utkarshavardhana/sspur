@@ -4,7 +4,7 @@ This is everything the current compiler implements, and it's all an agent needs 
 
 ## Program shape
 
-A program is a set of definitions: `type`, `fn`, `extern fn`, `effect`, `test`, and for services `store` and `svc`. Order doesn't matter. There are no imports. `//` line comments are skipped in files but aren't stored in the codebase. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
+A program is a set of definitions: `type`, `fn`, `extern fn`, `effect`, `test`, and for services `store` and `svc`. Order doesn't matter. Definitions of other packages are named `lib.f` or imported with `use` (see Packages). `//` line comments are skipped in files but aren't stored in the codebase. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
 
 ```
 type Item = {sku: Str, qty: Int where _ > 0, price: Int where _ >= 0}
@@ -551,9 +551,42 @@ Errors are `"{path}: not found"`, `permission denied`, `is a directory`, `not a 
 
 `json.encode(v)` gives a `Str`, and `json.decode[T](s)` gives `Res[T, Str]`. Records are objects in field order, variants without fields are `"Name"` and with fields `{"tag": "Name", ...}`, `Opt` is the value or `null` (a missing field decodes as `none`), `Map[Str, V]` is an object and other maps are `[[k, v], ...]`, lists, sets, heaps and tuples are arrays, newtypes are their inner value, and non-finite floats encode as `null`. `HashMap` and `HashSet` encode like `Map` and `Set` (in key order), `Time` as an ISO 8601 string, `Duration` as milliseconds, `BigInt` as a JSON integer of any length, `Dec` as a string such as `"12.50"` (a number also decodes), and `Bits` as a string of `0` and `1` with bit 0 last. `Regex` has no JSON form. Decode errors name the path: `lines[0].qty: expected Int, found a string`; malformed text gives `invalid JSON`. Types with functions, secrets, type parameters or `where` refinements are rejected with `E_JSON`. A target that is itself a tuple needs an alias: `type P = (Int, Str)`, then `json.decode[P](s)`.
 
+## Packages
+
+A package is a directory with `sspur.toml`. Its source is the manifest's `src` file, else its `.sspur` codebase, else `lib.ssp` or `main.ssp`.
+
+```toml
+[package]
+name = "app"            # lowercase letters, digits and single underscores
+version = "0.1.0"
+src = "main.ssp"
+
+[deps]
+textutils = { path = "../textutils" }
+greet = { git = "file:///srv/greet.git", rev = "v0.1.0" }   # a tag, branch or commit
+```
+
+- `pub fn`, `pub type` and `pub effect` export a definition. A pub sum type exports its variants and a pub effect its operations. Other definitions are private to the package.
+- Any dependency in the manifest can be used qualified: `lib.f(x)`, `lib.f` as a value, `lib.T` in types, `lib.Ctor` and `lib.Ctor{f: 1}` in expressions and patterns, `fail[lib.E]` and `! lib.e` in effect rows.
+- `use lib.{f, T}` imports names unqualified; a type brings its variants, an effect its operations, and an imported function also works as a method (`s.f(a)`). Repeated `use` lines for one package merge. `use lib` alone is allowed.
+- A dependency's effects are part of its signatures, so calling `lib.clip` makes the caller declare `fail[lib.TextErr]` (or catch it), and its `pre` clauses are proved at the caller's call sites by `sspur verify`.
+- Values of a dependency's types print and encode to JSON with their own names (`Box{w: 1}`), exactly as inside the library. A dependency's tests and examples are not run by `sspur test` of the dependent.
+- `sspur.lock` pins every package in the graph, direct or not, by the hash of its exports: the Merkle root over the hashes of its pub definitions, which include everything they call. A build reads only the lock and the cache in `~/.cache/sspur/pkgs/<hash>` (or `$SSPUR_CACHE/pkgs`), and fetches and verifies a missing package. A dependent's definition hashes include the hashes of the dependency definitions it uses.
+- Errors: `E_PKG_UNKNOWN` (no such dependency, or only an indirect one), `E_PKG_NAME`, `E_PKG_PRIVATE`, `E_PKG_IMPORT_CLASH` (a name both defined and imported), `E_PKG_RESERVED` (names with `__`), `E_DEP_READONLY` (defining or editing `lib.x`), `E_DEP_HASH` (content does not match the lock), `E_DEP_STALE` (the manifest asks for another source or rev than the lock: run `deps update`), `E_DEP_CONFLICT` (two versions of one package in the graph, or two replicas that pin different versions).
+
+| Command | Effect |
+|---|---|
+| `sspur init --pkg NAME` | Write a `sspur.toml` (with `init`'s other arguments as before) |
+| `sspur add ../lib`, `sspur add file:///srv/lib.git@v1` | Add the package under its own name to `[deps]` and lock it |
+| `sspur deps fetch` | Fetch what the lock lists and is not cached, then rebuild every cached package from its source and check its hash |
+| `sspur deps update [NAME...] [--force]` | Re-resolve (all or the named packages), print the export diff (`~ lib.f  effects: + log`, `~ lib.g  contracts: + pre n > 0`, `~ lib.h  signature: A => B`, `~ lib.k  body`, `+ lib.new`, `- lib.old`), typecheck the dependent, and write the lock only if it still checks (or with `--force`) |
+| `sspur deps tree` | The dependency graph with versions, hashes and sources |
+
+In a codebase, `edit` accepts `use` lines (stored as the definition `use lib`; remove it with a `remove use lib` line), `q list lib` lists a dependency's exports, `q sig lib.f`, `q body lib.f`, `q effects lib.f` and `q callers lib.f` work on public definitions, and `sync push|pull` send the lock and each locked package's source with the commits; the receiver verifies them by hash and adds them to its manifest and lock.
+
 ## CLI and agent tools
 
-`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status`, `sspur build --target riscv64-qemu|aarch64-qemu|thumbv7em-mps2 file -o kernel.elf`, `sspur gpu file --emit metal|opencl|spirv|ptx [-o out]`. With no file, these operate on the codebase in `.sspur/`. `run` and `test` compile to native code by default; `--interp` forces the interpreter. A failed native build prints one warning naming the function and the C error, then falls back to the whole-program build or the interpreter (`--quiet` hides it); `--strict-native` or `SSPUR_STRICT_NATIVE=1` makes it an error. `run`, `test` and `build` take `--pgo` (one training run, cached per source; `--retrain` repeats it) and `--lto off|thin|full` (default `off`); `sspur build --backend llvm file -o prog` is the direct LLVM IR prototype for scalars, control flow and records (ADR 0024). `sspur bind header.h` generates extern declarations.
+`sspur check|run|test|fuzz|verify|hash|fmt|export-c [file]`, `sspur deploy plan|local|migrate|replay|swap|promote|rollback|backfill|status`, `sspur build --target riscv64-qemu|aarch64-qemu|thumbv7em-mps2 file -o kernel.elf`, `sspur gpu file --emit metal|opencl|spirv|ptx [-o out]`. With no file, these operate on the codebase in `.sspur/`. A file under a directory with `sspur.toml` is checked with that package's dependencies. `run` and `test` compile to native code by default; `--interp` forces the interpreter. A failed native build prints one warning naming the function and the C error, then falls back to the whole-program build or the interpreter (`--quiet` hides it); `--strict-native` or `SSPUR_STRICT_NATIVE=1` makes it an error. `run`, `test` and `build` take `--pgo` (one training run, cached per source; `--retrain` repeats it) and `--lto off|thin|full` (default `off`); `sspur build --backend llvm file -o prog` is the direct LLVM IR prototype for scalars, control flow and records (ADR 0024). `sspur bind header.h` generates extern declarations.
 
 `sspur fuzz` turns contracts into property tests. It generates inputs that satisfy `pre` and `where`, then reports shrunk counterexamples for any `post` violation or trap.
 

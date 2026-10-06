@@ -28,6 +28,11 @@ pub fn has_fpu(arch: &str) -> bool {
 /// Marks a kernel that uses `F64`; `build` then enables the FPU and the float runtime.
 pub const FPU_MARK: &str = "#define SS_FPU 1\n";
 
+/// Marks an aarch64 kernel with `fn core_main(id: Int)`; statics then use atomic instructions.
+pub const SMP_MARK: &str = "#define SS_SMP_KERNEL 1\n";
+
+const RT_ONE_CORE: &str = "int64_t ss_start_core(int64_t id) { (void)id; return 0; }\nint64_t ss_core_id(void) { return 0; }\n";
+
 const SOFT_DOUBLE: &str = include_str!("bare_softfp.c");
 
 const FLOAT_PRELUDE: &str = r#"static inline int64_t dbits(double x) { int64_t b; memcpy(&b, &x, 8); return b; }
@@ -105,6 +110,7 @@ const FP_SAVE: &str = "  sub sp, sp, #400
 fn start_aarch64_fpu() -> String {
     START_AARCH64
         .replace("2:\n  ldr x0, =__stack_top\n", "2:\n  mov x0, #(3 << 20)\n  msr cpacr_el1, x0\n  isb\n  ldr x0, =__stack_top\n")
+        .replace("  ldr x2, =ss_vectors\n", "  mov x2, #(3 << 20)\n  msr cpacr_el1, x2\n  isb\n  ldr x2, =ss_vectors\n")
         .replace("  bl \\fn\n", FP_SAVE)
 }
 
@@ -112,7 +118,7 @@ pub fn qemu_args(target: &str, elf: &str) -> Vec<String> {
     let base: &[&str] = match target {
         "riscv64-qemu" => &["qemu-system-riscv64", "-machine", "virt", "-bios", "none", "-m", "64M"],
         "thumbv7em-mps2" => &["qemu-system-arm", "-machine", "mps2-an386", "-cpu", "cortex-m4", "-semihosting"],
-        _ => &["qemu-system-aarch64", "-machine", "virt", "-cpu", "cortex-a53", "-m", "64M", "-semihosting"],
+        _ => &["qemu-system-aarch64", "-machine", "virt", "-cpu", "cortex-a53", "-smp", "2", "-m", "64M", "-semihosting"],
     };
     base.iter().map(|s| s.to_string()).chain(["-nographic", "-monitor", "none", "-no-reboot", "-kernel", elf].map(String::from)).collect()
 }
@@ -142,11 +148,26 @@ void sspur_irq(int64_t n);
 void sspur_on_trap(int64_t code);
 uint64_t ss_crit_enter(void);
 void ss_crit_leave(uint64_t s);
+int64_t ss_start_core(int64_t id);
+int64_t ss_core_id(void);
+void sspur_core(int64_t id);
+#ifdef SS_SMP
+static int64_t ss_sload(volatile int64_t* p) { return __atomic_load_n(p, __ATOMIC_SEQ_CST); }
+static void ss_sstore(volatile int64_t* p, int64_t v) { __atomic_store_n(p, v, __ATOMIC_SEQ_CST); }
+static int64_t ss_sswap(volatile int64_t* p, int64_t v) { return __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST); }
+static int64_t ss_scas(volatile int64_t* p, int64_t e, int64_t v) { return __atomic_compare_exchange_n(p, &e, v, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); }
+static int ss_sadd(volatile int64_t* p, int64_t d) {
+    int64_t o = __atomic_load_n(p, __ATOMIC_SEQ_CST), r;
+    do { if (__builtin_add_overflow(o, d, &r)) return 1; } while (!__atomic_compare_exchange_n(p, &o, r, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
+    return 0;
+}
+#else
 static int64_t ss_sload(volatile int64_t* p) { uint64_t s = ss_crit_enter(); int64_t v = *p; ss_crit_leave(s); return v; }
 static void ss_sstore(volatile int64_t* p, int64_t v) { uint64_t s = ss_crit_enter(); *p = v; ss_crit_leave(s); }
 static int64_t ss_sswap(volatile int64_t* p, int64_t v) { uint64_t s = ss_crit_enter(); int64_t o = *p; *p = v; ss_crit_leave(s); return o; }
 static int64_t ss_scas(volatile int64_t* p, int64_t e, int64_t v) { uint64_t s = ss_crit_enter(); int64_t o = *p; if (o == e) *p = v; ss_crit_leave(s); return o == e; }
 static int ss_sadd(volatile int64_t* p, int64_t d) { uint64_t s = ss_crit_enter(); int64_t r; int o = __builtin_add_overflow(*p, d, &r); if (!o) *p = r; ss_crit_leave(s); return o; }
+#endif
 #define TRAPV(c, cl, val) ss_trap((c), FIDX, (cl), (int64_t)(val))
 typedef struct { int64_t len; const char* p; } Str;
 static inline Str str_lit(const char* p, int64_t n) { return (Str){n, p}; }
@@ -254,6 +275,18 @@ void ss_irq_c(void) {
     ss_w32(SS_GICC + 0x10, iar);
 }
 void ss_sync_c(void) { ss_trapping = 1; ss_halt(63); }
+extern char ss_secondary[];
+int64_t ss_start_core(int64_t id) {
+    if (id < 1 || id > 3) return 0;
+    register uint64_t x0 __asm__("x0") = 0xC4000003;
+    register uint64_t x1 __asm__("x1") = (uint64_t)id;
+    register uint64_t x2 __asm__("x2") = (uint64_t)ss_secondary;
+    register uint64_t x3 __asm__("x3") = (uint64_t)id;
+    __asm__ volatile("hvc #0" : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3) :: "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "memory");
+    return x0 == 0;
+}
+int64_t ss_core_id(void) { uint64_t v; __asm__ volatile("mrs %0, mpidr_el1" : "=r"(v)); return (int64_t)(v & 0xff); }
+void ss_core_c(int64_t id) { sspur_core(id); for (;;) __asm__ volatile("wfe"); }
 "#;
 
 const RT_THUMB: &str = r#"#define SS_SYST_CSR (*(volatile uint32_t*)0xE000E010UL)
@@ -468,6 +501,25 @@ _start:
   wfi
   b 5b
 
+.globl ss_secondary
+ss_secondary:
+  mrs x1, mpidr_el1
+  and x1, x1, #0xff
+  ldr x2, =__stack_top
+  sub x2, x2, #0x80000
+  mov x3, #0x10000
+  mul x3, x3, x1
+  sub x2, x2, x3
+  mov sp, x2
+  ldr x2, =ss_vectors
+  msr vbar_el1, x2
+  isb
+  mov x0, x1
+  bl ss_core_c
+6:
+  wfe
+  b 6b
+
 .macro SS_ENTRY fn
   sub sp, sp, #176
   stp x0, x1, [sp, #0]
@@ -607,8 +659,10 @@ pub fn build(c_body: &str, target: &str, out: &Path) -> Result<Artifacts, String
     let tc = toolchain(arch)?;
     let dir = PathBuf::from(format!("{}.build", out.display()));
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let rest = c_body.strip_prefix(PRELUDE).unwrap_or(c_body);
+    let mut rest = c_body.strip_prefix(PRELUDE).unwrap_or(c_body);
     let fpu = rest.starts_with(FPU_MARK);
+    rest = rest.strip_prefix(FPU_MARK).unwrap_or(rest);
+    let smp = arch == "aarch64" && rest.starts_with(SMP_MARK);
     if fpu && !has_fpu(arch) {
         return Err(format!("F64 needs a floating-point unit, and the {arch} target is built without one"));
     }
@@ -624,7 +678,8 @@ pub fn build(c_body: &str, target: &str, out: &Path) -> Result<Artifacts, String
         (true, "thumbv7em") => format!("{SOFT_DOUBLE}{FLOAT_PRELUDE}"),
         (true, _) => FLOAT_PRELUDE.to_string(),
     };
-    let c_src = format!("{PRELUDE}{rt}{float_rt}{rest}");
+    let one_core = if arch == "aarch64" { "" } else { RT_ONE_CORE };
+    let c_src = format!("{}{PRELUDE}{rt}{one_core}{float_rt}{rest}", if smp { "#define SS_SMP 1\n" } else { "" });
     let c = dir.join("kernel.c");
     let s = dir.join("start.S");
     let ld = dir.join("link.ld");

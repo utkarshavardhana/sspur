@@ -1,0 +1,47 @@
+profile bare
+
+static total: Int = 0
+static seen: Int = 0
+static finished: Int = 0
+
+fn putc(c: Int) ! mmio, div
+= do
+  fr = mmio[U32](0x09000018)
+  while fr.read.band(0x20) != 0
+    ()
+  mmio[U32](0x09000000).write(c)
+
+fn puts(s: Str) ! mmio, div
+= do
+  for i in 0..s.byte_len
+    putc(s.byte(i))
+
+fn put_int(n: Int) ! mmio, div
+= do
+  if n >= 10 then put_int(n / 10)
+  putc(48 + n % 10)
+
+fn work(n: Int) ! mmio, static
+= do
+  seen.add(1.shl(core_id()))
+  for i in 0..n
+    total.add(1)
+
+fn core_main(id: Int) ! mmio, static
+= do
+  work(100000)
+  finished.add(1)
+
+fn main() -> Int ! mmio, div, static
+= do
+  started = start_core(1)
+  work(100000)
+  while started and finished.load < 1
+    ()
+  puts(if started then "core 1 started\n" else "core 1 did not start\n")
+  puts("total ")
+  put_int(total.load)
+  puts(" seen ")
+  put_int(seen.load)
+  putc(10)
+  if started then 0 else 1

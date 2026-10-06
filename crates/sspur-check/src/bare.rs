@@ -117,6 +117,9 @@ impl Cx<'_> {
                 self.err("E_INTERRUPT_DUP", f.sig_span, format!("interrupt '{v}' is already handled by {prev}"), None);
             }
         }
+        if f.name == "core_main" && sig.as_ref().is_some_and(|(ps, r)| ps.as_slice() != [Type::int()] || *r != Type::unit()) {
+            self.err("E_INTERRUPT_SIG", f.sig_span, "the secondary core entry must be 'fn core_main(id: Int)'".into(), None);
+        }
         if f.name == "on_trap" && sig.as_ref().is_some_and(|(ps, r)| ps.as_slice() != [Type::int()] || *r != Type::unit()) {
             self.err("E_INTERRUPT_SIG", f.sig_span, "the trap handler must be 'fn on_trap(code: Int)'".into(), None);
         }

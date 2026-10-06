@@ -952,16 +952,14 @@ pub fn bare_c(m: &Module, check: &CheckOutput, arch: &str) -> Result<String, Str
         None => (m, check),
     };
     let src = generate(m, check, None, Some(arch), false).map(|(src, _)| src)?;
-    if !check.expr_types.values().chain(check.fn_types.values().flat_map(|(ps, r)| ps.iter().chain([r]))).any(uses_f64) {
-        return Ok(src);
-    }
-    if !crate::bare::has_fpu(arch) {
+    let fpu = check.expr_types.values().chain(check.fn_types.values().flat_map(|(ps, r)| ps.iter().chain([r]))).any(uses_f64);
+    if fpu && !crate::bare::has_fpu(arch) {
         return Err(format!("F64 needs a floating-point unit, and the {arch} target is built without one (rv64imac); use aarch64-qemu or thumbv7em-mps2, or scale to Int"));
     }
-    Ok(match src.strip_prefix(crate::bare::PRELUDE) {
-        Some(rest) => format!("{}{}{rest}", crate::bare::PRELUDE, crate::bare::FPU_MARK),
-        None => src,
-    })
+    let smp = check.fn_types.contains_key("core_main") && arch == "aarch64";
+    let Some(rest) = src.strip_prefix(crate::bare::PRELUDE) else { return Ok(src) };
+    let marks = format!("{}{}", if fpu { crate::bare::FPU_MARK } else { "" }, if smp { crate::bare::SMP_MARK } else { "" });
+    Ok(format!("{}{marks}{rest}", crate::bare::PRELUDE))
 }
 
 fn uses_f64(t: &Type) -> bool {
@@ -1130,6 +1128,11 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
                 writeln!(src, "void sspur_on_trap(int64_t c) {{ Status st = {{0}}; (void)f_on_trap(c, &st, -SS_DEPTH); }}").unwrap();
             } else {
                 writeln!(src, "void sspur_on_trap(int64_t c) {{ (void)c; }}").unwrap();
+            }
+            if plan_fns.get("core_main").is_some_and(|(p, _, _)| p.len() == 1) {
+                writeln!(src, "void sspur_core(int64_t id) {{ Status st = {{0}}; (void)f_core_main(id, &st, -SS_DEPTH); }}").unwrap();
+            } else {
+                writeln!(src, "void sspur_core(int64_t id) {{ (void)id; }}").unwrap();
             }
             let plan = Plan { fns: BTreeMap::new(), skipped, refines: vec![], err_types: vec![], links: vec![], export: None, owned: vec![], fids: index.clone() };
             return Ok((fix_members(&src), plan));
@@ -3018,7 +3021,8 @@ impl<'a> Cx<'a> {
         }
         let vals: Vec<String> = args.iter().map(|a| self.expr(a)).collect::<G<_>>()?;
         Ok(match n {
-            "ticks" | "tick_hz" => format!("ss_{n}()"),
+            "ticks" | "tick_hz" | "core_id" => format!("ss_{n}()"),
+            "start_core" => format!("ss_start_core({})", vals[0]),
             _ => format!("({{ ss_{n}({}); 0LL; }})", vals.join(", ")),
         })
     }

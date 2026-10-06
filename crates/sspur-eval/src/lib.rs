@@ -127,7 +127,7 @@ pub struct Interp {
 }
 
 const MAX_DEPTH: u32 = 20_000;
-const BARE_NAMES: &[&str] = &["halt", "wait_irq", "irq_enable", "timer_start", "ticks", "tick_hz", "arch"];
+const BARE_NAMES: &[&str] = &["halt", "wait_irq", "irq_enable", "timer_start", "ticks", "tick_hz", "arch", "start_core", "core_id"];
 pub const OUT_OF_FUEL: &str = "evaluation step budget exhausted";
 
 fn pat_rebinds(p: &Pat, env: &Env) -> bool {

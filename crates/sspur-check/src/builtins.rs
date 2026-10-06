@@ -574,6 +574,8 @@ pub const BARE_GLOBALS: &[&str] = &[
     "timer_start(ticks: Int) -> Unit ! mmio",
     "ticks() -> Int ! mmio",
     "tick_hz() -> Int",
+    "start_core(id: Int) -> Bool ! mmio",
+    "core_id() -> Int ! mmio",
     "arch() -> Str",
 ];
 
@@ -582,4 +584,4 @@ pub const BARE_METHODS: &[(&str, &str)] = &[
     ("Mmio", "write[W](r: Mmio[W], v: Int) -> Unit ! mmio"),
 ];
 
-pub const BARE_NAMES: &[&str] = &["halt", "wait_irq", "irq_enable", "timer_start", "ticks", "tick_hz", "arch"];
+pub const BARE_NAMES: &[&str] = &["halt", "wait_irq", "irq_enable", "timer_start", "ticks", "tick_hz", "arch", "start_core", "core_id"];

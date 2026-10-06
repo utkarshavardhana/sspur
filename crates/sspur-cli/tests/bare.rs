@@ -324,6 +324,23 @@ fn f64_on_fpu_targets_matches_the_host_interpreter() {
 }
 
 #[test]
+fn secondary_core_shares_atomic_statics_on_aarch64() {
+    boots("aarch64-qemu", "smp", "core 1 started\ntotal 200000 seen 3\n");
+    let d = scratch("smp-reject");
+    let pre = "profile bare\n\nstatic n: Int = 0\n\n";
+    for (body, code) in [
+        ("fn core_main() ! static\n= n.add(1)", "E_INTERRUPT_SIG"),
+        ("fn core_main(id: Int) ! static\n= n.store(n.load + id)\n\nfn main() ! static\n= n.add(1)", "E_STATIC_RACE"),
+    ] {
+        let f = d.join("c.ssp");
+        std::fs::write(&f, format!("{pre}{body}\n")).unwrap();
+        let (out, err, ok) = sspur(&["check", f.to_str().unwrap()]);
+        assert!(!ok && format!("{out}{err}").contains(code), "{body}: {out}{err}");
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+#[test]
 fn inline_asm_reads_cycle_counters_on_both_targets() {
     for target in ["riscv64-qemu", "aarch64-qemu"] {
         boots(target, "cycles", "mix 63534 counter advanced\n");

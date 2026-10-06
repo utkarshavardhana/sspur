@@ -63,9 +63,9 @@ pub fn check(m: &Module) -> Vec<Diag> {
             });
         }
     }
-    let irq = reach(fns.iter().filter(|f| f.interrupt.is_some() || f.name == "on_trap").map(|f| f.name.clone()), &calls);
+    let irq = reach(fns.iter().filter(|f| f.interrupt.is_some() || f.name == "on_trap" || f.name == "core_main").map(|f| f.name.clone()), &calls);
     let has_main = fns.iter().any(|f| f.name == "main");
-    let main = reach(fns.iter().filter(|f| if has_main { f.name == "main" } else { f.interrupt.is_none() && f.name != "on_trap" }).map(|f| f.name.clone()), &calls);
+    let main = reach(fns.iter().filter(|f| if has_main { f.name == "main" || f.name == "core_main" } else { f.interrupt.is_none() && f.name != "on_trap" }).map(|f| f.name.clone()), &calls);
     let any = |set: &HashSet<String>, map: &HashMap<String, BTreeSet<String>>, s: &str| set.iter().any(|f| map.get(f).is_some_and(|x| x.contains(s)));
     let shared: HashSet<&String> = statics.iter().filter(|s| (any(&irq, &writes, s) && any(&main, &touches, s)) || (any(&main, &writes, s) && any(&irq, &touches, s))).collect();
     let mut out = vec![];

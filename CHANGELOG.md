@@ -4,6 +4,12 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+- `q pack A,B,C` packs several definitions in one call, each one with the types and signatures it uses, its tests and its callers, and prints every definition only once (a target that is also another's caller is shown in full, not twice). This is what the agent benchmark's large-codebase task needed: the five definitions it has to change cost one call of 540 tokens instead of three rounds of queries.
+
+### Changed
+- `q find` prints 25 signatures in full and `q grep` 12 definitions, then the names of the rest on one line (`-- 21 more: f11 f12 ...`), so a broad pattern on a large codebase no longer fills the context with near-identical matches. Definitions whose name is exactly the pattern come first. `--json` is unchanged.
+
 ## [0.3.1] - 2026-10-06
 
 ### Fixed

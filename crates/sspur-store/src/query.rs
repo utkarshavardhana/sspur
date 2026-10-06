@@ -387,6 +387,10 @@ impl<'a> Ctx<'a> {
                 }
             }
             text.push(format!("-- not shown: {} (q callers {name}, q grep {name})", what.join(", ")));
+        } else {
+            let all = self.callers_of(name);
+            let tests = all.iter().filter(|c| matches!(self.def(c), Ok(Def::Test(_)))).count();
+            text.push(format!("-- complete: every caller ({}) and test ({tests}) of {name} is above", all.len() - tests));
         }
         json!({"target": name, "hash": self.loaded.hashes[name], "budget": budget, "est_tokens": used, "text": text.join("\n\n"), "included": included, "omitted": omitted, "skipped": {"callers": skipped.0, "tests": skipped.1}})
     }

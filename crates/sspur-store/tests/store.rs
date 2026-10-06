@@ -177,3 +177,21 @@ fn stale_base_is_rejected() {
     t.base = Some("notthehead".into());
     assert_eq!(s.apply(t).diags[0].code, "E_STALE_BASE");
 }
+
+#[test]
+fn pack_says_when_the_caller_list_is_complete() {
+    let src = "fn f(x: Int) -> Int = x + 1\n\nfn g(x: Int) -> Int = f(x) * 2\n\ntest t = f(1) == 2\n";
+    let dir = std::env::temp_dir().join(format!("sspur-pack-complete-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("p.ssp"), src).unwrap();
+    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/release/sspur");
+    if !bin.exists() {
+        return;
+    }
+    let run = |args: &[&str]| std::process::Command::new(&bin).args(args).current_dir(&dir).output().unwrap();
+    assert!(run(&["init", "p.ssp"]).status.success());
+    let out = String::from_utf8_lossy(&run(&["q", "pack", "f"]).stdout).into_owned();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(out.contains("-- complete: every caller (1) and test (1) of f is above"), "{out}");
+}

@@ -2,7 +2,9 @@
 
 This measures the Phase 3 exit criterion: an agent completes multi-step feature tasks using SSPUR (CLI ops only) with fewer total tokens than the same agent using Python.
 
-**Latest result (run 7, 2026-10-06): the large codebase is at 1.04x over two runs (was 1.33x), after `q pack A,B,C` and a cap on `q find` and `q grep` text output.** Sonnet now solves it in 5 calls, the same as Python, and still passes 10/10; it does not win the task. The 8-task numbers are unchanged (Sonnet 0.70x, Opus 0.76x, Haiku 0.83x), and a1 and a7 were rerun to confirm no regression. Details in [Results, run 7](#results-run-7).
+**Latest result (run 8, 2026-10-06): SSPUR now wins the large codebase too, at 0.82x of Python's tokens over two runs (was 1.04x), after `sspur start NAME...`, one command that prints the spec and `q pack` of the named definitions.** Sonnet solves it in 4 calls against Python's 5 and still passes 10/10. The spec is 1,631 tokens (was 1,798). a1, a4 and a7 were rerun with `sspur start` in place of `spec && src`: still 3 calls each, all hidden tests pass, totals within 1% (0.76x, 0.60x, 0.61x). The 8-task numbers are otherwise unchanged (Sonnet 0.70x, Opus 0.76x, Haiku 0.83x). Details in [Results, run 8](#results-run-8).
+
+**Run 7 (2026-10-06): the large codebase is at 1.04x over two runs (was 1.33x), after `q pack A,B,C` and a cap on `q find` and `q grep` text output.** Sonnet solved it in 5 calls, the same as Python. Details in [Results, run 7](#results-run-7).
 
 **Run 6 (2026-10-06): after the error-hint and query changes, Haiku 4.5 is at 0.83x on the 8 tasks (was 1.21x).** Only 4 SSPUR cells were rerun, against the run 5 Python cells. Details in [Results, run 6](#results-run-6).
 
@@ -27,6 +29,7 @@ This measures the Phase 3 exit criterion: an agent completes multi-step feature 
 | 5, Haiku 4.5, spec fix | spec at `4b75361` (1,798 tokens), 3 SSPUR cells rerun | 95/95 / 84/95 | 98 / 93 | **1.21x** (median 0.97x) |
 | 6, Haiku 4.5 | fix hints, `q find|grep|body`, 3 SSPUR cells rerun | 95/95 / 84/95 | 71 / 93 | **0.83x** (median 0.88x) |
 | 7, Sonnet 5.5, s1_shop only | `q pack A,B,C`, capped `find` and `grep` text, 2 runs | 10/10 / 10/10 | 5 / 5 | **1.04x** (1.33x before) |
+| 8, Sonnet 5.5, s1_shop only | `sspur start NAME...`, spec 1,631 tokens, 2 runs | 10/10 / 10/10 | 4 / 5 | **0.82x** (1.04x before) |
 
 Python's side was identical in all runs; its totals were 1.27M, 1.20M, 1.48M and 1.22M. Against Python's cheapest run, SSPUR run 3 is 0.73x and run 4 after the fix is 0.71x.
 
@@ -56,6 +59,7 @@ Hidden tests (`tasks/<id>/hidden.ssp`, `hidden.py`, 95 per language for a1 to a8
 ## Method
 
 - `setup.py <dir>` creates one fresh work directory per (language, task) outside the repo, so agents never see hidden tests or references. `--v1` gives the run 1 SSPUR instructions.
+  - SSPUR (run 8 on): as below, but the first step is `./sspur start` (the spec and the whole codebase in one command; `setup.py --r7` gives the old `spec && src` line). The s1 prompt says to start with `./sspur start NAME...`, passing the names the task mentions (`setup_scale.py --r7` gives run 7's prompt).
   - SSPUR (runs 2 and 3): the starting program is imported into a `.sspur/` store and the `.ssp` file is deleted. The agent is told to start with `./sspur spec && ./sspur src` (the compact spec, `docs/agent-spec.md`, and the whole codebase as source) and to change code only with `./sspur edit`; `q`, `test`, and `check` are also allowed. Direct access to `.sspur/`, `.ssp` files, and `init` are forbidden.
   - SSPUR (run 1): the starting program is imported into a `.sspur/` store with `sspur init`, and the `.ssp` file is deleted. The agent must read `./sspur spec` (the reference, `docs/07-reference-v0.md`), then read code only with `./sspur q` and change it only with `./sspur apply tx.json`. Direct access to `.sspur/`, `.ssp` files, and `init` are forbidden. No agent broke these rules (checked in the transcripts). The MCP server was not used: the harness can't attach a new MCP server to a subagent, and the CLI exposes the same query and transaction surface.
   - Python: the agent edits `app.py` with any tool and runs pytest. Python 3.9.
@@ -82,6 +86,60 @@ All changes are in the CLI and the spec. The language is unchanged.
 - The MCP server gained `sspur_edit`, and its tools return the same compact text (`json: true` for the old format).
 
 Run 2 used a heredoc (`./sspur edit --test <<'EOF'`). The sandbox refused that command in 6 of 8 runs: it treats `{a, b}` inside the heredoc (any record literal with two fields) as possible brace expansion and won't verify the command. Each refusal cost a retry plus a Write call to put the input in a file. Run 3's spec recommends one single-quoted `-e` argument instead, which passed in 7 of 8 runs (a8 was refused once, apparently because of a `#` inside a string).
+
+## Results, run 8
+
+Run 7 left one structural cost: the SSPUR agent spent its first call on `sspur spec` alone, while Python's first call is already a search, and every call re-reads about 30k tokens of harness context. Run 8 folds the spec read into the first useful call.
+
+### Options considered
+
+1. **A combined entry command (chosen).** `sspur start [NAME|PATTERN...]` prints the agent spec, then the codebase: all of it when the source is at most 12,000 bytes (every a- and b-task), otherwise the counts per kind, `q pack` of the arguments that name a definition and `q find` of the others. On s1_shop, `start tax_rate money ship_fee order_shipping warehouse_restock Warehouse` is 2,407 tokens (the spec plus 776 of code), and it is everything the edit needs. `sspur spec [src] [QUERY TARGET...]` also runs queries after the spec (`spec find 'a|b' pack A,B`), for agents that already know `spec`.
+2. **Spec on first contact (not done).** Prepending the spec to the first `q` or `edit` needs state (a marker in `.sspur/`) that is wrong whenever two agents or two sessions share a store, and it changes what `q` prints. Option 1 removes the same call without state, so the data gave no reason to take the risk.
+3. **MCP and skill.** The obvious move, the spec in the MCP `initialize` `instructions`, does not work in Claude Code: it cuts server instructions at 2,048 characters. Checked with Claude Code 2.1.288 and `claude -p --mcp-config`: instructions with the spec appended (5,768 characters) reached the model cut off mid-sentence after about 2,040 characters, ending in `[truncated]`. A silently truncated spec is worse than one call, so the instructions stay short (825 characters, 208 cl100k tokens) and tell the agent to call the new `start` tool first with the names from the task; the tool returns the same text as the CLI. The tool list grew by 139 tokens. One `claude -p` run on s1_shop with only the MCP tools (not comparable with the bench harness, which has no MCP) called `start` first with the right six names, then `query callers ship_fee`, one `edit` with `test: true` (187 passed) and DONE, 10/10 hidden tests. The skill (`plugins/claude-code/skills/sspur/SKILL.md`, 1,099 tokens, was 1,054) now starts with `sspur start NAME...` (or the `start` tool); it does not carry the spec, which would load 1.6k tokens into every session that triggers the skill whether or not it then writes code.
+4. **A shorter spec.** In the 60 SSPUR transcripts of runs 4 to 7 (Sonnet, Opus and Haiku; a1 to a9, b1 to b8, s1), no agent wrote code with concurrency (`par`, `atomic`, `chan`), services (`store`, `svc`, `ep`, `db.*`, `migrate_`), packages (`use`, `pub`, `sspur add`) or C, sys, bare and GPU (`extern`, `profile`, `kernel`), and no starting codebase uses them. Those four parts became one pointer line to `spec --full` that keeps their keywords, so an agent still knows they exist. Everything that any transcript used stayed, including `catch`, `raise`, `var`, `for`, `while`, `fold`, `sort_with`, regex and JSON. The CLI line now names `q pack` (it listed only `find|grep|body|callers`). 1,798 to 1,631 cl100k tokens.
+
+The harness's SSPUR instructions changed in one line each: the a- and b-tasks start with `./sspur start` instead of `./sspur spec && ./sspur src` (same content plus a one-line header), and s1 starts with `./sspur start NAME...`, "passing the names of the definitions and types the task mentions". The Python prompts did not change.
+
+### Result
+
+Run: `runs/2026-10-06-r8-start/`, compiler frozen at `bd6c1c8`. Fresh Sonnet 5.5 `general-purpose` subagents, strictly one at a time, `--tmo` prompts, no retries; Python cells are run 5's (s1) and run 4's (a-tasks), as before.
+
+| Cell | Calls SSPUR / Py | Total SSPUR | Total Py | SSPUR / Py | Net SSPUR / Py | Tool I/O SSPUR / Py | Hidden tests |
+|---|---|---|---|---|---|---|---|
+| s1_shop, run 7, first run | 5 / 5 | 170,039 | 162,362 | 1.05x | 41,289 / 33,612 | 4,067 / 2,997 | 10/10 / 10/10 |
+| s1_shop, run 7, second run | 5 / 5 | 167,624 | 162,362 | 1.03x | 38,874 / 33,612 | 3,556 / 2,997 | 10/10 / 10/10 |
+| **s1_shop, run 8, first run** | 4 / 5 | 133,103 | 162,362 | **0.82x** | 30,103 / 33,612 | 3,236 / 2,997 | 10/10 / 10/10 |
+| **s1_shop, run 8, second run** | 4 / 5 | 133,445 | 162,362 | **0.82x** | 30,445 / 33,612 | 3,373 / 2,997 | 10/10 / 10/10 |
+
+**s1_shop is 0.82x over the two runs (both 0.82x), from 1.04x in run 7 and 1.33x in run 6.** This is the first run in which SSPUR uses fewer tokens than Python on the large codebase, and it is also lower on net tokens (0.90x), so the gain is not only the harness context.
+
+Per call (input tokens, exact):
+
+| Call | Run 8, first | Run 8, second | What it ran |
+|---|---|---|---|
+| 1 | 27,137 | 27,137 | `start tax_rate money ship_fee order_shipping warehouse_restock Warehouse` (2,407 tokens of output) |
+| 2 | 34,519 | 34,524 | `q grep ship_fee` (and a `q grep` for the EU rate), "Need all ship_fee callers" |
+| 3 | 34,842 | 34,895 | one `edit --test` with all four changes and the tests, accepted first time (187 and 188 passed), and a `test` alongside it |
+| 4 | 35,906 | 36,099 | DONE |
+
+From the two transcripts:
+- Both agents passed exactly the six names the task mentions, and neither read the spec separately or listed the codebase.
+- Both still spent call 2 confirming the callers of `ship_fee`, although the pack had printed all three (`parcel_shipping`, `rma_shipping`, and `order_shipping` as a target of its own). `q pack` says `-- not shown: N callers` when it cuts the list, but says nothing when the list is complete, so the agent can't tell. Marking a complete caller list would likely remove that call too (3 calls, about 0.62x); that is a query output change and is not in this run.
+- Nothing was rejected; each edit was written once.
+
+### Small tasks
+
+The same changes reach the a-tasks through `start` (the whole codebase, as `src` printed it) and the shorter spec. Reran a1, a4 and a7 in SSPUR against the same Python cells:
+
+| Cell | Before: calls, total, ratio | After: calls, total, ratio | Hidden tests |
+|---|---|---|---|
+| a1_inventory (before: run 7) | 3, 96,557, 0.76x | 3, 96,342, **0.76x** | 12/12 |
+| a4_calc (before: run 4) | 3, 98,638, 0.61x | 3, 98,052, **0.60x** | 13/13 |
+| a7_grades (before: run 7) | 3, 96,418, 0.61x | 3, 95,591, **0.61x** | 11/11 |
+
+All three took the minimum 3 calls (`start`, one `edit --test`, DONE), passed every hidden test and moved by under 1%: the spec cut saves about 170 tokens per call, which is what the totals show. No regression. The cut parts of the spec (services, packages, concurrency, C) are not exercised by any task here, so this run cannot show what the cut costs an agent that needs them; such an agent now reads `spec --full` once.
+
+Caveats: two runs for the s1 number and one for each small cell; the two s1 runs agree within 0.3%. The Python cells were not rerun (s1 since run 5). The MCP probe is one `claude -p` run outside the bench harness.
 
 ## Results, run 7
 
@@ -163,7 +221,7 @@ From the two transcripts:
 - Both agents explored in **one round instead of three**: `q find` with all five names plus `Warehouse`, `q callers ship_fee`, `q grep`, then `q body A,B,..` of what they found, and then the edit. Both wrote one `edit --test` with all four changes and five tests, accepted first time, 187 tests passing. That is 5 calls: spec, search, search, edit, DONE.
 - Neither used `q pack A,B,C`, although the prompt names it: both preferred `q find` plus `q body A,B`, which costs about the same here (cell B's whole search was 863 tokens). So the gain came from the caps and from the broad answers no longer inviting another round, not from `pack`.
 - The caps bit where predicted: cell A's `q grep 19` and `q grep tax_rate` returned 639 and 331 tokens where run 6's equivalents returned 685 and about 900.
-- One call is still spent on the spec alone, because the prompt tells the agent to start with it. Fusing the spec read with the first search would save about 30k (one call's harness context) and would make this task cheaper than Python; it needs a prompt change, which is a harness change, so it is not done here.
+- One call is still spent on the spec alone, because the prompt tells the agent to start with it. Fusing the spec read with the first search would save about 30k (one call's harness context) and would make this task cheaper than Python; it needs a prompt change, which is a harness change, so it is not done here (run 8 does it, with `sspur start`).
 
 ### Small-task regression check
 
@@ -479,7 +537,7 @@ Median per task 1.07x. The gap to run 3 is almost entirely the heredoc refusals:
 
 ## Remaining gap and open issues
 
-- The spec is the largest fixed cost left: 1.8k tokens read once and carried through every later call. Caching it in a system prompt, or one agent doing several tasks, would pay it once.
+- The spec is the largest fixed cost left: 1.6k tokens (1.8k before run 8) read once and carried through every later call. Since run 8 it no longer costs a call of its own (`sspur start`). Putting it in the MCP server instructions does not work in Claude Code, which cuts them at 2,048 characters; one agent doing several tasks would pay it once.
 - The spec budget is now tight. Run 4 showed that cutting the basics to make room for new features costs more than it saves: each missing rule cost a task one to fourteen extra calls. Any future spec change should be checked against these tasks before it lands.
 - The checker slowdown on nested constructor literals found in run 3 is fixed; a4 ran in the minimum 3 calls in run 4.
 - `_` in a nested call binds to the inner call. That is the documented semantics, but agents keep writing `sort_by((f(_.x), _.y))`; the error (`expected Priority, found Task -> Priority`) could carry a hint.

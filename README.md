@@ -31,7 +31,7 @@ $ sspur test cart.ssp
 
 Most languages are designed around a human at a keyboard. SSPUR starts from a different question: what does a language look like when the author is a model that reads every token, pays for every token, and never gets tired of writing contracts?
 
-- **Fewer tokens, fewer round trips.** Code in SSPUR uses about 0.71x the tokens of equivalent Python. On a benchmark of 8 multi-step feature tasks, agents working in SSPUR used 0.70x (Sonnet 5.5) and 0.76x (Opus 5.5) the total tokens of the same agents working in Python, and Sonnet used 0.66x on 8 more tasks taken from neutral sources, with identical pass rates. Haiku 4.5 used 0.83x after the fix hints added in run 6 (1.21x before, 2.31x before an earlier spec fix; its 3 worst cells were rerun). On one 1,100-definition codebase Sonnet used 1.04x over two runs (1.33x before `q pack A,B,C` and the cap on `q find` and `q grep` output), so at that size SSPUR matches Python rather than beating it.
+- **Fewer tokens, fewer round trips.** Code in SSPUR uses about 0.71x the tokens of equivalent Python. On a benchmark of 8 multi-step feature tasks, agents working in SSPUR used 0.70x (Sonnet 5.5) and 0.76x (Opus 5.5) the total tokens of the same agents working in Python, and Sonnet used 0.66x on 8 more tasks taken from neutral sources, with identical pass rates. Haiku 4.5 used 0.83x after the fix hints added in run 6 (1.21x before, 2.31x before an earlier spec fix; its 3 worst cells were rerun). On one 1,100-definition codebase Sonnet used 0.82x over two runs, in 4 API calls against 5, after `sspur start NAME...` folded the spec read into the first search (1.04x before that, 1.33x before `q pack A,B,C` and the cap on `q find` and `q grep` output).
 - **Every side effect is in the signature.** `log`, `fail[E]`, `db.read[T]`, `fs`, `proc`, `ffi`, `conc` and user-defined effects are tracked by the checker, so a reviewer, or a deployer, can see exactly what a function is allowed to do.
 - **Contracts are checked, not just documented.** `pre`, `post`, and refinement types (`Int where _ > 0`) are enforced at runtime, proved with Z3 where possible, turned into property tests by the fuzzer, and used by the optimizer to remove checks it can prove unnecessary.
 - **Edits are atomic.** `sspur edit` replaces definitions by name, typechecks the whole codebase, and either applies everything or nothing. One call can edit and run the tests.
@@ -195,7 +195,8 @@ More examples:
 Agents need only a short reference to write SSPUR. Point them at it with:
 
 ```
-sspur spec            # the compact agent reference, under 1.8k tokens
+sspur start [NAME...] # the compact agent reference (1.6k tokens) plus the codebase, or q pack of NAMEs if it is large
+sspur spec            # the compact agent reference alone
 sspur spec --full     # the complete language reference
 sspur mcp             # serve the codebase over the Model Context Protocol
 ```

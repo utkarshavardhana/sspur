@@ -5,11 +5,15 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 ## [Unreleased]
 
 ### Added
+- `sspur start [NAME|PATTERN...]` reads the spec and the code in one call: it prints the agent spec, then the codebase, all of it when the source is at most 12,000 bytes, otherwise the counts per kind, `q pack` of the arguments that name a definition and `q find` of the others. The MCP server has a matching `start` tool (`names: "a,b,c"`), and its instructions tell the agent to call it first. `sspur spec [--full] [src] [QUERY TARGET...]` prints `src` and queries after the spec (`spec find 'a|b' pack A,B`).
 - `q pack A,B,C` packs several definitions in one call, each one with the types and signatures it uses, its tests and its callers, and prints every definition only once (a target that is also another's caller is shown in full, not twice). This is what the agent benchmark's large-codebase task needed: the five definitions it has to change cost one call of 540 tokens instead of three rounds of queries.
 
 ### Changed
 - `q find` prints 25 signatures in full and `q grep` 12 definitions, then the names of the rest on one line (`-- 21 more: f11 f12 ...`), so a broad pattern on a large codebase no longer fills the context with near-identical matches. Definitions whose name is exactly the pattern come first. `--json` is unchanged.
 - Agent benchmark run 7 (`bench/agent/README.md`): the large-codebase task went from 1.33x to 1.04x of Python's total tokens over two Sonnet 5.5 runs, 5 API calls instead of 6, still 10/10 hidden tests. The token attribution of the old run is in the README: one extra call was 57% of the gap, the spec 23% and broad query answers 21%. a1 and a7 were rerun unchanged (0.76x, 0.61x, 3 calls each).
+- The agent spec (`docs/agent-spec.md`) is 1,631 cl100k tokens, from 1,798: concurrency, services, packages and C, sys, bare and GPU, which no agent used in the 60 SSPUR transcripts of benchmark runs 4 to 7, are now one line that names their keywords and points to `spec --full`. The CLI line names `q pack`.
+- The MCP server's instructions are 825 characters and point to `start`; they do not carry the spec, because Claude Code cuts server instructions at 2,048 characters. The Claude Code skill starts with `sspur start NAME...`.
+- Agent benchmark run 8: with `sspur start NAME...` as the first step, the large-codebase task is 0.82x of Python's total tokens over two Sonnet 5.5 runs (1.04x in run 7), 4 API calls against Python's 5, 10/10 hidden tests. a1, a4 and a7 stay at 3 calls and 0.76x, 0.60x and 0.61x with every hidden test passing. The harness's SSPUR prompts start with `./sspur start` (`setup.py --r7` and `setup_scale.py --r7` give the old ones).
 
 ## [0.3.1] - 2026-10-06
 

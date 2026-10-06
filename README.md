@@ -31,7 +31,7 @@ $ sspur test cart.ssp
 
 Most languages are designed around a human at a keyboard. SSPUR starts from a different question: what does a language look like when the author is a model that reads every token, pays for every token, and never gets tired of writing contracts?
 
-- **Fewer tokens, fewer round trips.** Code in SSPUR uses about 0.71x the tokens of equivalent Python. On a benchmark of 8 multi-step feature tasks, agents working in SSPUR used 0.70x (Sonnet 5.5) and 0.76x (Opus 5.5) the total tokens of the same agents working in Python, and Sonnet used 0.66x on 8 more tasks taken from neutral sources, with identical pass rates. It does not hold for every model or size yet: Haiku 4.5 used 1.21x (2.31x before a spec fix), and on one 1,100-definition codebase Sonnet used 1.34x.
+- **Fewer tokens, fewer round trips.** Code in SSPUR uses about 0.71x the tokens of equivalent Python. On a benchmark of 8 multi-step feature tasks, agents working in SSPUR used 0.70x (Sonnet 5.5) and 0.76x (Opus 5.5) the total tokens of the same agents working in Python, and Sonnet used 0.66x on 8 more tasks taken from neutral sources, with identical pass rates. Haiku 4.5 used 0.83x after the fix hints added in run 6 (1.21x before, 2.31x before an earlier spec fix; its 3 worst cells were rerun). It does not hold at every size yet: on one 1,100-definition codebase Sonnet used 1.33x.
 - **Every side effect is in the signature.** `log`, `fail[E]`, `db.read[T]`, `fs`, `proc`, `ffi`, `conc` and user-defined effects are tracked by the checker, so a reviewer, or a deployer, can see exactly what a function is allowed to do.
 - **Contracts are checked, not just documented.** `pre`, `post`, and refinement types (`Int where _ > 0`) are enforced at runtime, proved with Z3 where possible, turned into property tests by the fuzzer, and used by the optimizer to remove checks it can prove unnecessary.
 - **Edits are atomic.** `sspur edit` replaces definitions by name, typechecks the whole codebase, and either applies everything or nothing. One call can edit and run the tests.
@@ -200,7 +200,10 @@ sspur spec --full     # the complete language reference
 sspur mcp             # serve the codebase over the Model Context Protocol
 ```
 
-The recommended loop is one call per change: read what you need with `sspur q`, then `sspur edit --test` with all the definitions for the change. The command prints a single line on success, or precise `def:line:col CODE message` diagnostics with fix hints, and leaves the codebase untouched if anything fails.
+The recommended loop is one call per change: read what you need with `sspur q`, then `sspur edit --test` with all the definitions for the change. The command prints a single line on success, or precise `def:line:col CODE message` diagnostics with fix hints, and leaves the codebase untouched if anything fails. In a large codebase, `sspur q find 'ship|tax_*'` lists matching names with their signatures and `sspur q grep TEXT` the definitions that contain TEXT, so an agent never has to print the whole listing.
+
+- **MCP clients** (Claude Code, Claude Desktop, any stdio client): `claude mcp add sspur -- sspur mcp`, or see [docs/mcp.md](docs/mcp.md) for the Desktop config, `--dir`, and the tool list.
+- **Claude Code plugin**: [`plugins/claude-code/`](plugins/claude-code/) bundles the MCP server with a skill that teaches the workflow and loads for `.ssp` files and SSPUR questions. Install it with `claude plugin marketplace add utkarshavardhana/sspur` and `claude plugin install sspur@sspur`.
 
 ## Documentation
 
@@ -215,6 +218,7 @@ The recommended loop is one call per change: read what you need with `sspur q`, 
 | [AI-native constructs](docs/06-ai-native-constructs.md) | `Guess`, taint types, decision tables, and other agent-oriented types |
 | [Language reference](docs/07-reference-v0.md) | The complete reference |
 | [Agent reference](docs/agent-spec.md) | The compact reference served by `sspur spec` |
+| [MCP setup](docs/mcp.md) | `sspur mcp` for Claude Code, Claude Desktop and other MCP clients, and the Claude Code plugin |
 | [Roadmap](docs/roadmap.md) | Phases and exit criteria |
 | [Design decisions](docs/adr/) | Architecture decision records for every major change |
 

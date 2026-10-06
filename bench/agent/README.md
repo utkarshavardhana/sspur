@@ -2,7 +2,9 @@
 
 This measures the Phase 3 exit criterion: an agent completes multi-step feature tasks using SSPUR (CLI ops only) with fewer total tokens than the same agent using Python.
 
-**Latest result (run 5, 2026-10-06): the claim holds for Sonnet 5.5 and Opus 5.5, not for Haiku 4.5, and not on the one large codebase tried.** Details in [Results, run 5](#results-run-5).
+**Latest result (run 6, 2026-10-06): after the error-hint and query changes, Haiku 4.5 is at 0.83x on the 8 tasks (was 1.21x); the large codebase is unchanged at 1.33x.** Only 4 SSPUR cells were rerun, against the run 5 Python cells. Details in [Results, run 6](#results-run-6).
+
+**Run 5 (2026-10-06): the claim holds for Sonnet 5.5 and Opus 5.5, not for Haiku 4.5, and not on the one large codebase tried.** Details in [Results, run 5](#results-run-5).
 - Opus 5.5, the 8 tasks: SSPUR used **0.76x** Python's total tokens (median 0.76x), 28 API calls against 38, 95/95 hidden tests on both sides.
 - Haiku 4.5, the 8 tasks: **2.31x** (median 1.22x), 150 calls against 93. SSPUR passed 95/95 and Python 84/95. After a spec fix and 3 SSPUR reruns: 1.21x (median 0.97x).
 - Sonnet 5.5, 8 new tasks taken from neutral sources (LeetCode 146, 224 and 227, RFC 7396, the AWK book, ...): **0.74x** (median 0.60x), 141/141 on both sides; 0.66x after the spec fix (one cell rerun).
@@ -76,6 +78,43 @@ All changes are in the CLI and the spec. The language is unchanged.
 - The MCP server gained `sspur_edit`, and its tools return the same compact text (`json: true` for the old format).
 
 Run 2 used a heredoc (`./sspur edit --test <<'EOF'`). The sandbox refused that command in 6 of 8 runs: it treats `{a, b}` inside the heredoc (any record literal with two fields) as possible brace expansion and won't verify the command. Each refusal cost a retry plus a Write call to put the input in a file. Run 3's spec recommends one single-quoted `-e` argument instead, which passed in 7 of 8 runs (a8 was refused once, apparently because of a `#` inside a string).
+
+## Results, run 6
+
+Run 6 reruns only the cells that the changes in this round target, with the same harness, prompts and method as run 5 (one fresh `general-purpose` subagent per cell, model override `haiku` or `sonnet`, strictly one at a time, `setup.py --tmo`, no retries). The Python cells are run 5's. Compiler frozen at `647355f`. Run directory: `runs/2026-10-06-r6-agent-packaging/`.
+
+What changed since run 5 (all in the CLI and checker, not the language):
+- Fix hints for what the run 5 transcripts showed weak models writing: `&& || !`, `len(x)`, `Ctor{_}`, effect rows without commas, regex escapes, `elif`, `let`, `+=`, foreign method names (`head`, `max_by`, `compare`, `to_string`), `None`/`Some`, a missing return type, a nested `match`, and more. Each rejected edit now lists the syntax errors of every definition (not only the first) and ends with `fix these and resend the whole edit in one call`.
+- `q list` groups by kind with counts and no longer prints all test names on one line; new `q find 'a|b*'`, `q grep TEXT`, `q body A,B`; `q pack` caps callers. The s1 prompt names `q find` and `q grep` instead of `q list | grep`.
+- The agent spec changed only in its CLI line (`q find|grep|body|callers X`); it is still 1,798 tokens.
+
+| Cell | Before: calls, total, ratio to Py | After: calls, total, ratio to Py | Hidden tests before / after |
+|---|---|---|---|
+| Sonnet s1_shop | 6, 217,181, 1.34x | 6, 215,964, **1.33x** | 10/10 / 10/10 |
+| Haiku a1_inventory | 24, 775,681, 3.46x | 7, 198,889, **0.89x** | 12/12 / 12/12 |
+| Haiku a2_wordstats | 22, 696,585, 1.75x | 15, 442,072, **1.11x** | 11/11 / 11/11 |
+| Haiku a7_grades | 11, 307,487, 1.38x | 8, 214,498, **0.96x** | 11/11 / 11/11 |
+
+Haiku 4.5 on the 8 tasks with these three cells replaced: **2,016,545 against 2,423,178 tokens, 0.83x** (median 0.88x), 71 calls against 93, cheaper on 6 of 8 (was 1.21x, median 0.97x, 98 calls). SSPUR still passes 95/95 and Python 84/95.
+
+From the transcripts:
+- **The hints did what they were for.** Haiku a1 wrote `&&` and then `len(x)`; each time it read the hint, fixed that one thing and resent the whole edit (3 edits, the third accepted with 10 tests passing). In run 5 the same cell fell back to one definition per edit after the first rejection (11 accepted single-definition edits, 24 calls). a2 had one rejection (`!`), fixed from the hint; a7 had none.
+- **Haiku still verifies after success.** Every Haiku cell re-read `src` or ran `test` or `check` after an edit that had printed `ok` and `N passed, 0 failed`; a2 spent 7 of its 15 calls that way (`src`, `test`, `check`, five `q body`). That is the largest remaining cost and is not addressed yet.
+- **s1 did not improve.** Sonnet used the new queries (`q grep ship_fee`, `q find 'money|tax_rate|...'`, `q body a,b,c`) but made the same 6 calls: spec, three exploratory query calls, one `edit --test` that passed, done. Cheap queries made it explore more, not less: it read 5,188 tokens of tool output against 4,108 in run 5 (a `q grep 'tax_rate'` matched 44 near-identical `*_tax` functions, a `q grep '19'` matched sample data). It also tried `q find '^Warehouse'`, which run 6's binary did not support; `^` and `$` anchors were added afterwards (`557bccd`). The fixed costs (the spec carried through every call, one more call than Python) still decide this task.
+- Haiku a2 wrote its edit to `/tmp` with a heredoc, and a7 lost one call to a refused heredoc, then used the Write tool (sandbox friction, as in run 5).
+
+Query output on s1_shop, measured directly (cl100k tokens of the command output, run 5 query code at `db3c345` against `647355f`):
+
+| To locate | Run 5 commands | Tokens | Run 6 commands | Tokens |
+|---|---|---|---|---|
+| tax_rate, money, ship_fee, order_shipping, warehouse_restock and the callers of ship_fee | `q list \| grep -iE "ship\|money\|tax_rate\|restock\|warehouse\|express"` | 1,875 | `q find 'tax_rate\|money\|ship_fee\|order_shipping\|warehouse_restock'` and `q grep ship_fee` | 63 + 63 = 126 |
+| everything | `q list` | 13,702 | `q list` | 13,165 |
+| context to change money (45 callers) | `q pack money` | 1,174 | `q pack money` | 178 |
+| context to change tax_rate (44 callers) | `q pack tax_rate` | 1,002 | `q pack tax_rate` | 175 |
+
+So the targeted lookup is 15x cheaper, but on this task tool output was never the main cost (under 6k of 216k tokens either way).
+
+Caveats: one run per cell; the rerun cells were picked because they did worst, so some of the improvement is regression to the mean (Haiku a6 went from 61 calls to 8 on a spec change that should not have mattered that much). Cells that were not rerun may have changed too, in either direction.
 
 ## Results, run 5
 

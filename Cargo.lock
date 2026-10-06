@@ -487,7 +487,7 @@ checksum = "f9395f0f0eee849a9b707b2f06bb92a6a422090e2123bb2ef8e87a0e61892a8e"
 
 [[package]]
 name = "sspur-check"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -496,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "sspur-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "serde_json",
  "sspur-check",
@@ -511,7 +511,7 @@ dependencies = [
 
 [[package]]
 name = "sspur-deploy"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "serde_json",
@@ -523,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "sspur-eval"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "libloading",
  "sspur-check",
@@ -533,7 +533,7 @@ dependencies = [
 
 [[package]]
 name = "sspur-hash"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "sspur-syntax",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "sspur-native"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "cranelift-codegen",
@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "sspur-smt"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "sspur-check",
@@ -566,7 +566,7 @@ dependencies = [
 
 [[package]]
 name = "sspur-store"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "serde",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "sspur-syntax"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "stable_deref_trait"

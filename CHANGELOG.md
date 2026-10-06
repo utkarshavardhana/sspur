@@ -4,6 +4,8 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-06
+
 ### Fixed
 - Concurrent native builds of the same program could fail with `No such file or directory`: the GPU runtime shim, the whole-program build and the OpenCL emit used fixed temporary file names in the shared cache, so one process renamed or deleted another's files. Every build now uses per-process, per-build temporary names. This also caused the intermittent macOS CI failure in `kernel_traps_are_identical_in_every_tier`.
 
@@ -143,7 +145,8 @@ This release covers Phases 3 to 7 of the roadmap and ADRs 0003 to 0024. SSPUR no
 - Language design spec, JSON schemas and the token benchmark.
 - Compiler core: parser, checker, content hashing, interpreter and the `sspur` CLI, with an 11-program suite.
 
-[Unreleased]: https://github.com/utkarshavardhana/sspur/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/utkarshavardhana/sspur/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/utkarshavardhana/sspur/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/utkarshavardhana/sspur/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/utkarshavardhana/sspur/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/utkarshavardhana/sspur/releases/tag/v0.2.0

@@ -928,12 +928,12 @@ impl Resolver<'_> {
         Ok(p)
     }
 
-    fn from_cache(&mut self, name: &str) -> Option<Arc<Pkg>> {
+    fn cached_closure(&mut self, name: &str) -> Option<Arc<Pkg>> {
         let e = self.lock.entries.get(name)?;
         let p = Arc::new(load_cached(&e.hash)?);
         for d in p.deps.keys() {
-            if self.out.get(d).is_none() {
-                self.from_cache(d)?;
+            if !self.out.contains_key(d) {
+                self.cached_closure(d)?;
             }
         }
         self.record(e.clone(), p, false).ok()
@@ -955,7 +955,7 @@ impl Resolver<'_> {
                     let p = p.clone();
                     return self.record(e.clone(), p, direct);
                 }
-            if let Some(p) = self.from_cache(name) {
+            if let Some(p) = self.cached_closure(name) {
                 return Ok(p);
             }
         }
@@ -1093,9 +1093,9 @@ pub fn ingest_bundle(root: &Path, b: &serde_json::Value) -> Result<Vec<String>, 
     rebuild(&theirs, &|h| load_cached(h).and_then(|_| cached_source(h)).or_else(|| srcs.get(h).cloned()), "the replica's copy")?;
     let mut added = Vec::new();
     for (n, e) in theirs.entries {
-        if !lock.entries.contains_key(&n) {
-            added.push(n.clone());
-            lock.entries.insert(n, e);
+        if let std::collections::btree_map::Entry::Vacant(v) = lock.entries.entry(n.clone()) {
+            added.push(n);
+            v.insert(e);
         }
     }
     let mut m = match Manifest::read(root)? {

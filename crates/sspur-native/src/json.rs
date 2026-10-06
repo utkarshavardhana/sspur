@@ -129,7 +129,7 @@ pub fn encode(l: &Layouts, v: &NVal, t: &Type, out: &mut String) -> Option<()> {
             match (fs, decl) {
                 (Some(fs), Some(decl)) => {
                     out.push_str("{\"tag\":");
-                    quote(c, out);
+                    quote(sspur_syntax::display_name(c), out);
                     for ((f, x), (_, ft)) in fs.iter().zip(&decl) {
                         out.push(',');
                         quote(f, out);
@@ -138,7 +138,7 @@ pub fn encode(l: &Layouts, v: &NVal, t: &Type, out: &mut String) -> Option<()> {
                     }
                     out.push('}');
                 }
-                _ => quote(c, out),
+                _ => quote(sspur_syntax::display_name(c), out),
             }
         }
         _ => return None,
@@ -493,10 +493,10 @@ impl D<'_> {
                             other => other,
                         };
                         let Some(Jv::Str(tn)) = tag else { return Err(self.err(&want, v)) };
-                        match vs.iter().find(|(vn, _)| vn == tn) {
+                        match vs.iter().find(|(vn, _)| sspur_syntax::display_name(vn) == tn) {
                             Some((vn, None)) => NVal::Variant(vn.clone(), None),
                             Some((vn, Some(fs))) => NVal::Variant(vn.clone(), Some(self.fields(v, fs)?)),
-                            None => return Err(self.err(&format!("one of {}", vs.iter().map(|v| v.0.as_str()).collect::<Vec<_>>().join(", ")), tag)),
+                            None => return Err(self.err(&format!("one of {}", vs.iter().map(|v| sspur_syntax::display_name(&v.0)).collect::<Vec<_>>().join(", ")), tag)),
                         }
                     } else {
                         return Err(format!("{want} has no JSON form"));

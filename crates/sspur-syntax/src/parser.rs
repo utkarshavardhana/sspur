@@ -15,10 +15,11 @@ const BUILTIN_TYPE_NAMES: &[&str] = &["Int", "I8", "I16", "I32", "U8", "U16", "U
 
 fn normalize(m: &mut Module) {
     let names: Vec<String> = m.defs.iter().filter_map(|d| if let Def::Type(t) = d { Some(t.name.clone()) } else { None }).collect();
+    let imported: Vec<String> = m.defs.iter().filter_map(|d| if let Def::Use(u) = d { Some(u.names.clone()) } else { None }).flatten().collect();
     for d in &mut m.defs {
         let Def::Type(t) = d else { continue };
         if let TypeBody::Alias(Ty::Named { name, args, .. }, None) = &t.body {
-            let known = names.contains(name) || BUILTIN_TYPE_NAMES.contains(&name.as_str()) || t.params.iter().any(|p| &p.name == name);
+            let known = names.contains(name) || BUILTIN_TYPE_NAMES.contains(&name.as_str()) || t.params.iter().any(|p| &p.name == name) || name.contains('.') || imported.contains(name);
             if args.is_empty() && !known {
                 t.body = TypeBody::Sum(vec![Variant { name: name.clone(), fields: None }]);
             }
@@ -43,7 +44,7 @@ struct Parser {
 }
 
 fn is_upper(s: &str) -> bool {
-    s.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+    s.rsplit('.').next().and_then(|t| t.chars().next()).is_some_and(|c| c.is_ascii_uppercase())
 }
 
 impl Parser {
@@ -174,13 +175,23 @@ impl Parser {
         if self.eat_kw("profile") {
             profile = Some(self.expect_ident()?);
         }
-        let mut defs = Vec::new();
+        let mut defs: Vec<Def> = Vec::new();
         loop {
             self.skip_newlines();
             if matches!(self.peek(), Tok::Eof) {
                 break;
             }
-            defs.push(self.def()?);
+            let d = self.def()?;
+            if let Def::Use(u) = &d
+                && let Some(Def::Use(prev)) = defs.iter_mut().find(|p| p.name() == u.key) {
+                    for n in &u.names {
+                        if !prev.names.contains(n) {
+                            prev.names.push(n.clone());
+                        }
+                    }
+                    continue;
+                }
+            defs.push(d);
             match self.peek() {
                 Tok::Newline(_) | Tok::Eof => {}
                 _ => return self.err("E_PARSE_TRAILING", format!("unexpected {} after definition", self.describe())),
@@ -191,6 +202,20 @@ impl Parser {
 
     fn def(&mut self) -> PResult<Def> {
         let start = self.span();
+        if matches!(self.peek(), Tok::Ident(w) if w == "pub") && !matches!(self.peek_at(1), Tok::Sym(_) | Tok::Newline(_) | Tok::Eof) {
+            self.bump();
+            let mut d = self.def()?;
+            match &mut d {
+                Def::Type(t) => (t.public, t.span) = (true, start.to(t.span)),
+                Def::Fn(f) => (f.public, f.span) = (true, start.to(f.span)),
+                Def::Effect(e) => (e.public, e.span) = (true, start.to(e.span)),
+                _ => return Err(SyntaxError::new("E_PARSE_PUB", "only fn, type and effect definitions can be pub".into(), start)),
+            }
+            return Ok(d);
+        }
+        if matches!(self.peek(), Tok::Ident(w) if w == "use") && matches!(self.peek_at(1), Tok::Ident(_)) {
+            return self.use_def();
+        }
         match self.peek() {
             Tok::Kw("type") => self.type_def().map(Def::Type),
             Tok::Ident(r) if r == "res" && matches!(self.peek_at(1), Tok::Kw("type")) => {
@@ -237,6 +262,30 @@ impl Parser {
             }
             _ => self.err("E_PARSE_DEF", format!("expected a definition, found {}", self.describe())),
         }
+    }
+
+    fn use_def(&mut self) -> PResult<Def> {
+        let start = self.bump().span;
+        if let Tok::Ident(q) = self.peek().clone()
+            && let Some((p, n)) = q.split_once('.') {
+                return Err(SyntaxError::new("E_PARSE_USE", format!("write 'use {p}' or 'use {p}.{{{n}}}'"), self.span()));
+            }
+        let pkg = self.expect_ident()?;
+        let mut names = Vec::new();
+        if self.eat_sym(".") {
+            if self.eat_sym("{") {
+                while !self.is_sym("}") {
+                    names.push(self.expect_ident()?);
+                    if !self.eat_sym(",") {
+                        break;
+                    }
+                }
+                self.expect_sym("}")?;
+            } else {
+                names.push(self.expect_ident()?);
+            }
+        }
+        Ok(Def::Use(UseDef::new(pkg, names, start.to(self.prev_span()))))
     }
 
     fn store_def(&mut self) -> PResult<StoreDef> {
@@ -301,7 +350,7 @@ impl Parser {
                 return self.err("E_PARSE_EFFECT", "an effect needs at least one operation: 'effect name(x: T) -> R', or operations on indented lines");
             }
         }
-        Ok(EffectDef { name, params, ops, span: start.to(self.prev_span()) })
+        Ok(EffectDef { name, params, ops, public: false, span: start.to(self.prev_span()) })
     }
 
     fn op_sig(&mut self, name: String) -> PResult<OpSig> {
@@ -380,7 +429,7 @@ impl Parser {
         } else {
             None
         };
-        Ok(TypeDef { name, params, body, derives, res: false, drop, span: start.to(self.prev_span()) })
+        Ok(TypeDef { name, params, body, derives, res: false, drop, public: false, span: start.to(self.prev_span()) })
     }
 
     fn type_body(&mut self) -> PResult<TypeBody> {
@@ -719,7 +768,7 @@ impl Parser {
             }
         }
         let body = Expr::new(ExprKind::Unit, self.prev_span());
-        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, trusted, interrupt, body, span: start.to(self.prev_span()), sig_span, ext: None, kernel })
+        Ok(FnDef { name, tparams, params, ret, effects, pres, posts, examples, trusted, interrupt, body, span: start.to(self.prev_span()), sig_span, ext: None, kernel, public: false })
     }
 
     fn expr_seq(&mut self) -> PResult<Expr> {

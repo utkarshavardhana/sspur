@@ -168,6 +168,7 @@ impl<'a> Hasher<'a> {
                     tys.extend(op.ret.iter());
                 }
             }
+            Def::Use(_) => {}
         }
         while let Some(t) = tys.pop() {
             match t {
@@ -285,6 +286,12 @@ impl<'a> Hasher<'a> {
     fn encode(&self, d: &Def, group: &HashMap<String, usize>) -> Vec<u8> {
         let mut enc = Enc::default();
         match d {
+            Def::Use(u) => {
+                enc.tag(b'U');
+                enc.str(&u.pkg);
+                enc.uint(u.names.len() as u64);
+                u.names.iter().for_each(|n| enc.str(n));
+            }
             Def::Type(t) => {
                 enc.tag(b'T');
                 enc.tparams = t.params.iter().map(|p| p.name.clone()).collect();

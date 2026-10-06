@@ -237,6 +237,7 @@ pub fn strip_spans(m: &mut Module) {
                 strip_ty(&mut s.ty);
                 strip_expr(&mut s.init);
             }
+            Def::Use(u) => u.span = z,
         }
     }
 }

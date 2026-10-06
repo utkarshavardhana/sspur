@@ -335,7 +335,7 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
             Def::Test(t) if skip.contains(&t.name) => {}
             Def::Test(t) => c.check_test(t),
             Def::Type(t) => c.check_type_refines(t),
-            Def::Effect(_) | Def::Store(_) | Def::Static(_) => {}
+            Def::Effect(_) | Def::Store(_) | Def::Static(_) | Def::Use(_) => {}
             Def::Svc(sv) => c.check_svc(sv, m),
         }
         if matches!(d, Def::Fn(_) | Def::Test(_)) && !skip.contains(d.name()) {

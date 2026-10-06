@@ -1237,6 +1237,7 @@ impl Cx<'_> {
                 let tag = self.tag(&t, "v");
                 let mut s = format!("switch ({tag}) {{ ");
                 for (k, (vn, fs)) in self.layouts.sum_variants(n, a).unwrap().iter().enumerate() {
+                    let vn = sspur_syntax::display_name(vn);
                     write!(s, "case {k}: ").unwrap();
                     match fs {
                         None => s.push_str(&lit(&format!("\"{vn}\""))),
@@ -1370,6 +1371,7 @@ impl Cx<'_> {
                 let niche = self.niche(&t);
                 let mut s = format!("SsJ* tag = v && v->t == SJ_OBJ ? sj_get(v, \"tag\", 3) : v; if (!tag || tag->t != SJ_STR) {bad} ");
                 for (k, (vn, fs)) in vs.iter().enumerate() {
+                    let vn = sspur_syntax::display_name(vn);
                     write!(s, "if (tag->s.len == {} && !memcmp(tag->s.p, {}, {})) {{ ", vn.len(), c_lit(vn), vn.len()).unwrap();
                     if fs.is_none() && niche.is_some() {
                         s.push_str("*out = 0; return 1; } ");
@@ -1385,7 +1387,7 @@ impl Cx<'_> {
                     }
                     s.push_str("*out = p; return 1; } ");
                 }
-                let one = format!("one of {}", vs.iter().map(|v| v.0.as_str()).collect::<Vec<_>>().join(", "));
+                let one = format!("one of {}", vs.iter().map(|v| sspur_syntax::display_name(&v.0)).collect::<Vec<_>>().join(", "));
                 s.push_str(&err(&one, "tag"));
                 s
             }

@@ -187,9 +187,10 @@ pub fn crash_point(at: &str) {
 
 fn def_rank(d: &Def) -> u8 {
     match d {
-        Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Static(_) => 0,
-        Def::Fn(_) => 1,
-        Def::Svc(_) | Def::Test(_) => 2,
+        Def::Use(_) => 0,
+        Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Static(_) => 1,
+        Def::Fn(_) => 2,
+        Def::Svc(_) | Def::Test(_) => 3,
     }
 }
 
@@ -201,12 +202,16 @@ pub fn render(defs: &[Def]) -> String {
 }
 
 fn text_rank(t: &str) -> u8 {
+    let t = t.strip_prefix("pub ").unwrap_or(t);
+    if t.starts_with("use ") {
+        return 0;
+    }
     if t.starts_with("type ") || t.starts_with("res type ") || t.starts_with("effect ") || t.starts_with("store ") {
-        0
-    } else if t.starts_with("test ") || t.starts_with("svc ") {
-        2
-    } else {
         1
+    } else if t.starts_with("test ") || t.starts_with("svc ") {
+        3
+    } else {
+        2
     }
 }
 
@@ -1273,7 +1278,7 @@ fn apply_op(op: &Json, defs: &mut Vec<Def>, reqs: &mut BTreeMap<String, Vec<Stri
                     Def::Fn(f) => vec![&mut f.body],
                     Def::Test(t) => vec![&mut t.body],
                     Def::Static(s) => vec![&mut s.init],
-                    Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Svc(_) => vec![],
+                    Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Svc(_) | Def::Use(_) => vec![],
                 };
                 for e in exprs.iter_mut() {
                     visit::walk_expr_mut(e, &mut |x| {

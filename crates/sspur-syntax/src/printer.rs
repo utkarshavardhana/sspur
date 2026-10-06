@@ -12,6 +12,13 @@ pub fn print_module(m: &Module) -> String {
 }
 
 pub fn print_def(d: &Def) -> String {
+    if d.is_pub() {
+        return format!("pub {}", print_def_inner(d));
+    }
+    print_def_inner(d)
+}
+
+fn print_def_inner(d: &Def) -> String {
     match d {
         Def::Type(t) => print_type_def(t),
         Def::Fn(f) => print_fn(f),
@@ -26,6 +33,8 @@ pub fn print_def(d: &Def) -> String {
             s
         }
         Def::Static(s) => format!("static {}: {} = {}", s.name, ty(&s.ty), expr(&s.init, 0)),
+        Def::Use(u) if u.names.is_empty() => format!("use {}", u.pkg),
+        Def::Use(u) => format!("use {}.{{{}}}", u.pkg, u.names.join(", ")),
     }
 }
 

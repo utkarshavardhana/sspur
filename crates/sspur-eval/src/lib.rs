@@ -220,7 +220,7 @@ impl Interp {
                 Def::Static(s) => {
                     it.statics.insert(s.name.clone(), s.init.clone());
                 }
-                Def::Store(_) | Def::Svc(_) => {}
+                Def::Store(_) | Def::Svc(_) | Def::Use(_) => {}
             }
         }
         it

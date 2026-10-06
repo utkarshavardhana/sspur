@@ -29,7 +29,7 @@ pub fn check(m: &Module, t: &Tables) -> Vec<Diag> {
             Def::Store(s) => cx.err("E_PROFILE_BARE", s.span, "stores need a deploy host, which bare code doesn't have".into(), None),
             Def::Svc(s) => cx.err("E_PROFILE_BARE", s.span, "services need a deploy host, which bare code doesn't have".into(), None),
             Def::Effect(e) => cx.err("E_PROFILE_BARE", e.span, "effect handlers need the effect runtime, which bare code doesn't have".into(), None),
-            Def::Type(_) | Def::Test(_) | Def::Static(_) => {}
+            Def::Type(_) | Def::Test(_) | Def::Static(_) | Def::Use(_) => {}
         }
     }
     cx.diags

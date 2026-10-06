@@ -1,16 +1,32 @@
 use crate::ast::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub fn rename_module(m: &mut Module, from: &str, to: &str, user_methods: &HashSet<(u32, u32)>) {
-    let r = Renamer { from, to, user_methods };
-    for d in &mut m.defs {
-        r.def(d);
+    let map = HashMap::from([(from.to_string(), to.to_string())]);
+    rename_defs(&mut m.defs, &map, user_methods);
+}
+
+/// Renames every top-level name in `map` at once, scope-aware.
+pub fn rename_defs(defs: &mut [Def], map: &HashMap<String, String>, user_methods: &HashSet<(u32, u32)>) {
+    let r = Renamer { map, user_methods };
+    for d in defs {
+        let tps: Vec<&str> = match &*d {
+            Def::Type(t) => t.params.iter().map(|p| p.name.as_str()).collect(),
+            Def::Fn(f) => f.tparams.iter().map(|p| p.name.as_str()).collect(),
+            Def::Effect(e) => e.params.iter().map(|p| p.name.as_str()).collect(),
+            _ => vec![],
+        };
+        if map.len() > 1 && tps.iter().any(|p| map.contains_key(*p)) {
+            let sub: HashMap<String, String> = map.iter().filter(|(k, _)| !tps.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
+            Renamer { map: &sub, user_methods }.def(d);
+        } else {
+            r.def(d);
+        }
     }
 }
 
 struct Renamer<'a> {
-    from: &'a str,
-    to: &'a str,
+    map: &'a HashMap<String, String>,
     user_methods: &'a HashSet<(u32, u32)>,
 }
 
@@ -18,9 +34,13 @@ type Scope = Vec<HashSet<String>>;
 
 impl Renamer<'_> {
     fn hit(&self, n: &mut String) {
-        if n == self.from {
-            *n = self.to.to_string();
+        if let Some(t) = self.map.get(n.as_str()) {
+            *n = t.clone();
         }
+    }
+
+    fn shadows(&self, n: &str) -> bool {
+        self.map.contains_key(n)
     }
 
     fn bound(scope: &Scope, n: &str) -> bool {
@@ -35,7 +55,7 @@ impl Renamer<'_> {
                     self.hit(d);
                 }
                 let tparams: Vec<String> = t.params.iter().map(|p| p.name.clone()).collect();
-                let shadow = tparams.iter().any(|p| p == self.from);
+                let shadow = tparams.iter().any(|p| self.shadows(p));
                 match &mut t.body {
                     TypeBody::Record(fs) => self.fields(fs, shadow),
                     TypeBody::Sum(vs) => {
@@ -63,7 +83,7 @@ impl Renamer<'_> {
             }
             Def::Fn(f) => {
                 self.hit(&mut f.name);
-                let shadow = f.tparams.iter().any(|p| p.name == self.from);
+                let shadow = f.tparams.iter().any(|p| self.shadows(&p.name));
                 for p in &mut f.params {
                     if !shadow {
                         self.ty(&mut p.ty);
@@ -117,9 +137,10 @@ impl Renamer<'_> {
                 self.ty(&mut s.ty);
                 self.expr(&mut s.init, &mut vec![]);
             }
+            Def::Use(_) => {}
             Def::Effect(e) => {
                 self.hit(&mut e.name);
-                let shadow = e.params.iter().any(|p| p.name == self.from);
+                let shadow = e.params.iter().any(|p| self.shadows(&p.name));
                 for op in &mut e.ops {
                     self.hit(&mut op.name);
                     if !shadow {
@@ -265,7 +286,7 @@ impl Renamer<'_> {
                             self.expr(body, scope);
                         }
                         Stmt::Fn(f) => {
-                            let shadow = f.tparams.iter().any(|p| p.name == self.from);
+                            let shadow = f.tparams.iter().any(|p| self.shadows(&p.name));
                             for p in &mut f.params {
                                 if !shadow {
                                     self.ty(&mut p.ty);

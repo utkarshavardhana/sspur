@@ -255,12 +255,12 @@ impl fmt::Display for Value {
             Value::Tuple(xs) => write_seq(f, "(", ")", xs),
             Value::Record(n, fs) if &**n == "#File" => write!(f, "File({})", Quoted(&fs[1].1)),
             Value::Record(n, fs) => {
-                write!(f, "{}", n.trim_start_matches('#'))?;
+                write!(f, "{}", sspur_syntax::display_name(n.trim_start_matches('#')))?;
                 write_fields(f, fs)
             }
-            Value::Variant(n, None) => write!(f, "{n}"),
+            Value::Variant(n, None) => write!(f, "{}", sspur_syntax::display_name(n)),
             Value::Variant(n, Some(fs)) => {
-                write!(f, "{n}")?;
+                write!(f, "{}", sspur_syntax::display_name(n))?;
                 write_fields(f, fs)
             }
             Value::Opt(None) => write!(f, "none"),
@@ -288,7 +288,7 @@ impl fmt::Display for Value {
                 write!(f, "}}")
             }
             Value::Heap(xs) => write_seq(f, "heap[", "]", xs),
-            Value::New(n, v) => write!(f, "{n}({})", Quoted(v)),
+            Value::New(n, v) => write!(f, "{}({})", sspur_syntax::display_name(n), Quoted(v)),
             Value::Wrap(k, _) if &**k == "Secret" => write!(f, "<secret>"),
             Value::Wrap(k, _) if &**k == "Pii" => write!(f, "<redacted>"),
             Value::Wrap(_, v) => write!(f, "untrusted({})", Quoted(v)),

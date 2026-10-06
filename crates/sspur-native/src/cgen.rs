@@ -3074,7 +3074,7 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if a.is_empty() && self.layouts.newtypes.contains_key(n) => {
                 let inner = self.layouts.newtypes[n].clone();
                 let e = self.helper_show(&inner)?;
-                format!("{}{e}(b, v, 1); sb_put(b, \")\", 1);", lit(&format!("{n}(")))
+                format!("{}{e}(b, v, 1); sb_put(b, \")\", 1);", lit(&format!("{}(", sspur_syntax::display_name(n))))
             }
             Type::Con(n, a) if n == "Map" => {
                 let (mm, node) = self.map_helpers(t)?;
@@ -3102,7 +3102,7 @@ impl<'a> Cx<'a> {
                 format!("sb_put(b, \"File(\", 5); {e}(b, v.path, 1); sb_put(b, \")\", 1);")
             }
             Type::Con(n, a) if self.layouts.records.contains_key(n) => {
-                let mut s = lit(&format!("{}{{", n.trim_start_matches('#')));
+                let mut s = lit(&format!("{}{{", sspur_syntax::display_name(n.trim_start_matches('#'))));
                 for (i, (f, ft)) in self.layouts.record_fields(n, a).unwrap().iter().enumerate() {
                     let e = self.helper_show(ft)?;
                     s.push_str(&lit(&format!("{}{f}: ", if i > 0 { ", " } else { "" })));
@@ -3116,7 +3116,7 @@ impl<'a> Cx<'a> {
                 let mut s = format!("switch ({tag}) {{ ");
                 for (k, (vname, fs)) in self.layouts.sum_variants(n, a).unwrap().iter().enumerate() {
                     write!(s, "case {k}: ").unwrap();
-                    s.push_str(&lit(vname));
+                    s.push_str(&lit(sspur_syntax::display_name(vname)));
                     if let Some(fs) = fs {
                         s.push_str("sb_put(b, \"{\", 1); ");
                         for (i, (f, ft)) in fs.iter().enumerate() {

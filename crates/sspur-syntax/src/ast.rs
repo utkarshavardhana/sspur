@@ -29,6 +29,22 @@ pub enum Def {
     Store(StoreDef),
     Svc(SvcDef),
     Static(StaticDef),
+    Use(UseDef),
+}
+
+/// `use pkg` or `use pkg.{a, b}`; named `use pkg` in the codebase.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UseDef {
+    pub key: String,
+    pub pkg: String,
+    pub names: Vec<String>,
+    pub span: Span,
+}
+
+impl UseDef {
+    pub fn new(pkg: String, names: Vec<String>, span: Span) -> Self {
+        UseDef { key: format!("use {pkg}"), pkg, names, span }
+    }
 }
 
 impl Def {
@@ -41,6 +57,16 @@ impl Def {
             Def::Store(s) => &s.name,
             Def::Svc(s) => &s.name,
             Def::Static(s) => &s.name,
+            Def::Use(u) => &u.key,
+        }
+    }
+
+    pub fn is_pub(&self) -> bool {
+        match self {
+            Def::Type(t) => t.public,
+            Def::Fn(f) => f.public,
+            Def::Effect(e) => e.public,
+            _ => false,
         }
     }
 
@@ -53,6 +79,7 @@ impl Def {
             Def::Store(s) => s.span,
             Def::Svc(s) => s.span,
             Def::Static(s) => s.span,
+            Def::Use(u) => u.span,
         }
     }
 }
@@ -72,6 +99,7 @@ pub struct TypeDef {
     pub derives: Vec<String>,
     pub res: bool,
     pub drop: Option<String>,
+    pub public: bool,
     pub span: Span,
 }
 
@@ -134,6 +162,7 @@ pub struct FnDef {
     pub sig_span: Span,
     pub ext: Option<Extern>,
     pub kernel: Option<Box<KernelSpec>>,
+    pub public: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -154,6 +183,7 @@ pub struct EffectDef {
     pub name: String,
     pub params: Vec<TParam>,
     pub ops: Vec<OpSig>,
+    pub public: bool,
     pub span: Span,
 }
 

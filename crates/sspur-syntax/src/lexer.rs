@@ -108,6 +108,17 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SyntaxError> {
                 while i < bytes.len() && (bytes[i] == b'_' || bytes[i].is_ascii_alphanumeric()) {
                     i += 1;
                 }
+                if bytes[start].is_ascii_lowercase()
+                    && bytes.get(i) == Some(&b'.')
+                    && bytes.get(i + 1).is_some_and(u8::is_ascii_uppercase)
+                    && (start == 0 || bytes[start - 1] != b'.')
+                    && !KEYWORDS.contains(&&src[start..i])
+                {
+                    i += 1;
+                    while i < bytes.len() && (bytes[i] == b'_' || bytes[i].is_ascii_alphanumeric()) {
+                        i += 1;
+                    }
+                }
                 let word = &src[start..i];
                 let tok = match KEYWORDS.iter().find(|k| **k == word) {
                     Some(k) => Tok::Kw(k),

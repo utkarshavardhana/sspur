@@ -312,12 +312,12 @@ impl fmt::Display for NVal {
             NVal::Str(s) => write!(f, "{s:?}"),
             NVal::Rec(n, fs) if n == "#File" => write!(f, "File({})", fs[1].1),
             NVal::Rec(n, fs) => {
-                write!(f, "{}", n.trim_start_matches('#'))?;
+                write!(f, "{}", sspur_syntax::display_name(n.trim_start_matches('#')))?;
                 fields(f, fs)
             }
-            NVal::Variant(n, None) => write!(f, "{n}"),
+            NVal::Variant(n, None) => write!(f, "{}", sspur_syntax::display_name(n)),
             NVal::Variant(n, Some(fs)) => {
-                write!(f, "{n}")?;
+                write!(f, "{}", sspur_syntax::display_name(n))?;
                 fields(f, fs)
             }
             NVal::List(xs) => {

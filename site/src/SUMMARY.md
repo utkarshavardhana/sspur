@@ -1,6 +1,6 @@
 # Summary
 
-[SSPUR](index.md)
+[Introduction](index.md)
 
 # Learn
 

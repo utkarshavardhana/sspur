@@ -74,7 +74,7 @@ For `examples/crud/items.ssp` the derived actions are: `create` and `update` Get
 
 ## Results
 
-- `crates/sspur-deploy/tests/crud.rs`: the IAM test checks for each role that there are no wildcards, that resources are the table or the function's log group, that the actions are exactly as listed above, and that function environments expose only the tables that function uses. The template passes `cfn-lint` 1.40. The HTTP test does create, conflict, read, update, delete, a paginated list, Unicode, and 400s for refinement, type and JSON errors, all under enforced policies, and checks that every handler used every action it was granted. A policy with PutItem removed makes `create` fail with 500 and write nothing.
+- `crates/sspur-deploy/tests/crud.rs`: the IAM test checks for each handler role that there are no wildcards (the CodeDeploy role's read-only `cloudwatch:DescribeAlarms` is the one exception, since IAM cannot scope it; see ADR 0019), that resources are the table or the function's log group, that the actions are exactly as listed above, and that function environments expose only the tables that function uses. The template passes `cfn-lint` 1.40. The HTTP test does create, conflict, read, update, delete, a paginated list, Unicode, and 400s for refinement, type and JSON errors, all under enforced policies, and checks that every handler used every action it was granted. A policy with PutItem removed makes `create` fail with 500 and write nothing.
 - `crates/sspur-cli/tests/deploy.rs`: tests the CLI `deploy plan` and `deploy local --port 0`.
 
 ## Remaining before a real deploy

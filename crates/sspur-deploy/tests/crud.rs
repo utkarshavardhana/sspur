@@ -44,9 +44,11 @@ fn iam_is_least_privilege() {
     assert_eq!(roles.len(), 6);
     let cd = &res["CodeDeployRole"]["Properties"];
     assert_eq!(cd["AssumeRolePolicyDocument"]["Statement"][0]["Principal"]["Service"], "codedeploy.amazonaws.com");
-    for s in cd["Policies"][0]["PolicyDocument"]["Statement"].as_array().unwrap() {
-        assert_eq!(s["Resource"].as_array().unwrap().len(), 10, "only this service's 5 functions and aliases, or its 10 alarms");
-    }
+    let sts = cd["Policies"][0]["PolicyDocument"]["Statement"].as_array().unwrap();
+    assert_eq!(sts[0]["Resource"].as_array().unwrap().len(), 10, "only this service's 5 functions and their aliases");
+    assert_eq!(sts[1]["Action"], serde_json::json!(["cloudwatch:DescribeAlarms"]));
+    assert_eq!(sts[1]["Resource"], "*", "DescribeAlarms has no resource-level permissions, so an ARN list grants nothing");
+    assert_eq!(sts.len(), 2);
     for h in expected().keys() {
         let id = sspur_deploy::pascal(h);
         assert_eq!(res[&format!("{id}Alias")]["Properties"]["Name"], "live");
@@ -88,7 +90,19 @@ fn iam_is_least_privilege() {
     let routes: BTreeSet<String> = res.values().filter(|r| r["Type"] == "AWS::ApiGatewayV2::Route").map(|r| r["Properties"]["RouteKey"].as_str().unwrap().to_string()).collect();
     assert_eq!(routes, BTreeSet::from(["POST /items", "GET /items/{id}", "PUT /items/{id}", "DELETE /items/{id}", "GET /items"].map(String::from)));
     let text = &p.files["template.json"];
-    assert!(!text.contains("\"*\""), "no wildcard anywhere in the template");
+    let t: serde_json::Value = serde_json::from_str(text).unwrap();
+    let mut wild = Vec::new();
+    for (id, r) in t["Resources"].as_object().unwrap() {
+        for pol in r["Properties"]["Policies"].as_array().into_iter().flatten() {
+            for st in pol["PolicyDocument"]["Statement"].as_array().unwrap() {
+                if st["Resource"] == "*" {
+                    wild.push((id.clone(), st["Action"].clone()));
+                }
+            }
+        }
+    }
+    assert_eq!(wild, vec![("CodeDeployRole".to_string(), serde_json::json!(["cloudwatch:DescribeAlarms"]))], "the only wildcard resource is the read-only alarm state lookup, which IAM cannot scope");
+    assert_eq!(text.matches("\"*\"").count(), 1, "no other wildcard in the template");
 }
 
 #[test]

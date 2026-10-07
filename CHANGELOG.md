@@ -4,6 +4,10 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Fixed
+- Deploy: CodeDeploy's role grants `cloudwatch:DescribeAlarms` on `*`. The action has no resource-level permissions, so the previous ARN list granted nothing and every canary failed on AWS (CloudFormation rolled back cleanly). Found by the first real canary run (ADR 0019).
+- Deploy: `rollback.sh` lists in-flight deployments per deployment group, as the CodeDeploy API requires.
+
 ### Added
 - `Ratio`, exact rationals over `BigInt`: `ratio(n, d)`, `ratio_big(n, d)`, `parse_ratio(s)`, always normalized, with `add sub mul div neg abs inv pow sign is_int floor ceil trunc round to_f64 to_dec`, value ordering for `<` and sorting, and `3/4` display. `to_f64` is correctly rounded and `round` is half to even (ADR 0018 decision 35).
 - `Locale` values for en-US, en-GB, de-DE, fr-FR, ja-JP and hi-IN from `locale(tag)`, passed explicitly: `compare` and `sort` with UCA-style three-level collation (base letters, accents in DUCET mark order, case, then code points; NFC and NFD forms differ only at the last level), and `format_int`, `format_f64`, `format_dec`, `format_date`, `format_date_long` and `format_time` with each locale's separators, Indian digit grouping, date patterns, month names and am/pm markers. The rules are bundled in one Rust module that the C runtime's tables are generated from, so no host or ICU data is read (decisions 37 and 38, which also list what is not full DUCET).

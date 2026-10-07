@@ -100,7 +100,6 @@ pub fn template(svc: &Service) -> Value {
     res.insert("CodeDeployApp".into(), json!({"Type": "AWS::CodeDeploy::Application", "Properties": {"ComputePlatform": "Lambda"}}));
     let mut lambda_res: Vec<Value> = fns.iter().map(|f| json!({"Fn::GetAtt": [format!("{f}Function"), "Arn"]})).collect();
     lambda_res.extend(fns.iter().map(|f| json!({"Fn::Sub": format!("${{{f}Function.Arn}}:{ALIAS}")})));
-    let alarms: Vec<Value> = fns.iter().flat_map(|f| [json!({"Fn::GetAtt": [format!("{f}ErrorsAlarm"), "Arn"]}), json!({"Fn::GetAtt": [format!("{f}FailuresAlarm"), "Arn"]})]).collect();
     res.insert(
         "CodeDeployRole".into(),
         json!({
@@ -113,7 +112,7 @@ pub fn template(svc: &Service) -> Value {
                 },
                 "Policies": [{"PolicyName": "sspur-rollout", "PolicyDocument": {"Version": "2012-10-17", "Statement": [
                     {"Sid": "Aliases", "Effect": "Allow", "Action": ["lambda:GetAlias", "lambda:GetFunction", "lambda:GetProvisionedConcurrencyConfig", "lambda:UpdateAlias"], "Resource": lambda_res},
-                    {"Sid": "Alarms", "Effect": "Allow", "Action": ["cloudwatch:DescribeAlarms"], "Resource": alarms}
+                    {"Sid": "AlarmStates", "Effect": "Allow", "Action": ["cloudwatch:DescribeAlarms"], "Resource": "*"}
                 ]}}]
             }
         }),
@@ -276,7 +275,12 @@ pub fn rollback_script(svc: &Service) -> String {
 set -eu
 STACK="${{STACK:-sspur-{name}}}"
 APP=$(aws cloudformation describe-stack-resource --stack-name "$STACK" --logical-resource-id CodeDeployApp --query StackResourceDetail.PhysicalResourceId --output text)
-ACTIVE=$(aws deploy list-deployments --application-name "$APP" --include-only-statuses Created Queued InProgress Ready --query deployments --output text)
+ACTIVE=""
+for G in $(aws deploy list-deployment-groups --application-name "$APP" --query deploymentGroups --output text); do
+  D=$(aws deploy list-deployments --application-name "$APP" --deployment-group-name "$G" --include-only-statuses Created Queued InProgress Ready --query deployments --output text)
+  [ -n "$D" ] && [ "$D" != "None" ] && ACTIVE="$ACTIVE $D"
+done
+ACTIVE=$(echo $ACTIVE)
 if [ -n "$ACTIVE" ] && [ "$ACTIVE" != "None" ]; then
   for d in $ACTIVE; do aws deploy stop-deployment --deployment-id "$d" --auto-rollback-enabled; done
   echo "stopped $ACTIVE; aliases return to the previous version"

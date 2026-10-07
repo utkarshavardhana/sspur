@@ -33,9 +33,26 @@ Doc 04 sections 4 to 6 ask for typed store evolution, rollout with instant rollb
 - Replay: 11 recorded requests (creates, conflict, reads, a 404, update, list, deletes, a 400) replay against v1 with 11 identical. Against v2 they pass with some extended, and fail with `--strict`. Against a version that sorts the list by `qty` and makes deleting a missing item 204, exactly the list response and the second delete's status differ.
 - The v3 template, with the backfill function, aliases, versions, alarms and CodeDeploy, passes `cfn-lint` 1.40. `crates/sspur-cli/tests/deploy.rs` runs `deploy migrate`, then `deploy local --record`, `swap`, `backfill`, `rollback`, `status` and `replay` through the CLI.
 
+## Real canary (2026-10-07)
+
+`examples/crud/items.ssp` (v1) and `examples/crud/evolve/items_v3.ssp` (v3, `migrate_Items` and `unmigrate_Items`) were run through the generated scripts on a test account in us-west-2, then torn down completely.
+
+| Step | Result |
+|---|---|
+| `deploy.sh` v1, all at once; 6 items created | ok |
+| `deploy.sh` v3, `LambdaCanary10Percent5Minutes` | First attempt failed and CloudFormation rolled back with v1 serving and zero errors: CodeDeploy could not call `cloudwatch:DescribeAlarms`. Fixed, second attempt ok |
+| During the shift, 20 reads every 45 s | About 10% answered by v3 for five minutes, then 100%; 0 errors. v3 answered old items through the lazy migration |
+| `backfill.sh` | 6 scanned, 6 migrated, 0 failed; each item keeps a `v_<old schema>` copy for the old version. A second run migrated 0 (idempotent) |
+| Write on v3, then `rollback.sh` with `PREV=<v1 hash>` | First attempt stopped at a CodeDeploy API error; fixed. v1 then served again and read the v3-created item with `qty` mapped back from `stock.on_hand` |
+
+Two bugs found and fixed:
+1. `cloudwatch:DescribeAlarms` has no resource-level permissions, so the role's alarm ARN list granted nothing and every alias update failed. The statement now uses `Resource: "*"` for that one read-only action. It is the only wildcard in the template, and `tests/crud.rs` asserts exactly that.
+2. `rollback.sh` called `list-deployments` with an application but no deployment group, which the API rejects. It now walks the service's deployment groups.
+
+A version deployed with the old generator keeps the old role in its retained template, so rolling back to it reproduces bug 1. The test regenerated v1's template before rolling back. Versions deployed from now on roll back cleanly.
+
 ## Remaining
 
-- Run a real canary through `deploy.sh` and `rollback.sh` (needs an operator with credentials). CodeDeploy's role here is inline and narrower than `AWSCodeDeployRoleForLambdaLimited`, which is unverified against the service.
 - Item history from the `.sspur` store instead of two files: `migrate` could take a store root hash for the old side.
 - Chained migrations go one hop per function (`migrate_S_v1` from v1, `migrate_S_v2` from v2). There is no automatic composition yet.
 - SLO-driven gates (`slo` in doc 04) instead of the fixed alarms, and a contract step that drops `v_<schema>` copies once no old version runs.

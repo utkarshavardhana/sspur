@@ -4,6 +4,8 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-07
+
 ### Fixed
 - Deploy: CodeDeploy's role grants `cloudwatch:DescribeAlarms` on `*`. The action has no resource-level permissions, so the previous ARN list granted nothing and every canary failed on AWS (CloudFormation rolled back cleanly). Found by the first real canary run (ADR 0019).
 - Deploy: `rollback.sh` lists in-flight deployments per deployment group, as the CodeDeploy API requires.
@@ -167,7 +169,8 @@ This release covers Phases 3 to 7 of the roadmap and ADRs 0003 to 0024. SSPUR no
 - Language design spec, JSON schemas and the token benchmark.
 - Compiler core: parser, checker, content hashing, interpreter and the `sspur` CLI, with an 11-program suite.
 
-[Unreleased]: https://github.com/utkarshavardhana/sspur/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/utkarshavardhana/sspur/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/utkarshavardhana/sspur/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/utkarshavardhana/sspur/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/utkarshavardhana/sspur/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/utkarshavardhana/sspur/compare/v0.2.0...v0.2.1

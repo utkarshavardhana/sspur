@@ -1,0 +1,1 @@
+interface Account { id; owner; balance; readonly frozen: boolean } with frozen as the 4th field, and export function account(id: string, owner: string, balance: number, frozen: boolean): Account; export function freeze(bank: readonly Account[], id: string): Account[]; export class Frozen extends BankErr, with readonly id: string

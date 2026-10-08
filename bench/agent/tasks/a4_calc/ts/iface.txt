@@ -1,0 +1,1 @@
+export class Sub { readonly kind = "sub"; constructor(readonly a: Expr, readonly b: Expr) } and export class Div { readonly kind = "div"; constructor(readonly a: Expr, readonly b: Expr) }, both added to the Expr union; export class DivByZero extends CalcErr with no fields, thrown by evalExpr; export function varNames(e: Expr): string[]

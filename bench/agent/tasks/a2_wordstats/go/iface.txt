@@ -1,0 +1,1 @@
+func wordsOf(text string, stop []string) []string; func wordFreq(text string, stop []string) []Pair; func topK(text string, k int, stop []string) []Pair; func topLine(text string, k int, stop []string) string; func summary(text string, stop []string) string; func longestWord(text string) (string, bool) (false when there are no words)

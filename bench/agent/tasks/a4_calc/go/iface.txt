@@ -1,0 +1,1 @@
+type Sub struct{ a, b Expr } and type Div struct{ a, b Expr }, value types implementing Expr (used as Sub{a, b}); type DivByZero struct{}, returned as *DivByZero by evalExpr, which implements CalcErr; func varNames(e Expr) []string

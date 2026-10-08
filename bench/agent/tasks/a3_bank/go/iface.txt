@@ -1,0 +1,1 @@
+type Account struct{ id string; owner string; balance int; frozen bool } with frozen as the 4th field; func freeze(bank []Account, id string) ([]Account, error); type Frozen struct{ id string }, returned as *Frozen, which implements BankErr

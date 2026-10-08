@@ -99,7 +99,7 @@ def main(root, v1=False, tmo=False, new=False, b=False, r7=False, langs=("sspur"
                 if tmo:
                     intro = intro.replace("python3 -m pytest", f"{TMO} 300 python3 -m pytest")
             steps = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(t["steps"]))
-            prompt = COMMON.format(intro=intro, title=t["title"], steps=steps, iface=t[lang], dir=d)
+            prompt = COMMON.format(intro=intro, title=t["title"], steps=steps, iface=t[lang] if lang in t else open(os.path.join(HERE, "tasks", t["id"], lang, "iface.txt")).read().strip(), dir=d)
             prompts.append({"lang": lang, "task": t["id"], "dir": d, "prompt": prompt})
     json.dump(prompts, open(os.path.join(root, "prompts.json"), "w"), indent=1)
     print(f"{len(prompts)} prompts in {root}/prompts.json")

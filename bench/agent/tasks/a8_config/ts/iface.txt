@@ -1,0 +1,1 @@
+export class NotInt extends CfgErr and export class NotBool extends CfgErr, each with readonly key: string and readonly value: string; export function getInt(cfg: readonly Entry[], key: string): number; export function getBool(cfg: readonly Entry[], key: string, def: boolean): boolean

@@ -1,0 +1,1 @@
+type NotInt struct{ key, value string } and type NotBool struct{ key, value string }, returned as *NotInt / *NotBool, which implement CfgErr; func getInt(cfg []Entry, key string) (int, error); func getBool(cfg []Entry, key string, def bool) (bool, error) (a missing key gives def, nil)

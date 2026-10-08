@@ -1,0 +1,1 @@
+export function dropLowest(s: Student): Student; export function curve(ss: readonly Student[], pts: number): Student[]; export function honorRoll(ss: readonly Student[]): string[]

@@ -1,0 +1,1 @@
+type TaskErr interface { error; taskErr() }; type NotFound struct{ id int } and type AlreadyDone struct{ id int }, returned as *NotFound / *AlreadyDone, which implement TaskErr; func complete(ts []Task, id int) ([]Task, error); func byPriority(ts []Task) []Task; func clearDone(ts []Task) []Task; func retitle(ts []Task, id int, title string) ([]Task, error)

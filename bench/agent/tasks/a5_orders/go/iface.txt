@@ -1,0 +1,1 @@
+func gross(o Order) int (replaces subtotal); func discount(o Order) int; shipping, tax, total, invoice keep their signatures

@@ -1,0 +1,1 @@
+export class DivByZero extends CalcErr and export class BadSyntax extends CalcErr, no fields; export function calc(s: string): number; export function showResult(s: string): string

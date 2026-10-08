@@ -1,0 +1,1 @@
+type DivByZero struct{} and type BadSyntax struct{}, returned as *DivByZero / *BadSyntax, which implement CalcErr; func calc(s string) (int, error); func showResult(s string) string

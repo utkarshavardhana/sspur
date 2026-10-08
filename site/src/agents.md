@@ -110,7 +110,22 @@ From a local clone, use the path instead: `claude plugin marketplace add /path/t
 
 ## The token benchmark
 
-The benchmark asks whether an agent finishes multi-step feature work in SSPUR with fewer total tokens than the same agent in Python. Each task starts from a small codebase that exists in both languages with the same names, behavior and visible tests, and has 4 to 7 steps: bug fixes, new functions and error variants, signature changes that ripple through callers, renames. Each (language, task) pair is solved by one fresh Claude Code subagent with no retries, and scored on hidden tests it never sees. Total tokens are exact API input plus estimated output, summed over every call. The [full report](agent-bench.md) has the method, every run and every cell.
+The benchmark asks whether an agent finishes multi-step feature work in SSPUR with fewer total tokens than the same agent in another language. Each task starts from a small codebase that exists in every language with the same names, behavior and visible tests, and has 4 to 7 steps: bug fixes, new functions and error variants, signature changes that ripple through callers, renames. Each (language, task) pair is solved by one fresh Claude Code subagent with no retries, and scored on hidden tests it never sees. Total tokens are exact API input plus estimated output, summed over every call. The [full report](agent-bench.md) has the method, every run and every cell.
+
+The original comparison was against Python. Run 9 added TypeScript (Node 20, strict `tsc`, `node:test`) and Go (`go test`) as controls, and they change the conclusion: **the advantage is over Python, not over languages in general.** On the same 17 cells, Sonnet 5.5 used 0.83x Python's tokens, 1.23x TypeScript's and 1.11x Go's, with all four languages passing 246/246 hidden tests.
+
+| Run 9, Sonnet 5.5, 17 cells | SSPUR | Python | TypeScript | Go |
+|---|---|---|---|---|
+| Total tokens | 2,409,267 | 2,896,024 | 1,965,069 | 2,171,132 |
+| API calls | 70 | 88 | 61 | 66 |
+| SSPUR / language, total | 1.00x | **0.83x** | **1.23x** | **1.11x** |
+| SSPUR / language, median per cell | 1.00x | 0.75x | 1.04x | 1.03x |
+| Hidden tests | 246/246 | 246/246 | 246/246 | 246/246 |
+| Reference source size (cl100k) | 12,087 | 12,790 | 13,745 | 17,526 |
+
+SSPUR source is the smallest of the four, but by 400 to 1,400 tokens per task, which cannot decide a run where one API call carries about 30,000 tokens of context. What decides it is calls: TypeScript and Go reach the same 3-call loop as SSPUR without reading any reference, while Python agents take 4 to 7 calls. The one place SSPUR is ahead of all three is the 1,117-definition codebase, where `sspur start NAME...` returns the spec plus exactly the definitions, tests and callers the edit needs and the task takes 3 calls: 0.60x Python, 0.74x TypeScript, 0.35x Go (Go's number is flattered by shell friction; see the report).
+
+The per-model Python comparison, from runs 4 to 8:
 
 | Model and tasks | SSPUR / Python total tokens | API calls SSPUR / Python | Hidden tests SSPUR / Python |
 |---|---|---|---|
@@ -121,12 +136,13 @@ The benchmark asks whether an agent finishes multi-step feature work in SSPUR wi
 | Sonnet 5.5, one codebase of 1,117 definitions, 4 changes | **0.82x** over 2 runs (1.34x when first measured) | 4 / 5 | 10/10 / 10/10 |
 | Optional regex and JSON task (a9) | worse for every model: Sonnet 0.75x after a spec fix (1.96x before), Opus 1.37x, Haiku 5.2x | | |
 
-Where the savings come from: when the agent follows the loop, a task takes 3 calls (`start`, one `edit --test`, done), where a Python agent takes 4 to 7 (read, several targeted edits, run pytest, sometimes fix). SSPUR agents read about as much from tools as Python agents (1.0x to 1.3x for Sonnet and Opus), because the spec costs tokens. The savings are the calls not made, each of which re-reads 19k to 26k tokens of harness context. Where SSPUR loses, it is always a run of rejected edits: syntax from other languages, escaping inside JSON and regex strings, or an effect that ripples to callers.
+Where the savings come from: when the agent follows the loop, a task takes 3 calls (`start`, one `edit --test`, done), where a Python agent takes 4 to 7 (read, several targeted edits, run pytest, sometimes fix). SSPUR agents read about as much from tools as Python agents (1.0x to 1.3x for Sonnet and Opus), because the spec costs tokens. The savings are the calls not made, each of which re-reads 19k to 26k tokens of harness context. Where SSPUR loses, it is always a run of rejected edits: syntax from other languages, escaping inside JSON and regex strings, or an effect that ripples to callers. Against TypeScript and Go that loop is not an advantage, because Sonnet already writes both in 3 calls with no reference to read.
 
 ### Caveats
 
 These numbers are real, but they are narrower than a headline makes them sound:
 
+- **The Python result is not a general result.** Run 9's TypeScript and Go controls land at 1.23x and 1.11x, inside the plus or minus 20% run-to-run band, so the honest statement about them is "no measured advantage", not a penalty. Do not read 0.70x against Python as 0.70x against whatever you use today.
 - **Most cells ran once.** Python's own totals moved by up to 24% between identical runs, and Haiku varies far more (one task took 61 calls, then 8). Only the large-codebase result has two runs (they agree within 0.3%).
 - **Reruns were targeted.** The Haiku 0.83x, the neutral-task 0.66x and several fixes rerun only the SSPUR cells that did worst, against the same Python cells. Cells chosen for doing badly have room to improve on a second try, so part of each improvement is regression to the mean. The Python cells were not rerun.
 - **I wrote the language, the spec, the a-tasks and the harness.** The b-tasks come from neutral sources (LeetCode, an RFC, the AWK book and others) to check for that, and landed close to the a-task result, but they were adapted by the same model family that solved them.

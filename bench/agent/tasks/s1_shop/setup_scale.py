@@ -1,6 +1,8 @@
 """Create the two work directories for the large-codebase task and write their prompts.
 
-  python3 setup_scale.py <work_root> [--r7]   -> <work_root>/{sspur,python}/s1_shop/ and <work_root>/prompts.json
+  python3 setup_scale.py <work_root> [--r7] [--langs=sspur,python,ts,go]   -> <work_root>/<lang>/s1_shop/ and <work_root>/prompts.json
+
+--langs (run 9 on): ts and go are the TypeScript and Go versions from gen_xlang.py.
 
 ./sspur and pytest run under a 300 s timeout ($TMO, default ~/code/sspur-tools/tmo), as in run 4.
 """
@@ -21,6 +23,8 @@ STEPS = [
 IFACE = {
     "sspur": "fn ship_fee(weight: Int, express: Bool) -> Int; fn order_express_shipping(x: Order) -> Int; fn warehouse_restock_all(ws: List[Warehouse], n: Int) -> List[Warehouse]; tax_rate, money and the other existing functions keep their signatures",
     "python": "shop.common.ship_fee(weight, express) -> int; shop.order.order_express_shipping(x) -> int; shop.warehouse.warehouse_restock_all(ws, n) -> List[Warehouse]; tax_rate, money and the other existing functions keep their modules and signatures",
+    "ts": "shop/common.ts: export function shipFee(weight: number, express: boolean): number; shop/order.ts: export function orderExpressShipping(x: Order): number; shop/warehouse.ts: export function warehouseRestockAll(ws: readonly Warehouse[], n: number): Warehouse[]; taxRate, money and the other existing functions keep their modules and signatures",
+    "go": "func shipFee(weight int, express bool) int; func orderExpressShipping(x Order) int; func warehouseRestockAll(ws []Warehouse, n int) []Warehouse, all in package shop; taxRate, money and the other existing functions keep their signatures",
 }
 
 SSPUR_INTRO = """You are working on a large codebase written in SSPUR, a new programming language you have not seen before. Working directory: {dir}
@@ -41,6 +45,18 @@ PY_INTRO = """You are working on a large Python 3.9 codebase. Working directory:
 - The code is the package shop/ (a common module and 44 domain modules, about 1,100 functions and classes) with tests in tests/. Run them with `cd {dir} && LC_ALL=en_US.UTF-8 {tmo} 300 python3 -m pytest -q tests`.
 - The codebase is about 36k tokens, so don't read all of it. Find what you need with grep (for example `grep -rn WORD shop tests`) and read only what you need."""
 
+TS_INTRO = """You are working on a large TypeScript codebase (Node 20, strict tsc). Working directory: {dir}
+
+- The code is in shop/ (a common module and 44 domain modules, about 1,100 functions and types) with tests in tests/ (node:test). Type-check and run them with `cd {dir} && {tmo} 300 npx tsc && {tmo} 300 node --test --test-reporter=dot dist/tests/`.
+- The task text writes names in snake_case; in the code they are camelCase (ship_fee is shipFee).
+- The codebase is about 39k tokens, so don't read all of it. Find what you need with grep (for example `grep -rn WORD shop tests`) and read only what you need."""
+
+GO_INTRO = """You are working on a large Go codebase. Working directory: {dir}
+
+- The code is the package shop/ (a common file and 44 domain files, about 1,100 functions and types), with tests in a *_test.go file next to each. Run them with `cd {dir} && {tmo} 300 go test ./...`.
+- The task text writes names in snake_case; in the code they are camelCase (ship_fee is shipFee).
+- The codebase is about 42k tokens, so don't read all of it. Find what you need with grep (for example `grep -rn WORD shop`) and read only what you need."""
+
 COMMON = """{intro}
 
 Task: {title}
@@ -51,11 +67,12 @@ Required interface (hidden tests call exactly these names): {iface}
 Do not look at, list, or search any directory other than {dir}. When every step is done and the tests pass, reply with the single word DONE."""
 
 
-def main(root, r7=False):
+def main(root, r7=False, langs=("sspur", "python")):
     gen = tempfile.mkdtemp()
     subprocess.run([sys.executable, os.path.join(HERE, "gen.py"), gen], check=True, capture_output=True)
+    subprocess.run([sys.executable, os.path.join(HERE, "gen_xlang.py"), gen], check=True, capture_output=True, cwd=HERE)
     prompts = []
-    for lang in ("sspur", "python"):
+    for lang in langs:
         d = os.path.abspath(os.path.join(root, lang, "s1_shop"))
         shutil.rmtree(d, ignore_errors=True)
         os.makedirs(d)
@@ -67,6 +84,16 @@ def main(root, r7=False):
             open(w, "w").write(f'#!/bin/sh\nexec {TMO} 300 {SSPUR} "$@"\n')
             os.chmod(w, 0o755)
             intro = (SSPUR_INTRO_R7 if r7 else SSPUR_INTRO).format(dir=d)
+        elif lang == "ts":
+            for x in ("shop", "tests"):
+                shutil.copytree(os.path.join(gen, "ts", x), os.path.join(d, x))
+            shutil.copy(os.path.join(gen, "ts", "tsconfig.json"), d)
+            os.symlink(os.path.abspath(os.path.join(HERE, "../../xlang/node_modules")), os.path.join(d, "node_modules"))
+            intro = TS_INTRO.format(dir=d, tmo=TMO)
+        elif lang == "go":
+            shutil.copytree(os.path.join(gen, "go", "shop"), os.path.join(d, "shop"))
+            shutil.copy(os.path.join(gen, "go", "go.mod"), d)
+            intro = GO_INTRO.format(dir=d, tmo=TMO)
         else:
             shutil.copytree(os.path.join(gen, "py", "shop"), os.path.join(d, "shop"))
             shutil.copytree(os.path.join(gen, "py", "tests"), os.path.join(d, "tests"))
@@ -78,4 +105,5 @@ def main(root, r7=False):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], "--r7" in sys.argv[2:])
+    langs = next((a.split("=", 1)[1].split(",") for a in sys.argv[2:] if a.startswith("--langs=")), ["sspur", "python"])
+    main(sys.argv[1], "--r7" in sys.argv[2:], langs)

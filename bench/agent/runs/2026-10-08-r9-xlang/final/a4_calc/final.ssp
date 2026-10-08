@@ -1,0 +1,83 @@
+type CalcErr = Unbound{name: Str} | DivByZero
+
+type Expr = Num{v: Int} | Var{name: Str} | Add{a: Expr, b: Expr} | Mul{a: Expr, b: Expr} | Sub{a: Expr, b: Expr} | Div{a: Expr, b: Expr}
+
+fn div_checked(x: Int, y: Int) -> Int ! fail[CalcErr]
+= do
+  if y == 0 then raise DivByZero
+  x / y
+
+fn eval(e: Expr, env: List[(Str, Int)]) -> Int ! fail[CalcErr]
+= match e
+| Num{v} => v
+| Var{name} => lookup(env, name).ok_or(Unbound{name: name})
+| Add{a, b} => eval(a, env) + eval(b, env)
+| Mul{a, b} => eval(a, env) * eval(b, env)
+| Sub{a, b} => eval(a, env) - eval(b, env)
+| Div{a, b} => div_checked(eval(a, env), eval(b, env))
+
+fn lookup(env: List[(Str, Int)], name: Str) -> Opt[Int]
+= env.find(_.0 == name).map(_.1)
+
+fn main() -> Unit ! log
+= log(run(Add{a: Num{v: 2}, b: Mul{a: Var{name: "x"}, b: Num{v: 4}}}, [("x", 3)]))
+
+fn run(e: Expr, env: List[(Str, Int)]) -> Str
+= catch "{show(e)} = {eval(e, env)}"
+| Unbound{name} => "{show(e)} = error: unbound {name}"
+| DivByZero => "{show(e)} = error: division by zero"
+
+fn show(e: Expr) -> Str
+= match e
+| Num{v} => v.str
+| Var{name} => name
+| Add{a, b} => "({show(a)} + {show(b)})"
+| Mul{a, b} => "{show(a)} * {show(b)}"
+| Sub{a, b} => "({show(a)} - {show(b)})"
+| Div{a, b} => "{show(a)} / {show(b)}"
+
+fn simplify(e: Expr) -> Expr
+= match e
+| Add{a: Num{v: 0}, b} => simplify(b)
+| Add{a, b: Num{v: 0}} => simplify(a)
+| Mul{a: Num{v: 1}, b} => simplify(b)
+| Mul{a, b: Num{v: 1}} => simplify(a)
+| Sub{a, b: Num{v: 0}} => simplify(a)
+| Div{a, b: Num{v: 1}} => simplify(a)
+| Add{a, b} => Add{a: simplify(a), b: simplify(b)}
+| Mul{a, b} => Mul{a: simplify(a), b: simplify(b)}
+| Sub{a, b} => Sub{a: simplify(a), b: simplify(b)}
+| Div{a, b} => Div{a: simplify(a), b: simplify(b)}
+| _ => e
+
+fn var_acc(e: Expr, acc: List[Str]) -> List[Str]
+= match e
+| Num{v} => acc
+| Var{name} => if acc.contains(name) then acc else acc.push(name)
+| Add{a, b} => var_acc(b, var_acc(a, acc))
+| Mul{a, b} => var_acc(b, var_acc(a, acc))
+| Sub{a, b} => var_acc(b, var_acc(a, acc))
+| Div{a, b} => var_acc(b, var_acc(a, acc))
+
+fn var_names(e: Expr) -> List[Str]
+= var_acc(e, [])
+
+test div_eval = run(Div{a: Num{v: 7}, b: Num{v: 2}}, []) == "7 / 2 = 3"
+
+test div_zero = run(Div{a: Num{v: 7}, b: Sub{a: Num{v: 1}, b: Num{v: 1}}}, []) == "7 / (1 - 1) = error: division by zero"
+
+test run_ok = run(Add{a: Num{v: 2}, b: Mul{a: Var{name: "x"}, b: Num{v: 4}}}, [("x", 3)]) == "(2 + x * 4) = 14"
+
+test run_unbound = run(Var{name: "y"}, []) == "y = error: unbound y"
+
+test simplify_nested = show(simplify(Sub{a: Add{a: Num{v: 0}, b: Var{name: "y"}}, b: Div{a: Var{name: "z"}, b: Num{v: 1}}})) == "(y - z)"
+
+test simplify_ok = show(simplify(Add{a: Num{v: 0}, b: Mul{a: Num{v: 1}, b: Var{name: "z"}}})) == "z"
+
+test simplify_sub_div = show(simplify(Div{a: Sub{a: Var{name: "x"}, b: Num{v: 0}}, b: Num{v: 1}})) == "x"
+
+test sub_eval = run(Sub{a: Num{v: 7}, b: Var{name: "x"}}, [("x", 3)]) == "(7 - x) = 4"
+
+test var_names_none = var_names(Num{v: 1}) == []
+
+test var_names_order = var_names(Add{a: Var{name: "b"}, b: Mul{a: Sub{a: Var{name: "a"}, b: Var{name: "b"}}, b: Div{a: Var{name: "c"}, b: Num{v: 1}}}}) == ["b", "a", "c"]

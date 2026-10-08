@@ -1,0 +1,112 @@
+type Bucket = {capacity: Int, rate: Int, tokens: Int, last: Int}
+
+type Keyed = {capacity: Int, rate: Int, buckets: List[(Str, Bucket)]}
+
+type LimitErr = ClockSkew{last: Int, now: Int} | TooLarge{n: Int, capacity: Int}
+
+type Window = {limit: Int, size: Int, start: Int, count: Int}
+
+fn allow(w: Window, now: Int) -> (Bool, Window) ! fail[LimitErr]
+= do
+  if now < w.start then raise ClockSkew{last: w.start, now: now}
+  w2 = if now >= w.start + w.size then w with start := now, count := 0 else w
+  if w2.count < w2.limit then (true, w2 with count := w2.count + 1) else (false, w2)
+
+fn main() -> Unit ! log
+= log(catch run_requests(new_window(3, 10), [0, 1, 2, 3, 12]).map(_.str).join(" ")
+| _ => "error")
+
+fn new_bucket(capacity: Int, rate: Int, now: Int) -> Bucket
+= Bucket{capacity: capacity, rate: rate, tokens: capacity, last: now}
+
+fn new_keyed(capacity: Int, rate: Int) -> Keyed
+= Keyed{capacity: capacity, rate: rate, buckets: []}
+
+fn new_window(limit: Int, size: Int) -> Window
+= Window{limit: limit, size: size, start: 0, count: 0}
+
+fn refill(b: Bucket, now: Int) -> Bucket ! fail[LimitErr]
+= do
+  if now < b.last then raise ClockSkew{last: b.last, now: now}
+  b with tokens := min(b.capacity, b.tokens + (now - b.last) * b.rate), last := now
+
+fn retry_after(b: Bucket, now: Int, n: Int) -> Int ! fail[LimitErr]
+= do
+  if n > b.capacity then raise TooLarge{n: n, capacity: b.capacity}
+  r = refill(b, now)
+  if r.tokens >= n then 0 else (n - r.tokens + r.rate - 1) / r.rate
+
+fn run_requests(w: Window, times: List[Int]) -> List[Bool] ! fail[LimitErr]
+= do
+  var cur = w
+  var out = []
+  for t in times
+    (ok, next) = allow(cur, t)
+    out := out.push(ok)
+    cur := next
+  out
+
+fn take(b: Bucket, now: Int, n: Int) -> (Bool, Bucket) ! fail[LimitErr]
+= do
+  r = refill(b, now)
+  if r.tokens >= n then (true, r with tokens := r.tokens - n) else (false, r)
+
+fn take_key(k: Keyed, key: Str, now: Int) -> (Bool, Keyed) ! fail[LimitErr]
+= do
+  b = k.buckets.find(p => p.0 == key).map(p => p.1).or(new_bucket(k.capacity, k.rate, now))
+  (ok, nb) = take(b, now, 1)
+  exists = k.buckets.any(p => p.0 == key)
+  bs = if exists then k.buckets.map(p => if p.0 == key then (key, nb) else p) else k.buckets.push((key, nb))
+  (ok, k with buckets := bs)
+
+test bucket_new = new_bucket(5, 1, 3).tokens == 5 and new_bucket(5, 1, 3).last == 3
+
+test counts = allow(new_window(3, 10), 0).1.count == 1
+
+test first_allowed = allow(new_window(3, 10), 0).0
+
+test keyed_deny = not take_key(take_key(new_keyed(1, 1), "a", 0).1, "a", 0).0
+
+test keyed_len = take_key(take_key(new_keyed(1, 1), "a", 0).1, "b", 0).1.buckets.len == 2
+
+test keyed_new = new_keyed(2, 1).buckets == []
+
+test keyed_refill = take_key(take_key(new_keyed(1, 1), "a", 0).1, "a", 1).0
+
+test keyed_sep = take_key(take_key(take_key(new_keyed(1, 1), "a", 0).1, "a", 0).1, "b", 0).0
+
+test new_window_resets = run_requests(new_window(1, 10), [0, 10]).last == some(true)
+
+test retry_large = catch retry_after(new_bucket(5, 1, 0), 0, 6) == 0
+| TooLarge{n, capacity} => n == 6 and capacity == 5
+| _ => false
+
+test retry_now = retry_after(new_bucket(5, 1, 0), 0, 5) == 0
+
+test retry_skew = catch retry_after(new_bucket(5, 1, 5), 1, 1) == 0
+| ClockSkew{last, now} => last == 5 and now == 1
+| _ => false
+
+test retry_wait = retry_after(take(new_bucket(5, 2, 0), 0, 5).1, 0, 3) == 2
+
+test run_skew = catch run_requests(new_window(3, 10), [10, 5]) == []
+| ClockSkew{last, now} => last == 10 and now == 5
+| _ => false
+
+test take_cap = take(new_bucket(5, 2, 0), 100, 1).1.tokens == 4
+
+test take_denied = take(new_bucket(2, 1, 0), 0, 3) == (false, new_bucket(2, 1, 0))
+
+test take_ok = take(new_bucket(5, 1, 0), 0, 2).0 and take(new_bucket(5, 1, 0), 0, 2).1.tokens == 3
+
+test take_refill = take(take(new_bucket(5, 1, 0), 0, 5).1, 2, 1).1.tokens == 1
+
+test take_skew = catch take(new_bucket(5, 1, 5), 4, 1) == (true, new_bucket(5, 1, 5))
+| ClockSkew{last, now} => last == 5 and now == 4
+| _ => false
+
+test window_limit = run_requests(new_window(3, 10), [0, 1, 2, 3, 12]) == [true, true, true, false, true]
+
+test window_skew = catch allow(Window{limit: 3, size: 10, start: 5, count: 0}, 4) == (true, new_window(3, 10))
+| ClockSkew{last, now} => last == 5 and now == 4
+| _ => false

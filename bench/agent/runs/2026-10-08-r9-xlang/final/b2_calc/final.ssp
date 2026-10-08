@@ -1,0 +1,157 @@
+type CalcErr = BadChar{ch: Str} | DivByZero | BadSyntax
+
+type Tok = Num{v: Int} | Op{c: Str}
+
+fn atom_op(toks: List[Tok], i: Int, c: Str) -> (Int, Int) ! fail[CalcErr], div
+= if c == "-" then do
+    (v, j) = parse_atom(toks, i + 1)
+    (-v, j)
+  else if c == "(" then do
+      (v, j) = parse_expr(toks, i + 1)
+      if not op_at(toks, j, ")") then raise BadSyntax
+      (v, j + 1)
+    else raise BadSyntax
+
+fn atom_tok(toks: List[Tok], i: Int, t: Tok) -> (Int, Int) ! fail[CalcErr], div
+= match t
+| Num{v} => (v, i + 1)
+| Op{c} => atom_op(toks, i, c)
+
+fn calc(s: Str) -> Int ! fail[CalcErr], div
+= do
+  toks = tokenize(s)
+  (v, j) = parse_expr(toks, 0)
+  if j != toks.len then raise BadSyntax
+  v
+
+fn is_digit(ch: Str) -> Bool
+= "0123456789".contains(ch)
+
+fn main() -> Unit ! log, div
+= log(show_result("12 + 30 - 2"))
+
+fn op_at(toks: List[Tok], i: Int, c: Str) -> Bool
+= match toks.get(i)
+| none => false
+| some(t) => t == Op{c: c}
+
+fn parse_atom(toks: List[Tok], i: Int) -> (Int, Int) ! fail[CalcErr], div
+= match toks.get(i)
+| none => raise BadSyntax
+| some(t) => atom_tok(toks, i, t)
+
+fn parse_expr(toks: List[Tok], i: Int) -> (Int, Int) ! fail[CalcErr], div
+= do
+  (v0, j0) = parse_term(toks, i)
+  var v = v0
+  var j = j0
+  while op_at(toks, j, "+") or op_at(toks, j, "-")
+    (r, k) = parse_term(toks, j + 1)
+    v := if op_at(toks, j, "+") then v + r else v - r
+    j := k
+  (v, j)
+
+fn parse_term(toks: List[Tok], i: Int) -> (Int, Int) ! fail[CalcErr], div
+= do
+  (v0, j0) = parse_atom(toks, i)
+  var v = v0
+  var j = j0
+  while op_at(toks, j, "*") or op_at(toks, j, "/")
+    (r, k) = parse_atom(toks, j + 1)
+    if op_at(toks, j, "/") and r == 0 then raise DivByZero
+    v := if op_at(toks, j, "*") then v * r else v / r
+    j := k
+  (v, j)
+
+fn show_result(s: Str) -> Str ! div
+= catch "{s} = {calc(s)}"
+| BadChar{ch} => "{s} = error: bad character {ch}"
+| DivByZero => "{s} = error: division by zero"
+| BadSyntax => "{s} = error: syntax"
+
+fn tokenize(s: Str) -> List[Tok] ! fail[CalcErr]
+= do
+  var toks = []
+  var num = ""
+  for ch in s.chars
+    if is_digit(ch) then num := num + ch else do
+      if not num.is_empty then do
+        toks := toks.push(Num{v: num.to_int.or(0)})
+        num := ""
+      if "+-*/()".contains(ch) then toks := toks.push(Op{c: ch}) else if ch != " " then raise BadChar{ch: ch}
+  if not num.is_empty then toks := toks.push(Num{v: num.to_int.or(0)})
+  toks
+
+test adds = catch calc("1 + 2 + 3") == 6
+| _ => false
+
+test bad_char = catch calc("2 $ 3") == 0
+| BadChar{ch} => ch == "$"
+
+test div_trunc = catch calc("7 / 2") == 3
+| _ => false
+
+test div_trunc_neg = catch calc("-7 / 2") == -3
+| _ => false
+
+test div_zero = catch calc("1 / 0") == 0
+| DivByZero => true
+| _ => false
+
+test left_assoc = catch calc("100 / 5 / 2 - 3 - 2") == 5
+| _ => false
+
+test nested_parens = catch calc("((2 + 3) * (4 - 1))") == 15
+| _ => false
+
+test parens = catch calc("(1 + 2) * 3") == 9
+| _ => false
+
+test prec = catch calc("2 + 3 * 4") == 14
+| _ => false
+
+test prec2 = catch calc("2 * 3 + 4 * 5 - 6 / 2") == 23
+| _ => false
+
+test shown = show_result("7 - 2") == "7 - 2 = 5"
+
+test shown_div = show_result("1 / 0") == "1 / 0 = error: division by zero"
+
+test shown_syntax = show_result("1 +") == "1 + = error: syntax"
+
+test subtracts = catch calc("10 - 4 - 3") == 3
+| _ => false
+
+test syn_close = catch calc("1 + 2)") == 0
+| BadSyntax => true
+| _ => false
+
+test syn_empty = catch calc("   ") == 0
+| BadSyntax => true
+| _ => false
+
+test syn_empty_parens = catch calc("()") == 0
+| BadSyntax => true
+| _ => false
+
+test syn_lead_op = catch calc("* 2") == 0
+| BadSyntax => true
+| _ => false
+
+test syn_missing = catch calc("1 +") == 0
+| BadSyntax => true
+| _ => false
+
+test syn_open = catch calc("(1 + 2") == 0
+| BadSyntax => true
+| _ => false
+
+test syn_two_nums = catch calc("1 2") == 0
+| BadSyntax => true
+| _ => false
+
+test unary = catch calc("2 * -3 + -(1 + 2)") == -9
+| _ => false
+
+test unary_start = catch calc("-3") == -3
+| _ => false

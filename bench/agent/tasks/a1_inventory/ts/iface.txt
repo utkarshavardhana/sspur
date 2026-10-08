@@ -1,0 +1,1 @@
+export function removeStock(inv: readonly Item[], sku: string, n: number): Item[]; export class DuplicateSku extends InvErr, with readonly sku: string; export function addItem(inv: readonly Item[], item: Item): Item[]

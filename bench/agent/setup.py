@@ -1,14 +1,20 @@
 """Create fresh work directories and print one agent prompt per (language, task).
 
-  python3 setup.py <work_root> [--v1] [--r7] [--tmo] [--new] [--b]   -> <work_root>/{sspur,python}/<task>/ and <work_root>/prompts.json
+  python3 setup.py <work_root> [--v1] [--r7] [--tmo] [--new] [--b] [--langs=sspur,python,ts,go]
+      -> <work_root>/<lang>/<task>/ and <work_root>/prompts.json
 
 --v1 uses the SSPUR instructions of the first run (q + apply tx.json); the default uses `edit`.
 --new sets up only the tasks marked "new" (a9, outside the 8-task comparison).
 --b sets up only the independently specified tasks (b1 to b8, "set": "b").
 --r7 keeps the first step of runs 2 to 7 (`./sspur spec && ./sspur src`) instead of `./sspur start` (run 8 on).
+--langs (run 9 on) picks the languages; the default is sspur,python. ts and go are the TypeScript
+       and Go ports (tasks/<id>/ts, tasks/<id>/go, xlang/xlang.py).
 --tmo (run 4 on) runs ./sspur and pytest under a 300 s timeout ($TMO, default ~/code/sspur-tools/tmo).
 """
 import json, os, shutil, subprocess, sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "xlang"))
+import xlang
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SSPUR = os.path.abspath(os.environ.get("SSPUR", os.path.join(HERE, "../../target/release/sspur")))
@@ -43,17 +49,39 @@ PY_INTRO = """You are working on a small Python 3.9 codebase. Working directory:
 
 - All code is in app.py, with its tests at the bottom. Run them with `cd {dir} && LC_ALL=en_US.UTF-8 python3 -m pytest -q app.py`."""
 
+TS_INTRO = """You are working on a small TypeScript codebase (Node 20, strict tsc). Working directory: {dir}
 
-def main(root, v1=False, tmo=False, new=False, b=False, r7=False):
+- All code is in app.ts, with its tests in app.test.ts (node:test). Type-check and run them with `cd {dir} && npx tsc && node --test --test-reporter=dot dist/`.
+- The task text writes names in snake_case; in the code they are camelCase (total_value is totalValue)."""
+
+GO_INTRO = """You are working on a small Go codebase (package main). Working directory: {dir}
+
+- All code is in app.go, with its tests in app_test.go. Run them with `cd {dir} && go test`.
+- The task text writes names in snake_case; in the code they are camelCase (total_value is totalValue). Where it says raise E, return an error of type *E."""
+
+
+def main(root, v1=False, tmo=False, new=False, b=False, r7=False, langs=("sspur", "python")):
     tasks = [t for t in json.load(open(os.path.join(HERE, "tasks.json"))) if t.get("new", False) == new and (t.get("set", "a") == "b") == b]
     prompts = []
-    for lang in ("sspur", "python"):
+    for lang in langs:
         for t in tasks:
             d = os.path.abspath(os.path.join(root, lang, t["id"]))
             shutil.rmtree(d, ignore_errors=True)
             os.makedirs(d)
             src = os.path.join(HERE, "tasks", t["id"], "start.ssp" if lang == "sspur" else "start.py")
-            if lang == "sspur":
+            if lang == "ts":
+                p = os.path.join(HERE, "tasks", t["id"], "ts")
+                xlang.write_ts_dir(d, open(os.path.join(p, "start.ts")).read(), open(os.path.join(p, "start.test.ts")).read())
+                intro = TS_INTRO.format(dir=d)
+                if tmo:
+                    intro = intro.replace("&& npx tsc && node", f"&& {TMO} 300 npx tsc && {TMO} 300 node")
+            elif lang == "go":
+                p = os.path.join(HERE, "tasks", t["id"], "go")
+                xlang.write_go_dir(d, open(os.path.join(p, "start.go")).read(), open(os.path.join(p, "start_test.go")).read())
+                intro = GO_INTRO.format(dir=d)
+                if tmo:
+                    intro = intro.replace("&& go test`", f"&& {TMO} 300 go test`")
+            elif lang == "sspur":
                 shutil.copy(src, os.path.join(d, "start.ssp"))
                 subprocess.run([SSPUR, "init", "start.ssp"], cwd=d, check=True, capture_output=True)
                 os.remove(os.path.join(d, "start.ssp"))
@@ -78,4 +106,5 @@ def main(root, v1=False, tmo=False, new=False, b=False, r7=False):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], "--v1" in sys.argv[2:], "--tmo" in sys.argv[2:], "--new" in sys.argv[2:], "--b" in sys.argv[2:], "--r7" in sys.argv[2:])
+    langs = next((a.split("=", 1)[1].split(",") for a in sys.argv[2:] if a.startswith("--langs=")), ["sspur", "python"])
+    main(sys.argv[1], "--v1" in sys.argv[2:], "--tmo" in sys.argv[2:], "--new" in sys.argv[2:], "--b" in sys.argv[2:], "--r7" in sys.argv[2:], langs)

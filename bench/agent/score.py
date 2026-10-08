@@ -1,9 +1,12 @@
 """Score agent runs against hidden tests.
 
   python3 score.py ref             validate: every ref.* passes its hidden tests, every start.* fails some
-  python3 score.py run <run_dir>   score <run_dir>/{sspur,python}/<task>/ (exports .sspur stores to final.ssp)
+  python3 score.py run <run_dir>   score <run_dir>/{sspur,python,ts,go}/<task>/ (exports .sspur stores to final.ssp)
 """
 import json, os, re, shutil, subprocess, sys, tempfile
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "xlang"))
+import xlang
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SSPUR = os.environ.get("SSPUR", os.path.join(HERE, "../../target/release/sspur"))
@@ -61,6 +64,7 @@ def ref():
             for kind in ("ref", "start"):
                 ok, n, msg = fn(open(os.path.join(d, f"{kind}.{ext}")).read(), t)
                 rows.append((lang, f"{t}:{kind}", ok, n, msg))
+    rows += xlang.ref_rows(tasks())
     show(rows)
     bad = [r for r in rows if (r[1].endswith(":ref") and r[2] != r[3]) or (r[1].endswith(":start") and r[2] == r[3])]
     print("\nvalid" if not bad else f"\nINVALID: {[r[1] for r in bad]}")
@@ -68,7 +72,7 @@ def ref():
 
 def run(run_dir):
     rows = []
-    for lang in ("sspur", "python"):
+    for lang in ("sspur", "python", "ts", "go"):
         for t in tasks():
             d = os.path.join(run_dir, lang, t)
             if not os.path.isdir(d):
@@ -80,12 +84,16 @@ def run(run_dir):
                     log = subprocess.run([SSPUR, "log"], cwd=d, capture_output=True, text=True).stdout
                     open(os.path.join(d, "store_log.txt"), "w").write(log)
                 ok, n, msg = score_sspur(open(os.path.join(d, "final.ssp")).read(), t)
+            elif lang == "ts":
+                ok, n, msg = xlang.score_ts(open(os.path.join(d, "app.ts")).read(), t)
+            elif lang == "go":
+                ok, n, msg = xlang.score_go(open(os.path.join(d, "app.go")).read(), t)
             else:
                 ok, n, msg = score_python(open(os.path.join(d, "app.py")).read(), t)
             rows.append((lang, t, ok, n, msg))
     show(rows)
     json.dump([dict(lang=l, task=t, passed=ok, total=n, ok=ok == n, msg=m) for l, t, ok, n, m in rows], open(os.path.join(run_dir, "scores.json"), "w"), indent=1)
-    for lang in ("sspur", "python"):
+    for lang in ("sspur", "python", "ts", "go"):
         rs = [r for r in rows if r[0] == lang]
         if rs:
             print(f"{lang}: {sum(r[2] == r[3] for r in rs)}/{len(rs)} tasks fully pass, {sum(r[2] for r in rs)}/{sum(r[3] for r in rs)} hidden tests")

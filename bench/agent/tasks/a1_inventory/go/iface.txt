@@ -1,0 +1,1 @@
+func removeStock(inv []Item, sku string, n int) ([]Item, error); type DuplicateSku struct{ sku string }, returned as *DuplicateSku, which implements InvErr; func addItem(inv []Item, item Item) ([]Item, error)

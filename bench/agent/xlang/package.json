@@ -1,0 +1,8 @@
+{
+ "private": true,
+ "description": "TypeScript toolchain for the cross-language agent bench",
+ "dependencies": {
+  "@types/node": "^20.19.43",
+  "typescript": "^5.9.3"
+ }
+}

@@ -1,8 +1,10 @@
-# Agent token benchmark: SSPUR ops vs Python
+# Agent token benchmark: SSPUR ops vs Python, TypeScript and Go
 
-This measures the Phase 3 exit criterion: an agent completes multi-step feature tasks using SSPUR (CLI ops only) with fewer total tokens than the same agent using Python.
+This measures the Phase 3 exit criterion: an agent completes multi-step feature tasks using SSPUR (CLI ops only) with fewer total tokens than the same agent using Python. Run 9 adds TypeScript and Go as controls, because beating Python alone does not show that the language is the reason.
 
-**Latest result (run 8, 2026-10-06): SSPUR now wins the large codebase too, at 0.82x of Python's tokens over two runs (was 1.04x), after `sspur start NAME...`, one command that prints the spec and `q pack` of the named definitions.** Sonnet solves it in 4 calls against Python's 5 and still passes 10/10. The spec is 1,631 tokens (was 1,798). a1, a4 and a7 were rerun with `sspur start` in place of `spec && src`: still 3 calls each, all hidden tests pass, totals within 1% (0.76x, 0.60x, 0.61x). The 8-task numbers are otherwise unchanged (Sonnet 0.70x, Opus 0.76x, Haiku 0.83x). Details in [Results, run 8](#results-run-8).
+**Latest result (run 9, 2026-10-08): the token advantage over Python does not transfer to TypeScript or Go. On the same 17 cells, Sonnet 5.5 used 0.83x Python's tokens, 1.23x TypeScript's and 1.11x Go's.** All four languages passed every hidden test (236 small-task tests plus 10 on the large codebase). SSPUR wins the large codebase against all three (0.60x Python, 0.74x TypeScript, 0.35x Go, in 3 calls), and loses the small tasks to the two statically typed controls (1.26x and 1.22x over the 16 small tasks). Details in [Results, run 9](#results-run-9).
+
+**Run 8 (2026-10-06): SSPUR now wins the large codebase too, at 0.82x of Python's tokens over two runs (was 1.04x), after `sspur start NAME...`, one command that prints the spec and `q pack` of the named definitions.** Sonnet solves it in 4 calls against Python's 5 and still passes 10/10. The spec is 1,631 tokens (was 1,798). a1, a4 and a7 were rerun with `sspur start` in place of `spec && src`: still 3 calls each, all hidden tests pass, totals within 1% (0.76x, 0.60x, 0.61x). The 8-task numbers are otherwise unchanged (Sonnet 0.70x, Opus 0.76x, Haiku 0.83x). Details in [Results, run 8](#results-run-8).
 
 **Run 7 (2026-10-06): the large codebase is at 1.04x over two runs (was 1.33x), after `q pack A,B,C` and a cap on `q find` and `q grep` text output.** Sonnet solved it in 5 calls, the same as Python. Details in [Results, run 7](#results-run-7).
 
@@ -30,6 +32,7 @@ This measures the Phase 3 exit criterion: an agent completes multi-step feature 
 | 6, Haiku 4.5 | fix hints, `q find|grep|body`, 3 SSPUR cells rerun | 95/95 / 84/95 | 71 / 93 | **0.83x** (median 0.88x) |
 | 7, Sonnet 5.5, s1_shop only | `q pack A,B,C`, capped `find` and `grep` text, 2 runs | 10/10 / 10/10 | 5 / 5 | **1.04x** (1.33x before) |
 | 8, Sonnet 5.5, s1_shop only | `sspur start NAME...`, spec 1,631 tokens, 2 runs | 10/10 / 10/10 | 4 / 5 | **0.82x** (1.04x before) |
+| 9, Sonnet 5.5, 16 tasks + s1_shop | all SSPUR cells rerun at `aa61bf4`; TypeScript and Go added | 246/246 in each of the 4 languages | 70 / 88 | **0.83x** vs Python, **1.23x** vs TypeScript, **1.11x** vs Go |
 
 Python's side was identical in all runs; its totals were 1.27M, 1.20M, 1.48M and 1.22M. Against Python's cheapest run, SSPUR run 3 is 0.73x and run 4 after the fix is 0.71x.
 
@@ -54,7 +57,9 @@ An optional 9th task (`a9_events`: regex, JSON encode and decode, `Res` handling
 
 Run 5 added 8 tasks from neutral sources, b1 to b8 (`"set": "b"` in `tasks.json`, set up with `setup.py --b`, 141 hidden tests per language), and one large generated codebase, `tasks/s1_shop/` (its own `gen.py`, `setup_scale.py` and `score_scale.py`). Both are described under [Results, run 5](#results-run-5).
 
-Hidden tests (`tasks/<id>/hidden.ssp`, `hidden.py`, 95 per language for a1 to a8, 17 more for a9) are equivalent across languages. a9 is marked `"new": true` in `tasks.json`; `setup.py` skips it unless `--new` is given, so the 8-task totals stay comparable. `ref.ssp` and `ref.py` are the author's solutions. `python3 score.py ref` checks that every reference passes its hidden tests and every starting codebase fails them.
+Run 9 added TypeScript and Go versions of all 16 small tasks (`tasks/<id>/ts/{start.ts, start.test.ts, ref.ts, hidden.test.ts, iface.txt}` and `tasks/<id>/go/{start.go, start_test.go, ref.go, hidden_test.go, iface.txt}`) and of the large codebase (`tasks/s1_shop/gen_xlang.py`, `hidden.test.ts`, `hidden_test.go`). Each port keeps the task semantics and checks the same behaviors, in that language's idioms: exported functions and `throw` with an error-class hierarchy in TypeScript, `(T, error)` with pointer error structs and a marker interface in Go. The task text is the same in all four languages; the per-language interface line and one prompt line say that names are camelCase (and, in Go, that "raise E" means return an error of type `*E`). `python3 score.py ref` checks all four languages.
+
+Hidden tests (`tasks/<id>/hidden.ssp`, `hidden.py`, `ts/hidden.test.ts`, `go/hidden_test.go`, 95 per language for a1 to a8, 141 for b1 to b8, 17 more for a9) are equivalent across languages. a9 is marked `"new": true` in `tasks.json`; `setup.py` skips it unless `--new` is given, so the 8-task totals stay comparable. a9 has no TypeScript or Go port. `ref.*` are the author's solutions. `python3 score.py ref` checks that every reference passes its hidden tests and every starting codebase fails them.
 
 ## Method
 
@@ -63,11 +68,13 @@ Hidden tests (`tasks/<id>/hidden.ssp`, `hidden.py`, 95 per language for a1 to a8
   - SSPUR (runs 2 and 3): the starting program is imported into a `.sspur/` store and the `.ssp` file is deleted. The agent is told to start with `./sspur spec && ./sspur src` (the compact spec, `docs/agent-spec.md`, and the whole codebase as source) and to change code only with `./sspur edit`; `q`, `test`, and `check` are also allowed. Direct access to `.sspur/`, `.ssp` files, and `init` are forbidden.
   - SSPUR (run 1): the starting program is imported into a `.sspur/` store with `sspur init`, and the `.ssp` file is deleted. The agent must read `./sspur spec` (the reference, `docs/07-reference-v0.md`), then read code only with `./sspur q` and change it only with `./sspur apply tx.json`. Direct access to `.sspur/`, `.ssp` files, and `init` are forbidden. No agent broke these rules (checked in the transcripts). The MCP server was not used: the harness can't attach a new MCP server to a subagent, and the CLI exposes the same query and transaction surface.
   - Python: the agent edits `app.py` with any tool and runs pytest. Python 3.9.
-- Both get the same task text and the same per-language interface line (exact names and signatures the hidden tests call). `prompts.json` in the run directory has every prompt.
+  - TypeScript (run 9 on, `setup.py --langs=sspur,ts,go`): the agent edits `app.ts` and `app.test.ts` with any tool and runs `npx tsc && node --test --test-reporter=dot dist/`. Node 20.20, TypeScript 5.9 in `bench/agent/xlang/node_modules` (symlinked into each work directory), `strict: true`.
+  - Go (run 9 on): the agent edits `app.go` and `app_test.go` with any tool and runs `go test`. Go 1.27, one `package main` per work directory, `GOPROXY=off`.
+- All get the same task text and the same per-language interface line (exact names and signatures the hidden tests call). `prompts.json` in the run directory has every prompt.
 - Each (language, task) pair was solved by one fresh Claude Code `general-purpose` subagent on `claude-sonnet-5-5`, with no retries and no help. Runs 1 to 3 launched all 16 in parallel; run 4 ran them one at a time (a memory limit on the host).
 - Compiler binary frozen before each run: `60d188d` (run 1), `34fddc3` (run 2), `9efe082` (run 3), `a8a9de4` (run 4). Run 4's spec fixes were rebuilt from `86d3611` (8 tasks) and `69e0d69` (a9); only `docs/agent-spec.md`, which the binary embeds, changed.
 - Run 4 differences in the setup, all outside the language: `setup.py --tmo` runs `./sspur` (a wrapper script instead of a symlink) and pytest under a 300 s timeout, which adds a short clause to each prompt. The subagents inherited a worktree sandbox that refused the Edit and Write tools outside the repository checkout, so the work directories were untracked directories inside it instead of `/tmp`; every transcript was checked, and no agent touched a path outside its own directory. Subagents now finish with a hand-back tool call inside their last API call, which adds no calls. A no-op subagent now reads 26,090 tokens; `net` keeps the old 25,750 so it stays comparable.
-- `score.py run <dir>` exports each store to `final.ssp`, appends the hidden tests, and runs them. A task passes only if every hidden test passes.
+- `score.py run <dir>` exports each store to `final.ssp`, appends the hidden tests, and runs them. A task passes only if every hidden test passes. For TypeScript and Go (`xlang/xlang.py`) only the agent's `app.ts` or `app.go` is copied next to the hidden tests, so the agent's own tests never count; a typecheck or compile failure with the hidden tests scores 0, as a SSPUR `check` error does. Each Go hidden test runs in its own process, so a panic fails only that test.
 - `tokens.py` reads each subagent's transcript (JSONL):
   - **input** is exact: the API usage of every call (`input + cache_creation + cache_read`).
   - **output** is estimated: transcripts keep the usage snapshot from the start of the stream (output 16 to 75), so output is re-counted from the recorded content with tiktoken `cl100k_base` (about 15% off Claude's tokenizer). Output is under 1% of the total.
@@ -86,6 +93,122 @@ All changes are in the CLI and the spec. The language is unchanged.
 - The MCP server gained `sspur_edit`, and its tools return the same compact text (`json: true` for the old format).
 
 Run 2 used a heredoc (`./sspur edit --test <<'EOF'`). The sandbox refused that command in 6 of 8 runs: it treats `{a, b}` inside the heredoc (any record literal with two fields) as possible brace expansion and won't verify the command. Each refusal cost a retry plus a Write call to put the input in a file. Run 3's spec recommends one single-quoted `-e` argument instead, which passed in 7 of 8 runs (a8 was refused once, apparently because of a `#` inside a string).
+
+## Results, run 9
+
+Runs 1 to 8 compare SSPUR with Python only. Python is dynamically typed, has no compile step and (in these tasks) no explicit error types, so a win over Python can be a win over Python's verbosity and its agent loop rather than over "other languages". Run 9 adds two controls that the model also knows well and that are statically typed: TypeScript (Node 20, strict `tsc`, `node:test`) and Go (`go test`).
+
+### Setup
+
+- Ports: all 16 small tasks and the large codebase, as described under [Tasks](#tasks). `score.py ref` passes in all four languages: every reference solution passes its hidden tests, every starting codebase fails them (66 rows).
+- Run: `runs/2026-10-08-r9-xlang/`, compiler frozen at `aa61bf4` (`target/sspur-frozen-aa61bf4`), `--tmo` prompts, one fresh Sonnet 5.5 `general-purpose` subagent per cell, strictly one at a time, no retries.
+- **All SSPUR cells were rerun**, because the SSPUR harness changed after run 8: `4d05484` makes `q pack` mark a complete caller list. The spec is byte-identical to run 8's (1,631 tokens). So the 17 SSPUR cells here are new measurements, not run 4 to 8 numbers.
+- Python cells are reused unchanged, since the Python harness has not changed: run 4 after its spec fix for a1 to a8, run 5 for b1 to b8 (including run 5's b8 cell), run 5 for s1_shop.
+- `net` uses 25,750 per call for all four languages, as before. A no-op Sonnet subagent measured 26,118 tokens in this session, so `net` is about 370 per call pessimistic for every language equally.
+- Exclusions: the SSPUR b6_adventure cell was aborted twice by the API with "Output blocked by content filtering policy" right after `sspur start` (nothing edited, store log confirmed unchanged); the third attempt in the same untouched directory is the one counted. This is the same failure run 5 hit on the same cell. `excluded.txt` lists both.
+
+### Result
+
+Each cell is "API calls / total tokens".
+
+| Task | SSPUR | Python | TypeScript | Go | SSPUR/Py | SSPUR/TS | SSPUR/Go |
+|---|---|---|---|---|---|---|---|
+| a1_inventory | 3 / 96,212 | 4 / 127,502 | 4 / 127,407 | 3 / 93,453 | 0.75x | 0.76x | 1.03x |
+| a2_wordstats | 3 / 95,967 | 3 / 91,171 | 4 / 125,943 | 3 / 94,190 | 1.05x | 0.76x | 1.02x |
+| a3_bank | 3 / 98,283 | 5 / 163,080 | 3 / 94,390 | 5 / 172,940 | 0.60x | 1.04x | 0.57x |
+| a4_calc | 3 / 98,128 | 5 / 162,871 | 3 / 94,322 | 4 / 136,461 | 0.60x | 1.04x | 0.72x |
+| a5_orders | 3 / 96,215 | 7 / 230,852 | 4 / 127,797 | 5 / 160,732 | 0.42x | 0.75x | 0.60x |
+| a6_todo | 3 / 96,909 | 5 / 160,083 | 3 / 93,219 | 3 / 94,413 | 0.61x | 1.04x | 1.03x |
+| a7_grades | 3 / 95,815 | 5 / 157,553 | 3 / 92,057 | 4 / 130,585 | 0.61x | 1.04x | 0.73x |
+| a8_config | 8 / 292,709 | 4 / 128,538 | 5 / 165,867 | 5 / 168,540 | 2.28x | 1.76x | 1.74x |
+| b1_lru | 4 / 137,402 | 6 / 197,563 | 5 / 170,590 | 3 / 96,279 | 0.70x | 0.81x | 1.43x |
+| b2_calc | 4 / 139,320 | 5 / 163,264 | 3 / 94,869 | 3 / 96,157 | 0.85x | 1.47x | 1.45x |
+| b3_payroll | 8 / 297,310 | 6 / 198,721 | 3 / 94,117 | 3 / 95,601 | 1.50x | 3.16x | 3.11x |
+| b4_ratelimit | 4 / 137,471 | 7 / 242,533 | 3 / 95,438 | 3 / 96,989 | 0.57x | 1.44x | 1.42x |
+| b5_deps | 5 / 180,773 | 5 / 163,507 | 3 / 94,813 | 3 / 96,245 | 1.11x | 1.91x | 1.88x |
+| b6_adventure | 6 / 212,054 | 7 / 247,687 | 3 / 95,420 | 5 / 168,218 | 0.86x | 2.22x | 1.26x |
+| b7_ledger | 4 / 137,809 | 5 / 168,589 | 3 / 95,813 | 3 / 96,839 | 0.82x | 1.44x | 1.42x |
+| b8_merge | 3 / 99,425 | 4 / 130,148 | 5 / 171,756 | 3 / 96,086 | 0.76x | 0.58x | 1.03x |
+| s1_shop | 3 / 97,465 | 5 / 162,362 | 4 / 131,251 | 8 / 277,404 | 0.60x | 0.74x | 0.35x |
+| **Total** | 70 / 2,409,267 | 88 / 2,896,024 | 61 / 1,965,069 | 66 / 2,171,132 | **0.83x** | **1.23x** | **1.11x** |
+
+Every cell passed every hidden test: **246/246 in each of the four languages** (95 for a1 to a8, 141 for b1 to b8, 10 for s1_shop). `scores-a.json` and `scores-b.json` have the per-cell counts.
+
+Ratios:
+
+| Comparison | All 17 cells, total | Median per cell | 16 small tasks, total | 16 small tasks, median | SSPUR cheaper on |
+|---|---|---|---|---|---|
+| SSPUR / Python | **0.83x** | 0.75x | **0.85x** | 0.76x | 13 of 17 |
+| SSPUR / TypeScript | **1.23x** | 1.04x | **1.26x** | 1.04x | 6 of 17 |
+| SSPUR / Go | **1.11x** | 1.03x | **1.22x** | 1.15x | 5 of 17 |
+
+Removing the harness's per-call context (`net`) and counting only what the agents read and wrote (tool I/O) does not change the direction:
+
+| | SSPUR | Python | TypeScript | Go |
+|---|---|---|---|---|
+| net (total minus 25,750 per call) | 606,767 | 630,024 | 394,319 | 471,632 |
+| tool I/O (cl100k, read plus written) | 67,584 | 57,038 | 43,104 | 56,223 |
+| SSPUR / language, net | 1.00x | 0.96x | 1.54x | 1.29x |
+| SSPUR / language, tool I/O | 1.00x | 1.18x | 1.57x | 1.20x |
+
+So **the Phase 3 criterion as written (versus Python) still holds, and the broader reading of it does not**: against two statically typed languages the model already knows, SSPUR costs more, not less, on these small tasks. The one place SSPUR is ahead of all three is the 1,117-definition codebase.
+
+### Source size per language
+
+cl100k tokens of each reference solution plus its visible tests (the SSPUR and Python references hold both in one file, so the TypeScript and Go columns add `start.test.ts` and `start_test.go`). `xlang/sizes.py` prints this table.
+
+| Task | SSPUR | Python | TypeScript | Go |
+|---|---|---|---|---|
+| a1_inventory | 639 | 713 | 787 | 997 |
+| a2_wordstats | 407 | 434 | 533 | 711 |
+| a3_bank | 853 | 941 | 1,013 | 1,329 |
+| a4_calc | 964 | 975 | 1,078 | 1,389 |
+| a5_orders | 487 | 495 | 612 | 576 |
+| a6_todo | 649 | 733 | 799 | 1,064 |
+| a7_grades | 479 | 486 | 659 | 800 |
+| a8_config | 471 | 604 | 681 | 871 |
+| b1_lru | 666 | 717 | 692 | 874 |
+| b2_calc | 1,042 | 1,056 | 1,157 | 1,439 |
+| b3_payroll | 708 | 780 | 898 | 1,179 |
+| b4_ratelimit | 934 | 977 | 874 | 1,099 |
+| b5_deps | 839 | 893 | 878 | 1,309 |
+| b6_adventure | 1,023 | 1,050 | 1,178 | 1,334 |
+| b7_ledger | 984 | 1,113 | 1,151 | 1,421 |
+| b8_merge | 942 | 823 | 755 | 1,134 |
+| **Total** | **12,087** | **12,790** | **13,745** | **17,526** |
+| SSPUR / language | 1.00x | 0.95x | 0.88x | 0.69x |
+| median per task | 1.00x | 0.94x | 0.85x | 0.67x |
+
+The large codebase (start, not the reference): SSPUR 30,833, Python 35,788, TypeScript 39,274, Go 41,842.
+
+So SSPUR source is the smallest of the four, by 5% over Python, 12% over TypeScript and 31% over Go. That is the static size of the code, and it is 400 to 1,400 tokens per task: far too small to decide a run where one API call costs about 30,000 tokens of context. Source size and agent-loop cost are nearly independent here.
+
+### Where each language costs tokens, from the transcripts
+
+Friction counted over the 17 cells of each language (`xlang/friction.py` counts sandbox refusals, rejected SSPUR edits, and test or typecheck runs that reported a failure):
+
+| | SSPUR | TypeScript | Go |
+|---|---|---|---|
+| Commands the sandbox refused to run | 4 | 3 | 6 |
+| Rejected edits (nothing applied) | 7 | n/a | n/a |
+| Test or typecheck runs that failed | 5 | 0 | 5 |
+
+- **TypeScript is the cheapest because nothing went wrong.** Not one of the 17 TypeScript cells had a failing typecheck or test run, and 10 took the minimum 3 calls: read the file, one or two edits, one combined `tsc && node --test`, done. Sonnet writes idiomatic strict TypeScript with no reference at all, so it reaches SSPUR's best case without SSPUR's 1.6k-token spec. Its 1,965k total is the lowest of the four, and its tool I/O (43k) the smallest.
+- **Go pays for error plumbing and for shell friction, not for syntax.** Go also had no compile rejections from unfamiliar syntax, and 10 cells at 3 calls, but it lost calls in 7 cells: a5_orders (2 failing test runs) and b6_adventure (3) to logic and ripple errors after signatures changed, and a3_bank, a4_calc, a7_grades, a8_config and s1_shop to refused shell commands. Go also writes the most code per cell after Python (37,968 written tokens against SSPUR's 29,036), which follows from Go source being 1.45x the size of SSPUR's.
+- **SSPUR's 3-call path still works, and is still what wins when it happens.** 9 of 17 SSPUR cells took the minimum 3 calls (`start`, one `edit --test` with every definition and test, DONE) and passed everything. s1_shop took 3 calls for the first time, one fewer than run 8: `q pack` now says the caller list is complete, so the agent no longer spends a call re-checking the callers of `ship_fee`, which the run 8 write-up had predicted would save about that much (0.60x of Python against 0.82x).
+- **SSPUR's losses are concentrated in two cells**, a8_config (8 calls, 293k) and b3_payroll (8 calls, 297k). Together they are 590k of SSPUR's 2,409k. Both are the same pattern as earlier runs: the worktree sandbox refused the long single-quoted `edit -e '...'` command (2 refusals each), then the agent wrote the definitions to a file, and the first `edit --test FILE` was rejected for a method that does not exist (`Str.slice` in a8; `.get` on an `Opt` and `_` inside a nested call in b3). Each rejection costs a full call, and the refusals cost two more. Neither TypeScript nor Go can be rejected this way: their equivalent mistake is a compile error from the same call that already ran the tests.
+- **The spec is still a real cost, and it no longer buys fewer calls than the controls.** The 1,631-token spec enters the context on call 1 and is re-read by every later call: about 6.5k tokens over a 4-call cell. Against Python that was repaid by 1 to 4 calls saved. Against TypeScript and Go, Sonnet needs no reference at all and reaches the same 3 calls, so the spec is pure overhead on the small tasks.
+- **The large codebase is where the store pays off.** The agent ran `start tax_rate money ship_fee order_shipping warehouse_restock` and got back the spec, the counts per kind, and `q pack` of those five definitions with their types, tests and complete caller lists: 2,293 tokens, and it was everything the edit needed. Then one `edit --test` with all four changes and five new tests, accepted first time (187 tests passing), then DONE. TypeScript needed 4 calls: one grep over `shop` and `tests`, one call of targeted `sed -n`/`grep` on the four files it changes, one Python heredoc that patched them and then typechecked and tested, and one re-check. Go needed 8: the same two search calls, then two refused shell commands, one that failed on BSD `sed -i` syntax, a Write of a new `changes_test.go`, a grep to confirm, and `go test`. Go's 0.35x is therefore flattered by environment friction; on calls alone a fair Go run looks like 4 or 5, which would put SSPUR at about 0.55x to 0.65x of Go here, still ahead.
+- **Sensitivity.** Over the 9 cells where the sandbox refused nothing in any of the three languages run here, the picture is the same: SSPUR is 0.75x of Python (median 0.82x), 1.25x of TypeScript (median 1.44x) and 1.20x of Go (median 1.26x). `xlang/clean.py` prints this.
+
+### Caveats
+
+- One run per cell, 17 cells, one model. Python's own total has moved by up to 24% between identical runs, so treat any single ratio as about plus or minus 20%. The 1.23x and 1.11x against TypeScript and Go are inside that band of 1.0x, so the honest claim is "no advantage", not "a 23% penalty".
+- The two SSPUR outliers (a8, b3) are half of SSPUR's gap to TypeScript. They were not rerun, on purpose: rerunning only the cells that did badly is what earlier runs did, and it biases the total.
+- The ports were written by the same model family as the language and its tasks. Each port was checked by `score.py ref` (reference passes, start fails, starting visible tests pass), but a port can still be easier or harder than the original in ways that check cannot see.
+- TypeScript and Go got the camelCase and error-convention hints in their prompt; SSPUR and Python did not need them. That is one extra sentence of prompt, about 25 tokens per call.
+- The sandbox refuses long or compound shell commands, unevenly across languages (6 Go, 4 SSPUR, 3 TypeScript cells). It is harness friction, not language cost, and it is counted in the totals.
+- Go's `net` and tool I/O are measured with the same 25,750 per-call baseline as the others, which is right for Sonnet but was not re-measured per language (the harness context does not depend on the language).
 
 ## Results, run 8
 
@@ -590,7 +713,7 @@ These were hypotheses:
 - The SSPUR interface was revised between runs after reading run 1 and run 2 transcripts, while the Python side stayed fixed. The tasks, hidden tests, and Python prompt never changed, except that run 4 put the pytest command (and `./sspur`) under a timeout wrapper on both sides.
 - Totals include the Claude Code harness system prompt that every call re-reads. That overhead favors the side with fewer calls, which is a real cost for any agent using this harness. The net and tool I/O columns remove it. On those, SSPUR was 3.5x and 3.7x in run 1, 0.59x and 1.04x in run 3, and 0.76x and 1.27x in run 4 after the fix.
 - Output tokens are estimated with cl100k, so they're approximate. They don't affect the conclusion.
-- Python is a language the model already knows. SSPUR is learned from the reference in every run (214 lines in run 1, the 1.5k-token spec in runs 2 and 3, 1.8k in run 4). That cost is part of what the criterion measures.
+- Python is a language the model already knows. SSPUR is learned from the reference in every run (214 lines in run 1, the 1.5k-token spec in runs 2 and 3, 1.8k in run 4, 1.6k since run 8). That cost is part of what the criterion measures. Run 9 shows it is also what the result turns on: against TypeScript and Go, which the model knows just as well as Python and which take the same 3 calls when nothing goes wrong, SSPUR has no token advantage on these small tasks.
 - The tasks, references, and hidden tests were written by the language's designer (the same model family). The tasks were written before any agent run and weren't changed afterwards.
 - Two compiler bugs were found and fixed while writing the reference solutions, before the runs (commits `455851d`, `60d188d`): a checker stack overflow on field access of a value whose type is unknown, such as an undefined function, and missing `cmp_*_p` helpers that broke native `List.sort` on `Str`, `Int`, and `F64` and dumped a long clang error before falling back to the interpreter.
 
@@ -610,6 +733,16 @@ python3 bench/agent/tasks/s1_shop/score_scale.py ref
 python3 bench/agent/tasks/s1_shop/setup_scale.py /tmp/sspur-agent-s
 python3 bench/agent/tasks/s1_shop/score_scale.py ssp FINAL.ssp   # or: score_scale.py py WORK_DIR
 BASE=19100 python3 bench/agent/tokens.py agents.json tokens.json   # BASE = the model's no-op context, for the net column
+# run 9: TypeScript and Go
+(cd bench/agent/xlang && npm install typescript@5 @types/node@20)   # once, offline after that
+python3 bench/agent/xlang/xlang.py a1_inventory b1_lru              # validate ports: ref passes, start fails, visible tests pass
+python3 bench/agent/setup.py /tmp/sspur-agent-r9 --tmo --langs=sspur,ts,go
+python3 bench/agent/tasks/s1_shop/setup_scale.py /tmp/sspur-agent-r9s --langs=ts,go
+python3 bench/agent/xlang/record.py RUN_DIR ts/a1_inventory AGENT_ID   # one per finished cell
+python3 bench/agent/xlang/report4.py        # the four-language table and the ratios
+python3 bench/agent/xlang/sizes.py S1_GEN   # source size per language
+python3 bench/agent/xlang/friction.py RUN_DIR
+python3 bench/agent/xlang/trace.py RUN_DIR go/s1_shop   # per-call trace of one cell
 ```
 
 `tokens.py` needs `tiktoken`. Set `LC_ALL=en_US.UTF-8` if Python fails with a locale error.

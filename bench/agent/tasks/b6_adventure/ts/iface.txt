@@ -1,0 +1,1 @@
+interface Room { name; exits; items; readonly locked: readonly string[] } with locked as the 4th (last) field, and export function room(name: string, exits: readonly (readonly [string, string])[], items: readonly string[], locked: readonly string[]): Room; export function score(g: Game): number; Game, world, newGame, step, run and play keep their signatures

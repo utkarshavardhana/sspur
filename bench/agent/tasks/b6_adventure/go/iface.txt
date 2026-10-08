@@ -1,0 +1,1 @@
+type Room struct{ name string; exits []Exit; items []string; locked []string } with locked as the 4th (last) field; func score(g Game) int; Game, Exit, world, newGame, step, run and play keep their signatures (go is goDir in Go, since go is a keyword)

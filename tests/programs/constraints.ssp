@@ -1,0 +1,61 @@
+trait Score
+  fn score(x: Self) -> Int
+
+type Player = {name: Str, pts: Int}
+type Team = {members: List[Player]}
+
+impl Score for Player
+  fn score(p: Player) -> Int = p.pts
+
+impl Score for Team
+  fn score(t: Team) -> Int = t.members.map(_.score).sum
+
+fn max_of[T: Ord](xs: List[T]) -> Opt[T]
+  ex max_of([3, 9, 2]) == some(9)
+  ex max_of(["b", "a"]) == some("b")
+= xs.fold(none, (m, x) => match m
+  | none => some(x)
+  | some(y) => if x > y then some(x) else some(y))
+
+fn best[T: Score](xs: List[T]) -> Int
+  pre xs.len > 0
+= match max_of(xs.map(_.score))
+  | some(s) => s
+  | none => 0
+
+fn label[T: Eq + Show](a: T, b: T) -> Str
+= if a == b then "same {a.show}" else "{a.show}/{b.show}"
+
+fn all_shown[T: Show](xs: List[T]) -> Str
+= xs.map(x => "<{x.show}>").join("")
+
+fn each_score[T: Score, e](xs: List[T], f: Int -> Unit ! e) -> Unit ! e
+= do
+  for x in xs
+    f(x.score)
+  ()
+
+fn counted[T: Ord](xs: List[T], x: T) -> Int
+= xs.filter(_ == x).len
+
+fn show_it[T: Show](x: T) -> Str = x.show
+
+fn shout(n: Int) -> Unit ! log
+= log("score {n}")
+
+fn run_scores() -> Int ! log
+= do
+  each_score([Player{name: "a", pts: 2}], shout)
+  1
+
+test best_player = best([Player{name: "a", pts: 4}, Player{name: "b", pts: 9}]) == 9
+test best_team = best([Team{members: [Player{name: "a", pts: 4}, Player{name: "b", pts: 1}]}]) == 5
+test multiple_bounds = label(1, 1) == "same 1" and label("x", "y") == "x/y"
+test lambda_in_generic = all_shown([1, 2]) == "<1><2>"
+test as_value = [1, 2].map(show_it) == ["1", "2"]
+test method_sugar = [4, 7, 1].max_of == some(7)
+test empty_list_defaults = max_of([]) == none
+test nested = max_of([[1, 2], [1, 3]]) == some([1, 3])
+test tuples = max_of([(1, "b"), (1, "c")]) == some((1, "c"))
+test eq_bound = counted([1, 2, 1], 1) == 2
+test effect_row = run_scores() == 1

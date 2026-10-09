@@ -8,5 +8,10 @@
  "8b284cf sspur/a6_todo": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-ab314c99bf67f27b3.jsonl",
  "8b284cf sspur/a7_grades": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a6c0283efcfa042ed.jsonl",
  "8b284cf sspur/a8_config": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-ad66d768b341e8cc8.jsonl",
- "8b284cf sspur/b1_lru": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-ac9b48a11cc8eb2b3.jsonl"
+ "8b284cf sspur/b1_lru": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-ac9b48a11cc8eb2b3.jsonl",
+ "3fd1ec8-prompt1 sspur/a1_inventory": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a722cffdc31d89e5f.jsonl",
+ "3fd1ec8-prompt1 sspur/a2_wordstats": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-afcbf765c3eade134.jsonl",
+ "3fd1ec8-prompt1 sspur/a3_bank": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a624ed2c1bcfa8581.jsonl",
+ "3fd1ec8-prompt1 sspur/a4_calc": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a84e9f4171868e973.jsonl",
+ "3fd1ec8-prompt1 sspur/a5_orders": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a101928f2af138035.jsonl"
 }

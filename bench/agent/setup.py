@@ -57,7 +57,7 @@ R10_EDIT = "- To change code, write the new and changed definitions to {dir}/cha
 SSPUR_INTRO_R11 = """You are working on a small codebase written in SSPUR, a new programming language. Working directory: {dir}
 
 - Start with `cd {dir} && ./sspur start`: it prints the language reference (the only documentation) and the whole codebase, which is stored in .sspur/ (never read or write that directly).
-- To change code, write new and changed definitions to {dir}/change.ssp with the Write tool (not a shell heredoc), then run `cd {dir} && ./sspur edit --test change.ssp` in the same turn. `./sspur q`, `test` and `check` also exist. Do not create other .ssp files or run `./sspur init`."""
+- To change code, write new and changed definitions to {dir}/change.ssp with the Write tool (not a shell heredoc, which the sandbox refuses), then run `cd {dir} && ./sspur edit --test change.ssp` in the same turn. `./sspur q`, `test` and `check` also exist. Do not create other .ssp files or run `./sspur init`."""
 
 PY_INTRO = """You are working on a small Python 3.9 codebase. Working directory: {dir}
 

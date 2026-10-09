@@ -1,0 +1,26 @@
+[
+ {
+  "lang": "sspur",
+  "task": "b1_lru",
+  "passed": 21,
+  "total": 21,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "b3_payroll",
+  "passed": 17,
+  "total": 17,
+  "ok": true,
+  "msg": ""
+ },
+ {
+  "lang": "sspur",
+  "task": "b4_ratelimit",
+  "passed": 17,
+  "total": 17,
+  "ok": true,
+  "msg": ""
+ }
+]

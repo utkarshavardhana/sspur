@@ -108,6 +108,7 @@ fn directive(line: &str) -> Option<Json> {
         ["rename", a, b] if ident(a) && ident(b) && !line.starts_with(' ') => Some(json!({"op": "rename", "from": a, "to": b})),
         ["remove", a] if ident(a) && !line.starts_with(' ') => Some(json!({"op": "remove", "path": a})),
         ["remove", "use", p] if ident(p) && !line.starts_with(' ') => Some(json!({"op": "remove", "path": format!("use {p}")})),
+        ["remove", "impl", t, "for", ty] if !line.starts_with(' ') => Some(json!({"op": "remove", "path": format!("impl {t} for {ty}")})),
         ["remove", a] | ["rename", a, _] if qualified(a) && !line.starts_with(' ') => Some(json!({"error": format!("E_DEP_READONLY {a} belongs to dependency {}; dependency code can't be edited here", a.split('.').next().unwrap_or(""))})),
         _ => None,
     }

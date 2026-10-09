@@ -213,6 +213,9 @@ pub fn head_name(text: &str) -> Option<String> {
     while matches!(w, "res" | "kernel" | "extern" | "interrupt" | "pub") {
         w = words.next()?;
     }
+    if w == "impl" || w.starts_with("impl[") {
+        return sspur_syntax::parse(text).ok()?.defs.first().map(|d| d.name().to_string());
+    }
     let n = words.next()?;
     let end = n.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(n.len());
     Some(n[..end].to_string())

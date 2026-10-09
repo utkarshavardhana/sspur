@@ -46,3 +46,19 @@ fn trait_programs_are_identical_in_both_tiers_and_specialized_per_type() {
         assert!(n.lines().any(|l| l == format!("native  {f}")), "{f} missing:\n{n}");
     }
 }
+
+#[test]
+fn codebase_edits_store_traits_and_impls() {
+    let d = dir("codebase");
+    assert!(sspur(&d, &["init"]).1);
+    std::fs::write(d.join("c.ssp"), "type P = {x: Int} derive Eq, Ord\n\ntrait Named\n  fn nm(x: Self) -> Str\n\nimpl Named for P\n  fn nm(p: P) -> Str = \"p{p.x}\"\n\nfn top[T: Ord + Named](xs: List[T]) -> Str = match xs.sort.last\n  | some(x) => x.nm\n  | none => \"\"\n\ntest t = top([P{x: 2}, P{x: 5}]) == \"p5\"\n").unwrap();
+    let (out, ok) = sspur(&d, &["edit", "--test", "c.ssp"]);
+    assert!(ok && out.contains("+impl Named for P") && out.contains("1 passed, 0 failed"), "{out}");
+    std::fs::write(d.join("c.ssp"), "impl Named for P\n  fn nm(p: P) -> Str = \"q{p.x}\"\n\ntest t = top([P{x: 5}]) == \"q5\"\n").unwrap();
+    let (out, ok) = sspur(&d, &["edit", "--test", "c.ssp"]);
+    assert!(ok && out.contains("~impl Named for P") && out.contains("1 passed, 0 failed"), "{out}");
+    std::fs::write(d.join("c.ssp"), "remove impl Named for P\nremove top\nremove t\n").unwrap();
+    let (out, ok) = sspur(&d, &["edit", "c.ssp"]);
+    assert!(ok && out.contains("-impl Named for P"), "{out}");
+    assert_eq!(sspur(&d, &["check"]).0, "ok 2 definitions");
+}

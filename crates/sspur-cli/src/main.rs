@@ -738,7 +738,7 @@ fn native_failed(args: &Args, what: &str, then: &str) {
     }
 }
 
-fn exec_or<'a>(l: &'a Loaded, tmp: &'a mut Option<Loaded>) -> &'a Loaded {
+pub(crate) fn exec_or<'a>(l: &'a Loaded, tmp: &'a mut Option<Loaded>) -> &'a Loaded {
     match l.exec_view() {
         Ok(Some(x)) => tmp.insert(x),
         Ok(None) => l,

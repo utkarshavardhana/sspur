@@ -60,6 +60,8 @@ pub struct ModuleRun {
 }
 
 pub fn diff_module(l: &Loaded, mode: &'static str, cases: usize, seed: u64) -> Result<ModuleRun, String> {
+    let mut tmp = None;
+    let l = crate::exec_or(l, &mut tmp);
     let opt = set_mode(mode);
     let c = sspur_native::cgen::compile_release(&l.module, &l.check, opt).map_err(|e| format!("native build failed {e}"))?;
     if let Some(e) = &c.fallback {

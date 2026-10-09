@@ -162,7 +162,9 @@ impl Gen {
             self.out.push_str("profile sys\n");
         }
         let refine = ["_ >= 0", "_ > -100", "_ != 0", "_ >= -1000 and _ <= 1000"][self.r.below(4) as usize];
-        self.out.push_str(&format!("type {c}R = {{a: Int, b: Int where {refine}}}\n"));
+        let traits = self.r.chance(50);
+        let derive = if traits { " derive Eq, Ord, Show, Hash" } else { "" };
+        self.out.push_str(&format!("type {c}R = {{a: Int, b: Int where {refine}}}{derive}\n"));
         self.out.push_str(&format!("type {c}S = {c}A{{x: Int}} | {c}B{{x: Int, y: Int}} | {c}C\n"));
         self.out.push_str(&format!("type {c}T = {c}Lf | {c}Nd{{l: {c}T, v: Int, r: {c}T}}\n"));
         self.out.push_str(&format!("type {c}E = {c}Bad{{c: Int}} | {c}Worse\n"));
@@ -174,6 +176,9 @@ impl Gen {
         self.out.push_str(&format!("effect {p}ask(x: Int) -> Int\n\n"));
         self.tree_helpers();
         self.extra_helpers();
+        if traits {
+            self.traits();
+        }
         self.risky();
         self.asker();
         let k = 3 + self.r.below(5);
@@ -238,6 +243,37 @@ impl Gen {
             self.out.push_str(&format!("fn {p}_rget(r: &{c}Rs) -> Int\n= r.v * 2 + r.id\n\n"));
             self.out.push_str(&format!("fn {p}_rtake(r: {c}Rs) -> Int ! log\n= r.v + r.id\n\n"));
         }
+    }
+
+    /// A trait with a default method, impls for a record, a sum and Int, an operator impl,
+    /// and bounded generics, each reached through a monomorphic wrapper.
+    fn traits(&mut self) {
+        let (p, c) = (self.p.clone(), self.c.clone());
+        let k = self.r.range(2, 9);
+        let dflt = ["x.{p}_sz * 2 + 1", "x.{p}_sz - {k}", "if x.{p}_sz > {k} then x.{p}_sz else {k}"][self.r.below(3) as usize].replace("{p}", &p).replace("{k}", &k.to_string());
+        self.out.push_str(&format!("trait {c}Sh\n  fn {p}_sz(x: Self) -> Int\n  fn {p}_dsc(x: Self) -> Int = {dflt}\n\n"));
+        let rsz = ["r.a + r.b", "r.a * {k} - r.b", "r.b % {k} + r.a"][self.r.below(3) as usize].replace("{k}", &k.to_string());
+        self.out.push_str(&format!("impl {c}Sh for {c}R\n  fn {p}_sz(r: {c}R) -> Int = {rsz}\n\n"));
+        self.out.push_str(&format!("impl {c}Sh for {c}S\n  fn {p}_sz(s: {c}S) -> Int\n  = match s\n    | {c}A{{x}} => x\n    | {c}B{{x, y}} => x - y\n    | {c}C => {k}\n  fn {p}_dsc(s: {c}S) -> Int = s.{p}_sz + 1\n\n"));
+        self.out.push_str(&format!("impl {c}Sh for Int\n  fn {p}_sz(n: Int) -> Int = n % {}\n\n", k + 90));
+        let add = ["x.a + y.a", "x.a - y.b", "x.a * y.a"][self.r.below(3) as usize];
+        self.out.push_str(&format!("impl Add for {c}R\n  fn add(x: {c}R, y: {c}R) -> {c}R = {c}R{{a: {add}, b: x.b}}\n\n"));
+        self.out.push_str(&format!("fn {p}_tot[T: {c}Sh](xs: List[T]) -> Int\n= xs.map(_.{p}_dsc).sum\n\n"));
+        let cmp = [">", "<", ">="][self.r.below(3) as usize];
+        self.out.push_str(&format!("fn {p}_mx[T: Ord + Show](xs: List[T], d: T) -> Str\n= xs.fold(d, (m, x) => if x {cmp} m then x else m).show\n\n"));
+        self.out.push_str(&format!("fn {p}_acc[T: Add](xs: List[T], z: T) -> T\n= xs.fold(z, (a, x) => a + x)\n\n"));
+        self.out.push_str(&format!("fn {p}_trsz(r: {c}R) -> Int = r.{p}_dsc\n\n"));
+        self.sig(&format!("{p}_trsz"), &[T::Rec], T::Int, &[]);
+        self.out.push_str(&format!("fn {p}_tssz(s: {c}S) -> Int = {p}_tot([s, {c}C])\n\n"));
+        self.sig(&format!("{p}_tssz"), &[T::Sum], T::Int, &[]);
+        self.out.push_str(&format!("fn {p}_tlsz(xs: List[Int]) -> Int = {p}_tot(xs) + {p}_acc(xs, {k})\n\n"));
+        self.sig(&format!("{p}_tlsz"), &[T::List], T::Int, &[]);
+        self.out.push_str(&format!("fn {p}_trmx(x: {c}R, y: {c}R) -> Str = {p}_mx([x, y], x + y)\n\n"));
+        self.sig(&format!("{p}_trmx"), &[T::Rec, T::Rec], T::Str, &[]);
+        self.out.push_str(&format!("fn {p}_trlt(x: {c}R, y: {c}R) -> Bool = x < y or x.hash == y.hash\n\n"));
+        self.sig(&format!("{p}_trlt"), &[T::Rec, T::Rec], T::Bool, &[]);
+        self.out.push_str(&format!("fn {p}_tsmx(xs: List[Int]) -> Str = {p}_mx(xs.map(_ % {k}), 0) + {p}_mx([\"a\", \"b\"], \"\")\n\n"));
+        self.sig(&format!("{p}_tsmx"), &[T::List], T::Str, &[]);
     }
 
     fn risky_effects(&self, cx: &mut Cx) {

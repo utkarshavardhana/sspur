@@ -1,0 +1,98 @@
+type CfgErr = Missing{key: Str} | NotInt{key: Str, value: Str} | NotBool{key: Str, value: Str}
+
+type Entry = {key: Str, value: Str}
+
+fn bool_of(key: Str, v: Str) -> Bool ! fail[CfgErr]
+= do
+  l = v.lower
+  if l == "true" or l == "yes" or l == "1" then true else if l == "false" or l == "no" or l == "0" then false else raise NotBool{key: key, value: v}
+
+fn get_bool(cfg: List[Entry], key: Str, default: Bool) -> Bool ! fail[CfgErr]
+= match lookup(cfg, key)
+| none => default
+| some(v) => bool_of(key, v)
+
+fn get_int(cfg: List[Entry], key: Str) -> Int ! fail[CfgErr]
+= do
+  v = get_str(cfg, key)
+  if not is_int_str(v) then raise NotInt{key: key, value: v}
+  v.to_int.get
+
+fn get_str(cfg: List[Entry], key: Str) -> Str ! fail[CfgErr]
+= lookup(cfg, key).ok_or(Missing{key: key})
+
+fn is_int_str(s: Str) -> Bool
+= do
+  body = if s.starts_with("-") then s.drop(1) else s
+  not body.is_empty and body.chars.all(c => "0123456789".contains(c))
+
+fn keys(cfg: List[Entry]) -> List[Str]
+= cfg.map(_.key).unique
+
+fn lookup(cfg: List[Entry], key: Str) -> Opt[Str]
+= cfg.filter(_.key == key).last.map(_.value)
+
+fn main() -> Unit ! log
+= log(keys(parse(sample_text())).join(","))
+
+fn make_entry(k: Str, v: Str) -> Opt[Entry]
+= if k.is_empty then none else some(Entry{key: k, value: v})
+
+fn parse(text: Str) -> List[Entry]
+= text.split(";").map(parse_line).filter(_.is_some).map(_.get)
+
+fn parse_line(line: Str) -> Opt[Entry]
+= do
+  t = line.trim
+  if t.starts_with("#") then none else split_entry(t)
+
+fn sample_text() -> Str
+= "host=localhost;port=8080;debug=true"
+
+fn split_entry(t: Str) -> Opt[Entry]
+= match t.index_of("=")
+| none => none
+| some(i) => make_entry(t.take(i).trim, t.drop(i + 1).trim)
+
+test bool_bad = catch get_bool(parse("a=maybe"), "a", true) == true
+| NotBool{key, value} => value == "maybe"
+| _ => false
+
+test bool_default = get_bool(parse("a=1"), "z", true)
+
+test bool_false = not get_bool(parse("a=No"), "a", true) and not get_bool(parse("a=0"), "a", true) and not get_bool(parse("a=FALSE"), "a", true)
+
+test bool_true = get_bool(parse("a=YES;b=1;c=True"), "a", false) and get_bool(parse("b=1"), "b", false) and get_bool(parse("c=True"), "c", false)
+
+test comments = parse("#x=1; # y=2;z=3").len == 1
+
+test first_eq = lookup(parse("url=a=b"), "url") == some("a=b")
+
+test int_bad = catch get_int(parse("n=4x"), "n") == 0
+| NotInt{key, value} => key == "n" and value == "4x"
+| _ => false
+
+test int_dash = catch get_int(parse("n=-"), "n") == 0
+| NotInt{key, value} => true
+| _ => false
+
+test int_missing = catch get_int(parse("n=1"), "m") == 0
+| Missing{key} => key == "m"
+| _ => false
+
+test int_ok = get_int(parse("n=-42"), "n") == -42
+
+test keys_distinct = keys(parse("a=1;b=2;a=3")) == ["a", "b"]
+
+test last_wins = lookup(parse("a=1;a=2"), "a") == some("2")
+
+test lookup_host = lookup(parse(sample_text()), "host") == some("localhost")
+
+test missing = catch get_str(parse(sample_text()), "nope") == ""
+| Missing{key} => key == "nope"
+
+test parse_sample = parse(sample_text()).len == 3
+
+test skip_bad = parse("noeq;=x; =y;k=v").len == 1
+
+test trim_all = parse(" a = b ; c=d ").map(e => e.key + ":" + e.value) == ["a:b", "c:d"]

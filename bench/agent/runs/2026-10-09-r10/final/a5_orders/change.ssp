@@ -1,0 +1,1 @@
+test net_ship_threshold = shipping(Order{id: 1, lines: [Line{sku: "a", qty: 1, unit: 5600}], coupon: "SAVE10"}) == 0

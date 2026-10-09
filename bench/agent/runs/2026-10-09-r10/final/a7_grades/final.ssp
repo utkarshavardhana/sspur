@@ -1,0 +1,57 @@
+type Student = {name: Str, scores: List[Int]}
+
+fn average(s: Student) -> Int
+= if s.scores.len == 0 then 0 else s.scores.sum / s.scores.len
+
+fn curve(ss: List[Student], pts: Int where _ >= 0) -> List[Student]
+= ss.map(s => s with scores := s.scores.map(x => if x + pts > 100 then 100 else x + pts))
+
+fn drop_lowest(s: Student) -> Student
+= if s.scores.len < 2 then s else do
+  m = s.scores.sort.first.get
+  var done = false
+  var out = []
+  for x in s.scores
+    if x == m and not done then done := true else out := out.push(x)
+  s with scores := out
+
+fn grade(s: Student) -> Str
+= letter(average(s))
+
+fn honor_roll(ss: List[Student]) -> List[Str]
+= ss.filter(s => grade(drop_lowest(s)) == "A").map(_.name).sort
+
+fn letter(avg: Int) -> Str
+= if avg >= 90 then "A" else if avg >= 80 then "B" else if avg >= 70 then "C" else if avg >= 60 then "D" else "F"
+
+fn main() -> Unit ! log
+= log(roster().map(report_card).join("\n"))
+
+fn ranking(ss: List[Student]) -> List[Str]
+= ss.sort_by(s => (-average(s), s.name)).map(_.name)
+
+fn report_card(s: Student) -> Str
+= "{s.name}: {average(s)} ({grade(s)})"
+
+fn roster() -> List[Student]
+= [Student{name: "mia", scores: [88, 92, 95]}, Student{name: "ali", scores: [70, 65, 80]}, Student{name: "zed", scores: [95, 90, 50]}, Student{name: "bo", scores: [100, 92, 89]}]
+
+test avg_empty = average(Student{name: "e", scores: []}) == 0
+
+test card = report_card(Student{name: "x", scores: [50, 60]}) == "x: 55 (F)"
+
+test curve_cap = curve([Student{name: "x", scores: [95, 50]}], 10)[0].scores == [100, 60]
+
+test drop_basic = drop_lowest(Student{name: "x", scores: [5, 3, 9, 3]}).scores == [5, 9, 3]
+
+test drop_single = drop_lowest(Student{name: "x", scores: [5]}).scores == [5]
+
+test honor = honor_roll([Student{name: "z", scores: [95, 90, 50]}, Student{name: "a", scores: [100, 92, 89]}, Student{name: "m", scores: [70, 60]}]) == ["a", "z"]
+
+test letter_b = letter(85) == "B"
+
+test letter_edges = [letter(90), letter(80), letter(70), letter(60), letter(59)] == ["A", "B", "C", "D", "F"]
+
+test rank_order = ranking(roster()).take(2) == ["bo", "mia"]
+
+test rank_tie = ranking([Student{name: "b", scores: [80]}, Student{name: "a", scores: [80]}, Student{name: "c", scores: [90]}]) == ["c", "a", "b"]

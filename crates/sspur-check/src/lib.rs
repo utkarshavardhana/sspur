@@ -210,7 +210,7 @@ struct Checker {
     site: ExprKey,
     tout: traits::TraitOut,
     pending_sites: Vec<(ExprKey, String, Type, Span)>,
-    pending_insts: Vec<(ExprKey, String, Vec<Type>, Vec<String>, Vec<traits::Bound>, Span)>,
+    pending_insts: Vec<traits::PendingInst>,
     record_insts: bool,
     own_site: bool,
     res_types: HashSet<String>,
@@ -1570,6 +1570,7 @@ impl Checker {
             }
         if found.is_none()
             && let Some(tr) = self.method_trait.get(name).cloned()
+            && self.trait_args_of(&rr, &tr).is_none()
             && !self.types.get(&con).is_some_and(|t| matches!(&t.kind, TypeKind::Record(fs) if fs.iter().any(|(f, _)| f == name)))
         {
             let hint = self.missing_hint(&rr, &tr);

@@ -6,6 +6,9 @@ use super::*;
 
 pub(crate) type Bound = (String, String, Vec<Type>);
 
+/// A use of a bounded generic: the site, the function, its type arguments, parameters and bounds.
+pub(crate) type PendingInst = (ExprKey, String, Vec<Type>, Vec<String>, Vec<Bound>, Span);
+
 /// What the elaborator needs: every resolved site, every instantiation of a bounded generic,
 /// the impls and the synthesized functions (impl methods and trait defaults).
 #[derive(Clone, Debug, Default)]
@@ -610,9 +613,7 @@ impl Checker {
         if !self.trait_target(&r, &tr, intrinsic) {
             return None;
         }
-        if intrinsic && let Type::Con(c, _) = &r
-            && self.has_method(c, name).is_some()
-        {
+        if intrinsic && (name == "index" || matches!(&r, Type::Con(c, _) if self.has_method(c, name).is_some())) {
             return None;
         }
         let key = self.site;

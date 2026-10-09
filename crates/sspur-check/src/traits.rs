@@ -19,6 +19,7 @@ pub struct TraitOut {
     /// `(trait, method)` to the function holding the default body.
     pub defaults: HashMap<(String, String), String>,
     pub trait_params: HashMap<String, Vec<String>>,
+    pub trait_methods: HashMap<String, Vec<String>>,
     /// Synthesized functions with the definition they come from.
     pub units: Vec<(String, FnDef)>,
     /// Functions whose type parameters have bounds: they are specialized per instantiation.
@@ -217,6 +218,7 @@ impl Checker {
             self.method_trait.insert(name.clone(), t.name.clone());
             let info = self.traits.get_mut(&t.name).unwrap();
             info.methods.push(name.clone());
+            self.tout.trait_methods.entry(t.name.clone()).or_default().push(name.clone());
             info.schemes.insert(name.clone(), scheme.clone());
             if m.default {
                 info.defaults.insert(name.clone());
@@ -593,8 +595,18 @@ impl Checker {
     }
 
     pub(crate) fn trait_method_call(&mut self, recv: &Expr, rt: &Type, name: &str, args: &[Expr], span: Span, intrinsic: bool) -> Option<Type> {
-        let tr = self.method_trait.get(name)?.clone();
         let r = self.resolve(rt);
+        let (tr, full) = match self.method_trait.get(name) {
+            Some(t) => (t.clone(), name.to_string()),
+            None => {
+                let Type::Param(p) = &r else { return None };
+                self.bounds.iter().filter(|(bp, _, _)| bp == p).find_map(|(_, bt, _)| {
+                    let m = self.traits.get(bt)?.methods.iter().find(|m| m.rsplit("__").next() == Some(name))?;
+                    Some((bt.clone(), m.clone()))
+                })?
+            }
+        };
+        let name = full.as_str();
         if !self.trait_target(&r, &tr, intrinsic) {
             return None;
         }

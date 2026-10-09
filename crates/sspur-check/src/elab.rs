@@ -299,6 +299,8 @@ impl Elab<'_> {
     }
 
     fn method_site(&mut self, tr: &str, name: &str, recv: Expr, args: Vec<Expr>, st: &Type) -> ExprKind {
+        let full = self.t.trait_methods.get(tr).and_then(|ms| ms.iter().find(|m| *m == name || m.rsplit("__").next() == Some(name))).cloned().unwrap_or_else(|| name.to_string());
+        let name = full.as_str();
         match self.target(tr, name, st) {
             Some(Target::Fn(f)) => {
                 let mut all = vec![recv];

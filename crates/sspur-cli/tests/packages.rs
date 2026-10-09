@@ -310,3 +310,26 @@ fn commands_default_to_the_manifest_source() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success() && stdout.contains("passed, 0 failed"), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
 }
+
+const GEO: &str = "pub trait Area\n  fn area(s: Self) -> Int\n  fn label(s: Self) -> Str = \"area {s.area}\"\n\npub type Square = {side: Int} derive Eq, Ord\n\npub impl Area for Square\n  fn area(s: Square) -> Int = s.side * s.side\n\npub impl Show for Square\n  fn show(s: Square) -> Str = \"Square({s.side})\"\n\npub type Circle = {r: Int}\n\nimpl Show for Circle\n  fn show(c: Circle) -> Str = \"circle\"\n\npub fn total[T: Area](xs: List[T]) -> Int = xs.map(_.area).sum\n\npub fn inside() -> Str = Circle{r: 1}.show\n";
+
+#[test]
+fn traits_and_impls_cross_packages() {
+    let w = Ws::new("traits");
+    w.pkg("lib", "geo", &[], GEO);
+    w.pkg("app", "app", &[("geo", "{ path = \"../lib\" }")], "use geo.{Area, Square}\n\ntype Tri = {b: Int, h: Int}\n\nimpl Area for Tri\n  fn area(t: Tri) -> Int = t.b * t.h / 2\n\nfn main() -> Unit ! log = log(\"{Square{side: 3}.label} {Tri{b: 4, h: 3}.label} {geo.total([Square{side: 2}])} {geo.total([Tri{b: 2, h: 2}])} {Square{side: 5}.show} {geo.inside()} {Square{side: 1} < Square{side: 2}}\")\n\ntest t = geo.total([Tri{b: 2, h: 4}, Tri{b: 1, h: 2}]) == 5\n");
+    let want = "area 9 area 6 4 2 Square(5) circle true";
+    assert_eq!(w.ok("app", &["run", "--interp", "lib.ssp"]), want);
+    assert_eq!(w.ok("app", &["run", "--strict-native", "lib.ssp"]), want);
+    assert_eq!(w.ok("app", &["test", "--strict-native", "lib.ssp"]), "1 passed, 0 failed");
+    w.write("app/lib.ssp", "use geo.{Area}\n\nimpl Show for geo.Square\n  fn show(s: geo.Square) -> Str = \"mine\"\n\nimpl Area for Int\n  fn area(n: Int) -> Int = n\n\nfn f(c: geo.Circle) -> Str = c.show\n");
+    let out = w.err("app", &["check", "lib.ssp"]);
+    assert!(out.contains("E_IMPL_ORPHAN impl Show for geo.Square") && out.contains("E_IMPL_ORPHAN impl geo.Area for Int"), "{out}");
+    assert!(out.contains("E_TRAIT_MISSING") && out.contains("pub impl Show for Circle"), "{out}");
+    assert!(!out.contains("__"), "names are shown qualified: {out}");
+    w.write("app/lib.ssp", "fn f(s: geo.Square) -> Int = s.area\n");
+    let out = w.err("app", &["check", "lib.ssp"]);
+    assert!(out.contains("area"), "trait methods need the trait imported: {out}");
+    w.write("app/lib.ssp", "fn f(s: geo.Square) -> Int = geo.area(s)\n\nfn g[T: geo.Area](x: T) -> Str = x.label\n\ntest t = f(geo.Square{side: 4}) == 16 and g(geo.Square{side: 1}) == \"area 1\"\n");
+    assert_eq!(w.ok("app", &["test", "--strict-native", "lib.ssp"]), "1 passed, 0 failed");
+}

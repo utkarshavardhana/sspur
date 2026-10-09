@@ -1,0 +1,10 @@
+type J = JNull | JNum{n: Int} | JObj{fields: List[(Str, J)]}
+
+fn count(fs: List[(Str, J)]) -> Int = fs.len
+
+fn size(j: J) -> Int
+= match j
+  | JObj{fields} => 1 + count(fields)
+  | _ => 1
+
+test t = size(JObj{fields: [("a", JNull)]}) == 2

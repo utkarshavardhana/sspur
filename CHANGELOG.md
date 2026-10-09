@@ -4,6 +4,9 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Fixed
+- Native builds no longer fail with `incomplete type` when a list of tuples over a recursive sum type (for example `List[(Str, J)]` inside `J`) is generated before the sum: the list struct is now emitted ahead of its element definitions. Such programs fell back to the interpreter before. Found in agent bench run 11.
+
 ### Changed
 - `sspur edit` stores spellings from other languages that have one meaning in their SSPUR form and reports them on a `stored as:` line (at most three, then `and N more`), instead of rejecting the edit: `&& || !`, `elif`, `let`, `+=`, `Ctor{_}`, typed locals, `len(x)`, `.length`, `.toLowerCase` and similar method names, `None`/`Some`/`True`, `print`, `s.slice(a, b)` on `Str`, `.get` on a value that is not an `Opt`, `_` in a call that takes no function, `catch` of a non-`Bool` value in a test, and effects a function performs but does not declare. Other entry points still reject them, with the canonical spelling in the message (`N_FOREIGN`). Definition keywords (`queue`, `store`, `effect`, `pre`, `post`, ...) are identifiers elsewhere.
 - Failing tests print the values of the comparison that failed (`left 7, right 8`), and a failed `pre` prints the parameters it mentions, in every tier.

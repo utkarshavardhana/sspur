@@ -1786,8 +1786,9 @@ impl<'a> Cx<'a> {
             Type::Con(n, a) if n == "List" => {
                 self.fwd_decl(&m);
                 if self.complete.insert(m.clone()) {
+                    let at = self.defs.len();
                     let e = self.decl(&a[0])?;
-                    writeln!(self.defs, "struct {m} {{ int64_t len; {e}* data; int64_t* hdr; }};").unwrap();
+                    self.defs.insert_str(at, &format!("struct {m} {{ int64_t len; {e}* data; int64_t* hdr; }};\n"));
                 }
                 Ok(m)
             }

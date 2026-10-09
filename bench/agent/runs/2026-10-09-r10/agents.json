@@ -6,5 +6,8 @@
  "sspur/a5_orders": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a3fb64e9db827c8e6.jsonl",
  "sspur/a6_todo": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-aa05807acfb32699f.jsonl",
  "sspur/a7_grades": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a14ea52f0623c45c0.jsonl",
- "sspur/a8_config": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a9eeddeb19cf34b4b.jsonl"
+ "sspur/a8_config": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a9eeddeb19cf34b4b.jsonl",
+ "sspur/b1_lru": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a7687a74890801748.jsonl",
+ "sspur/b2_calc": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a912b3252b9320fe8.jsonl",
+ "sspur/b3_payroll": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a5d788b235ef2d6b6.jsonl"
 }

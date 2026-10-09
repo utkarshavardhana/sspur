@@ -1,0 +1,202 @@
+{
+ "8fb30a8 sspur/a1_inventory": {
+  "calls": 4,
+  "tool_uses": 5,
+  "input": 128636,
+  "output": 813,
+  "total": 129449,
+  "net": 26449,
+  "read": 2427,
+  "wrote": 799
+ },
+ "8b284cf sspur/a1_inventory": {
+  "calls": 4,
+  "tool_uses": 5,
+  "input": 126874,
+  "output": 816,
+  "total": 127690,
+  "net": 24690,
+  "read": 1126,
+  "wrote": 802
+ },
+ "8b284cf sspur/a2_wordstats": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 92492,
+  "output": 784,
+  "total": 93276,
+  "net": 16026,
+  "read": 923,
+  "wrote": 770
+ },
+ "8b284cf sspur/a3_bank": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 94110,
+  "output": 1059,
+  "total": 95169,
+  "net": 17919,
+  "read": 1354,
+  "wrote": 1045
+ },
+ "8b284cf sspur/a4_calc": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 93864,
+  "output": 1345,
+  "total": 95209,
+  "net": 17959,
+  "read": 1222,
+  "wrote": 1331
+ },
+ "8b284cf sspur/a5_orders": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 92838,
+  "output": 969,
+  "total": 93807,
+  "net": 16557,
+  "read": 1049,
+  "wrote": 955
+ },
+ "8b284cf sspur/a6_todo": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 93052,
+  "output": 947,
+  "total": 93999,
+  "net": 16749,
+  "read": 1012,
+  "wrote": 933
+ },
+ "8b284cf sspur/a7_grades": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 92462,
+  "output": 781,
+  "total": 93243,
+  "net": 15993,
+  "read": 944,
+  "wrote": 767
+ },
+ "8b284cf sspur/a8_config": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 93563,
+  "output": 1205,
+  "total": 94768,
+  "net": 17518,
+  "read": 944,
+  "wrote": 1191
+ },
+ "8b284cf sspur/b1_lru": {
+  "calls": 6,
+  "tool_uses": 8,
+  "input": 206787,
+  "output": 1898,
+  "total": 208685,
+  "net": 54185,
+  "read": 2807,
+  "wrote": 1882
+ },
+ "3fd1ec8-prompt1 sspur/a1_inventory": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 92721,
+  "output": 809,
+  "total": 93530,
+  "net": 16280,
+  "read": 1127,
+  "wrote": 795
+ },
+ "3fd1ec8-prompt1 sspur/a2_wordstats": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 92583,
+  "output": 827,
+  "total": 93410,
+  "net": 16160,
+  "read": 953,
+  "wrote": 813
+ },
+ "3fd1ec8-prompt1 sspur/a3_bank": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 94268,
+  "output": 1130,
+  "total": 95398,
+  "net": 18148,
+  "read": 1381,
+  "wrote": 1116
+ },
+ "3fd1ec8-prompt1 sspur/a4_calc": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 94040,
+  "output": 1333,
+  "total": 95373,
+  "net": 18123,
+  "read": 1242,
+  "wrote": 1319
+ },
+ "3fd1ec8-prompt1 sspur/a5_orders": {
+  "calls": 5,
+  "tool_uses": 7,
+  "input": 162293,
+  "output": 1101,
+  "total": 163394,
+  "net": 34644,
+  "read": 1266,
+  "wrote": 1087
+ },
+ "3fd1ec8 sspur/a1_inventory": {
+  "calls": 4,
+  "tool_uses": 5,
+  "input": 127162,
+  "output": 857,
+  "total": 128019,
+  "net": 25019,
+  "read": 1157,
+  "wrote": 843
+ },
+ "3fd1ec8 sspur/a2_wordstats": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 92501,
+  "output": 751,
+  "total": 93252,
+  "net": 16002,
+  "read": 944,
+  "wrote": 737
+ },
+ "3fd1ec8 sspur/a3_bank": {
+  "calls": 4,
+  "tool_uses": 5,
+  "input": 129536,
+  "output": 1254,
+  "total": 130790,
+  "net": 27790,
+  "read": 1391,
+  "wrote": 1240
+ },
+ "3fd1ec8 sspur/a4_calc": {
+  "calls": 3,
+  "tool_uses": 4,
+  "input": 94032,
+  "output": 1371,
+  "total": 95403,
+  "net": 18153,
+  "read": 1246,
+  "wrote": 1357
+ },
+ "3fd1ec8 sspur/a5_orders": {
+  "calls": 4,
+  "tool_uses": 5,
+  "input": 126325,
+  "output": 812,
+  "total": 127137,
+  "net": 24137,
+  "read": 1114,
+  "wrote": 798
+ }
+}

@@ -5,9 +5,11 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 ## [Unreleased]
 
 ### Changed
-- `sspur edit` stores spellings from other languages that have one meaning in their SSPUR form and reports them on a `stored as:` line, instead of rejecting the edit: `&& || !`, `elif`, `let`, `+=`, `Ctor{_}`, typed locals, `len(x)`, `.length`, `.toLowerCase` and similar method names, `None`/`Some`/`True`, `print`, `s.slice(a, b)` on `Str`, `.get` on a value that is not an `Opt`, `_` in a call that takes no function, `catch` of a non-`Bool` value in a test, and effects a function performs but does not declare. Other entry points still reject them, with the canonical spelling in the message (`N_FOREIGN`). Definition keywords (`queue`, `store`, `effect`, `pre`, `post`, ...) are identifiers elsewhere.
-- The agent spec is a 777-token core (was 1,631); `sspur spec --more` prints the rest of the builtins. It recommends writing edits to `change.ssp` with the agent's file tool and running `sspur edit --test change.ssp`.
+- `sspur edit` stores spellings from other languages that have one meaning in their SSPUR form and reports them on a `stored as:` line (at most three, then `and N more`), instead of rejecting the edit: `&& || !`, `elif`, `let`, `+=`, `Ctor{_}`, typed locals, `len(x)`, `.length`, `.toLowerCase` and similar method names, `None`/`Some`/`True`, `print`, `s.slice(a, b)` on `Str`, `.get` on a value that is not an `Opt`, `_` in a call that takes no function, `catch` of a non-`Bool` value in a test, and effects a function performs but does not declare. Other entry points still reject them, with the canonical spelling in the message (`N_FOREIGN`). Definition keywords (`queue`, `store`, `effect`, `pre`, `post`, ...) are identifiers elsewhere.
+- Failing tests print the values of the comparison that failed (`left 7, right 8`), and a failed `pre` prints the parameters it mentions, in every tier.
+- The agent spec is a 556-token core (was 1,631); `sspur spec --more` prints the rest of the builtins. It recommends writing edits to `change.ssp` with the agent's file tool and running `sspur edit --test change.ssp`.
 - Agent benchmark run 10: 0.72x Python's tokens, 1.06x TypeScript's and 0.96x Go's on 17 cells with Sonnet 5.5 (run 9: 0.83x, 1.23x, 1.11x), 246/246 hidden tests.
+- Agent benchmark run 11: 0.65x Python's tokens, 0.95x TypeScript's and 0.86x Go's in total, 0.59x, 1.01x and 1.00x at the median, 58 API calls against 88, 61 and 66, 246/246 hidden tests: parity with TypeScript and Go.
 
 ## [0.3.2] - 2026-10-07
 

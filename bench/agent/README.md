@@ -2,7 +2,9 @@
 
 This measures the Phase 3 exit criterion: an agent completes multi-step feature tasks using SSPUR (CLI ops only) with fewer total tokens than the same agent using Python. Run 9 adds TypeScript and Go as controls, because beating Python alone does not show that the language is the reason.
 
-**Latest result (run 10, 2026-10-09): SSPUR is now cheaper than Python and level with TypeScript and Go. On the 17 cells of run 9, Sonnet 5.5 used 0.72x Python's tokens, 1.06x TypeScript's and 0.96x Go's (medians 0.60x, 1.02x, 1.01x), from 0.83x, 1.23x and 1.11x, with 246/246 hidden tests passing.** The changes: edits go through a `change.ssp` written with the Write tool (no refused commands), `edit` stores unambiguous foreign spellings and missing effects in canonical form instead of rejecting them, and the spec is a 777-token core (was 1,631) with the rest behind `spec --more`. Against TypeScript and Go that is no measured advantage on the small tasks, not a win; SSPUR still wins the large codebase against all three. Details in [Results, run 10](#results-run-10).
+**Latest result (run 11, 2026-10-09): SSPUR is cheaper than Python and at parity with TypeScript and Go. On the 17 cells, Sonnet 5.5 used 0.65x Python's tokens, 0.95x TypeScript's and 0.86x Go's (medians 0.59x, 1.01x, 1.00x), in 58 API calls against 88, 61 and 66, with 246/246 hidden tests passing.** The changes from run 10: failing tests print the values they compared, a 556-token core spec (was 777) and a shorter SSPUR prompt. The totals against TypeScript and Go are below 1.0x but the medians are not, so this is parity, not a win. The large codebase took one call more than in run 10 and is level with TypeScript (0.99x), still ahead of Python and Go. 20 pilot cells from four restarted attempts are excluded and listed. Details in [Results, run 11](#results-run-11).
+
+**Run 10 (2026-10-09): 0.72x Python, 1.06x TypeScript, 0.96x Go (medians 0.60x, 1.02x, 1.01x).** Edits through a `change.ssp` written with the Write tool, canonical storage of unambiguous foreign spellings and a 777-token core spec. Details in [Results, run 10](#results-run-10).
 
 **Run 9 (2026-10-08): the token advantage over Python did not transfer to TypeScript or Go: 0.83x Python, 1.23x TypeScript, 1.11x Go.**
 
@@ -36,6 +38,7 @@ This measures the Phase 3 exit criterion: an agent completes multi-step feature 
 | 8, Sonnet 5.5, s1_shop only | `sspur start NAME...`, spec 1,631 tokens, 2 runs | 10/10 / 10/10 | 4 / 5 | **0.82x** (1.04x before) |
 | 9, Sonnet 5.5, 16 tasks + s1_shop | all SSPUR cells rerun at `aa61bf4`; TypeScript and Go added | 246/246 in each of the 4 languages | 70 / 88 | **0.83x** vs Python, **1.23x** vs TypeScript, **1.11x** vs Go |
 | 10, Sonnet 5.5, 16 tasks + s1_shop | `change.ssp` edits, tolerant input, 777-token core spec, all 17 SSPUR cells rerun at `b7ef6fa` | 246/246 in each of the 4 languages | 63 / 88 | **0.72x** vs Python, **1.06x** vs TypeScript, **0.96x** vs Go |
+| 11, Sonnet 5.5, 16 tasks + s1_shop | test failures print values, 556-token core spec, shorter prompt, all 17 SSPUR cells rerun at `ef439aa` | 246/246 in each of the 4 languages | 58 / 88 | **0.65x** vs Python, **0.95x** vs TypeScript (median 1.01x), **0.86x** vs Go (median 1.00x) |
 
 Python's side was identical in all runs; its totals were 1.27M, 1.20M, 1.48M and 1.22M. Against Python's cheapest run, SSPUR run 3 is 0.73x and run 4 after the fix is 0.71x.
 
@@ -96,6 +99,101 @@ All changes are in the CLI and the spec. The language is unchanged.
 - The MCP server gained `sspur_edit`, and its tools return the same compact text (`json: true` for the old format).
 
 Run 2 used a heredoc (`./sspur edit --test <<'EOF'`). The sandbox refused that command in 6 of 8 runs: it treats `{a, b}` inside the heredoc (any record literal with two fields) as possible brace expansion and won't verify the command. Each refusal cost a retry plus a Write call to put the input in a file. Run 3's spec recommends one single-quoted `-e` argument instead, which passed in 7 of 8 runs (a8 was refused once, apparently because of a `#` inside a string).
+
+## Results, run 11
+
+Run 10 left SSPUR at 1.06x TypeScript's and 0.96x Go's tokens, with medians of 1.02x and 1.01x. On 3-call cells the gap to TypeScript was the core spec and the longer prompt, re-read by every call. Run 11 shrinks both and adds one runtime change, and reruns all 17 SSPUR cells against the same Python, TypeScript and Go cells.
+
+### What changed
+
+- `591eff4` (before run 11, the base for everything below): a failing test prints the values of the comparison that failed (`FAIL t: left 7, right 8`), and a failed `pre` prints the parameters it mentions, in every tier. In run 10, a wrong expected value in an agent's own test was the most common extra call; the agent now sees the actual value.
+- The SSPUR prompt says the same rules in fewer words (`8fb30a8`; `setup.py --r10` keeps run 10's).
+- The core spec is 556 tokens (run 10: 777). `start` on a small codebase prints 854 to 1,148 tokens (run 10: 1,075 to 1,517), and 1,561 on s1_shop (run 10: 1,611).
+
+### Setup
+
+- Run: `runs/2026-10-09-r11/`, compiler frozen at `ef439aa` (`target/sspur-frozen-ef439aa`), `--tmo` prompts as in `prompts-a.json`, `prompts-b.json` and `prompts-s.json`, one fresh Sonnet 5.5 `general-purpose` subagent per cell, strictly one at a time, no retries. All 17 SSPUR cells are new; nothing in the spec, the prompt or the binary changed between the first counted cell and the last.
+- Python, TypeScript and Go cells are run 9's, unchanged. `xlang/report5.py runs/2026-10-09-r11` prints the table (its column header still says run 10).
+- Exclusions: b6_adventure was aborted by the API three times with "Output blocked by content filtering policy" right after `sspur start`, before any edit (the store had only its import commit each time); the fourth attempt in the same directory is the one counted. Run 5 and run 9 hit the same failure on the same cell. `excluded.txt` lists the three.
+
+### Spec and prompt changes between attempts (pilot cells)
+
+Run 11 was restarted four times. Each restart changed the spec, the prompt or the binary after some cells had run, and the cells run before the change became pilot cells. They are in `pilot-agents.json` and `pilot-tokens.json` and are **not** in any total below.
+
+| Attempt | Setup | Cells run | What it showed | Change made before the next attempt |
+|---|---|---|---|---|
+| 1 | `8fb30a8`: 403-token core spec (`e481b1c`), shorter prompt | a1 | 4 calls / 129,449: read `spec --more` for List and Str builtins | `8b284cf`: the common List and Str builtins go back into the core (482 tokens) |
+| 2 | `8b284cf` | a1 to a8, b1 | a1 to a8 95/95; a1 4 calls, b1 6 calls / 208,685 (`spec --more`, then a rejected edit, a refused heredoc and a failed `sed`) | `3fd1ec8`: tuples named in the core again (503 tokens); `edit` lists at most three `stored as:` notes |
+| 3 | `3fd1ec8`, prompt said "not a shell heredoc" | a1 to a5 | a5 5 calls / 163,394: tried a heredoc, which the sandbox refused | `00aa3e5`: the prompt says why ("which the sandbox refuses"), as run 10's did |
+| 4 | `3fd1ec8` with that prompt | a1 to a5 | a1 and a3 took 4 calls each: a wrong expected value fixed with `sed` in a separate call, and a `python3` heredoc patch of `change.ssp` after the Write | `ef439aa`: the core spec repeats "run `edit --test` in the same turn" and says how `x.f(a)` calls `f` (556 tokens) |
+| 5 | `ef439aa` | all 17 | counted, below | none |
+
+The 20 pilot cells total 70 calls and 2,241,001 tokens. Per cell they ranged from 0.72x to 1.57x of the run 10 cell for the same task.
+
+### Result
+
+Each cell is "API calls / total tokens".
+
+| Task | SSPUR run 11 | SSPUR run 10 | Python | TypeScript | Go | SSPUR/Py | SSPUR/TS | SSPUR/Go |
+|---|---|---|---|---|---|---|---|---|
+| a1_inventory | 3 / 93,721 | 3 / 94,620 | 4 / 127,502 | 4 / 127,407 | 3 / 93,453 | 0.74x | 0.74x | 1.00x |
+| a2_wordstats | 4 / 128,604 | 3 / 94,561 | 3 / 91,171 | 4 / 125,943 | 3 / 94,190 | 1.41x | 1.02x | 1.37x |
+| a3_bank | 3 / 95,396 | 3 / 96,544 | 5 / 163,080 | 3 / 94,390 | 5 / 172,940 | 0.58x | 1.01x | 0.55x |
+| a4_calc | 3 / 95,406 | 3 / 96,259 | 5 / 162,871 | 3 / 94,322 | 4 / 136,461 | 0.59x | 1.01x | 0.70x |
+| a5_orders | 3 / 93,336 | 4 / 129,839 | 7 / 230,852 | 4 / 127,797 | 5 / 160,732 | 0.40x | 0.73x | 0.58x |
+| a6_todo | 3 / 94,206 | 3 / 94,904 | 5 / 160,083 | 3 / 93,219 | 3 / 94,413 | 0.59x | 1.01x | 1.00x |
+| a7_grades | 3 / 93,284 | 3 / 94,157 | 5 / 157,553 | 3 / 92,057 | 4 / 130,585 | 0.59x | 1.01x | 0.71x |
+| a8_config | 3 / 94,409 | 4 / 132,068 | 4 / 128,538 | 5 / 165,867 | 5 / 168,540 | 0.73x | 0.57x | 0.56x |
+| b1_lru | 4 / 131,890 | 4 / 132,913 | 6 / 197,563 | 5 / 170,590 | 3 / 96,279 | 0.67x | 0.77x | 1.37x |
+| b2_calc | 4 / 134,145 | 3 / 97,798 | 5 / 163,264 | 3 / 94,869 | 3 / 96,157 | 0.82x | 1.41x | 1.40x |
+| b3_payroll | 3 / 95,343 | 7 / 250,322 | 6 / 198,721 | 3 / 94,117 | 3 / 95,601 | 0.48x | 1.01x | 1.00x |
+| b4_ratelimit | 4 / 134,693 | 4 / 136,040 | 7 / 242,533 | 3 / 95,438 | 3 / 96,989 | 0.56x | 1.41x | 1.39x |
+| b5_deps | 3 / 97,435 | 3 / 97,488 | 5 / 163,507 | 3 / 94,813 | 3 / 96,245 | 0.60x | 1.03x | 1.01x |
+| b6_adventure | 4 / 131,826 | 4 / 134,821 | 7 / 247,687 | 3 / 95,420 | 5 / 168,218 | 0.53x | 1.38x | 0.78x |
+| b7_ledger | 3 / 95,999 | 5 / 171,135 | 5 / 168,589 | 3 / 95,813 | 3 / 96,839 | 0.57x | 1.00x | 0.99x |
+| b8_merge | 4 / 132,299 | 4 / 133,998 | 4 / 130,148 | 5 / 171,756 | 3 / 96,086 | 1.02x | 0.77x | 1.38x |
+| s1_shop | 4 / 129,320 | 3 / 96,306 | 5 / 162,362 | 4 / 131,251 | 8 / 277,404 | 0.80x | 0.99x | 0.47x |
+| **Total** | 58 / 1,871,312 | 63 / 2,083,773 | 88 / 2,896,024 | 61 / 1,965,069 | 66 / 2,171,132 | **0.65x** | **0.95x** | **0.86x** |
+
+Every SSPUR cell passed every hidden test: **246/246** (95 for a1 to a8, 141 for b1 to b8, 10 for s1_shop; `scores-a.json`, `scores-b.json`, `scores-s.json`), as did the reused cells of the other three languages.
+
+| Comparison | All 17 cells, total | Median per cell | 16 small tasks, total | 16 small tasks, median | SSPUR cheaper on |
+|---|---|---|---|---|---|
+| SSPUR / Python | **0.65x** (run 10: 0.72x) | 0.59x | 0.64x | 0.59x | 15 of 17 |
+| SSPUR / TypeScript | **0.95x** (run 10: 1.06x) | 1.01x | 0.95x | 1.01x | 6 of 17 |
+| SSPUR / Go | **0.86x** (run 10: 0.96x) | 1.00x | 0.92x | 1.00x | 10 of 17 |
+| SSPUR run 11 / run 10 | 0.90x | 0.99x | | | 14 of 17 |
+
+| | SSPUR run 11 | SSPUR run 10 | Python | TypeScript | Go |
+|---|---|---|---|---|---|
+| API calls | 58 | 63 | 88 | 61 | 66 |
+| net (total minus 25,750 per call) | 377,812 | 461,523 | 630,024 | 394,319 | 471,632 |
+| tool I/O (cl100k, read plus written) | 42,999 | 48,727 | 57,038 | 43,104 | 56,223 |
+
+### From the transcripts
+
+- **10 of 17 cells took the minimum 3 calls** (run 10: 9). On the 7 tasks where both SSPUR and TypeScript took 3 calls, SSPUR cost 1.00x to 1.03x TypeScript (run 10: 1.02x to 1.03x): the shorter spec and prompt took about 1k tokens per call off, and what is left is roughly the remaining spec.
+- **The total moved because of the calls, not the spec.** b3 (7 calls in run 10), b7 (5) and a5 and a8 (4) took 3; a2, b2 and s1 took one more call than in run 10. With every cell at about 32k tokens per call, 5 fewer calls are most of the 212k saved.
+- **No command was refused**, and one edit was rejected in 17 cells (b1, a parse error from a stray `==` line; the next edit was accepted). In b1 and b6 the agent patched `change.ssp` with a `python3` heredoc instead of a second Write, which the sandbox ran this time; in the pilot cells the same kind of heredoc was refused.
+- **The extra calls:** a2 read `spec --more` once (Opt and sort). b2 and b4 each had a wrong expected value in a new test of their own; the failing line printed the actual value (`left -3, right 7`, `left 2, right 0`) and each fixed it in one more call. b8's `require_ok` test was false and needed one more edit. b6 corrected its own `change.ssp` in a separate call before the first edit. s1_shop ran one `q grep` for `"EU"` and `ship_fee` after `start`, though `q pack` had already printed the complete caller list (run 10 did not).
+- **One runtime defect surfaced:** b8's last `edit --test` printed `warning: native build failed in the runtime: error: field has incomplete type 'L_T2_Z_S_J'` and fell back to the interpreter. The tests passed and the hidden tests passed, but the native code generator emits a struct for a list of `(Str, J)` tuples before the type it contains, which is a bug to fix.
+
+### Conclusion and caveats
+
+- **Against Python: 0.65x total, 0.59x median**, cheaper on 15 of 17 cells.
+- **Against TypeScript: parity, not a win.** The total is 0.95x but the median is 1.01x, and SSPUR is cheaper on only 6 of 17 cells. The total is below 1.0x because of the TypeScript cells that took 4 or 5 calls (a1, a2, a5, a8, b1, b8, s1); on cells where both took 3 calls SSPUR is about 1% more. Both numbers are inside the plus or minus 20% run-to-run band.
+- **The large codebase is no longer ahead of TypeScript in this run.** s1_shop took 4 calls (one `q grep` it did not need) and is 0.80x Python, 0.99x TypeScript and 0.47x Go; runs 9 and 10 took 3 calls (0.73x and 0.74x TypeScript). One cell per run, so the claim is "ahead of Python and Go, level with or ahead of TypeScript".
+- **Against Go: 0.86x total, 1.00x median.** Also parity on the median; the total is helped by s1_shop, where Go's 8 calls are partly shell friction (see run 9).
+- **The restarts bias this run.** Four times, a restart followed cells that had done worse than expected, and those cells are not counted. Even with every change being a spec or prompt fix that applies to all cells, that stopping rule favors the counted run. Averaging every attempt of each cell (pilot and counted) gives 0.99x TypeScript (median 1.01x) and 0.89x Go (median 1.00x): the same parity conclusion, with the total closer to 1.0x.
+- One run per cell, one model; the Python, TypeScript and Go cells are not reruns, and their harness did not change. The 3-call cells already cost about what TypeScript does, so the remaining lever is calls: fewer wrong expected values in the agents' own tests, and nothing to look up outside the core spec.
+
+### Recommendations for future runs
+
+- **Freeze before the first cell, and do not restart on results.** Every restart in run 11 was a reasonable fix, but each was made after seeing cells. Pilot on a separate task set (or on 2 or 3 tasks that are then dropped), then freeze the spec, prompt and binary and run all 17 cells once.
+- **Rerun the controls.** TypeScript and Go are single runs from run 9. A second TypeScript and Go run on the same tasks would show how much of the 0.95x and 0.86x is their own variance; until then, read anything within 20% of 1.0x as parity.
+- **Run each SSPUR cell at least twice** and report the mean and the spread, so one 4-call cell does not move a ratio by 0.03x.
+- **Keep b6_adventure but handle the filter**: it was blocked by the content filter in runs 5, 9 and 11. Record every abort, as here, or replace its wording with a neutral one in a new task version.
+- **Fix the native tuple-in-list struct ordering** (b8 above) before the next run, so the warning does not cost a reading.
 
 ## Results, run 10
 
@@ -839,6 +937,8 @@ python3 bench/agent/xlang/trace.py RUN_DIR go/s1_shop   # per-call trace of one 
 # run 10: the change.ssp edit line is the default (--r9 gives runs 8 and 9's)
 python3 bench/agent/setup.py /tmp/sspur-agent-r10 --tmo --langs=sspur        # and --b; setup_scale.py for s1
 python3 bench/agent/xlang/report5.py runs/2026-10-09-r10   # run 10 SSPUR against run 9's Python, TypeScript and Go
+# run 11: the shorter prompt is the default (--r10 gives run 10's); compiler frozen at ef439aa
+python3 bench/agent/xlang/report5.py runs/2026-10-09-r11
 ```
 
 `tokens.py` needs `tiktoken`. Set `LC_ALL=en_US.UTF-8` if Python fails with a locale error.

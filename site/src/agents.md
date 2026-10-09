@@ -6,7 +6,7 @@ SSPUR is built for a reader that pays for every token and a writer that never ge
 
 An agent working on an SSPUR codebase needs three steps:
 
-1. **`sspur start NAME...`** prints the core language spec (about 0.8k tokens; `sspur spec --more` has the rest) and then the code the task is about, in one call.
+1. **`sspur start NAME...`** prints the core language spec (about 0.6k tokens; `sspur spec --more` has the rest) and then the code the task is about, in one call.
 2. **`sspur q ...`** only if the agent needs more: names, text matches, bodies or a context pack.
 3. **`sspur edit --test change.ssp`** after writing every definition the change touches to `change.ssp` with the agent's file tool, in the same turn. It typechecks the whole codebase, runs every test, and either applies everything or nothing.
 
@@ -118,18 +118,20 @@ From a local clone, use the path instead: `claude plugin marketplace add /path/t
 
 The benchmark asks whether an agent finishes multi-step feature work in SSPUR with fewer total tokens than the same agent in another language. Each task starts from a small codebase that exists in every language with the same names, behavior and visible tests, and has 4 to 7 steps: bug fixes, new functions and error variants, signature changes that ripple through callers, renames. Each (language, task) pair is solved by one fresh Claude Code subagent with no retries, and scored on hidden tests it never sees. Total tokens are exact API input plus estimated output, summed over every call. The [full report](agent-bench.md) has the method, every run and every cell.
 
-The original comparison was against Python. Run 9 added TypeScript (Node 20, strict `tsc`, `node:test`) and Go (`go test`) as controls, and they changed the conclusion: SSPUR used 0.83x Python's tokens but 1.23x TypeScript's and 1.11x Go's. Run 10 reran all 17 SSPUR cells after three changes (edits through a file the agent writes, canonical storage of unambiguous foreign spellings, a 0.8k-token core spec) against the same Python, TypeScript and Go cells. **SSPUR is now cheaper than Python and level with TypeScript and Go, not ahead of them**, with all four languages passing 246/246 hidden tests:
+The original comparison was against Python. Run 9 added TypeScript (Node 20, strict `tsc`, `node:test`) and Go (`go test`) as controls, and they changed the conclusion: SSPUR used 0.83x Python's tokens but 1.23x TypeScript's and 1.11x Go's. Runs 10 and 11 reran all 17 SSPUR cells against the same Python, TypeScript and Go cells, after edits through a file the agent writes, canonical storage of unambiguous foreign spellings, failing tests that print the values they compared, and a core spec cut to 556 tokens. **SSPUR is cheaper than Python and at parity with TypeScript and Go, not ahead of them**, with all four languages passing 246/246 hidden tests:
 
-| Sonnet 5.5, 17 cells | SSPUR run 10 | SSPUR run 9 | Python | TypeScript | Go |
-|---|---|---|---|---|---|
-| Total tokens | 2,083,773 | 2,409,267 | 2,896,024 | 1,965,069 | 2,171,132 |
-| API calls | 63 | 70 | 88 | 61 | 66 |
-| SSPUR run 10 / language, total | | 0.86x | **0.72x** | **1.06x** | **0.96x** |
-| SSPUR run 10 / language, median per cell | | 0.98x | 0.60x | 1.02x | 1.01x |
-| Hidden tests | 246/246 | 246/246 | 246/246 | 246/246 | 246/246 |
-| Reference source size (cl100k) | 12,087 | 12,087 | 12,790 | 13,745 | 17,526 |
+| Sonnet 5.5, 17 cells | SSPUR run 11 | SSPUR run 10 | SSPUR run 9 | Python | TypeScript | Go |
+|---|---|---|---|---|---|---|
+| Total tokens | 1,871,312 | 2,083,773 | 2,409,267 | 2,896,024 | 1,965,069 | 2,171,132 |
+| API calls | 58 | 63 | 70 | 88 | 61 | 66 |
+| SSPUR run 11 / language, total | | 0.90x | 0.78x | **0.65x** | **0.95x** | **0.86x** |
+| SSPUR run 11 / language, median per cell | | 0.99x | 0.97x | 0.59x | 1.01x | 1.00x |
+| Hidden tests | 246/246 | 246/246 | 246/246 | 246/246 | 246/246 | 246/246 |
+| Reference source size (cl100k) | 12,087 | 12,087 | 12,087 | 12,790 | 13,745 | 17,526 |
 
-SSPUR source is the smallest of the four, but by 400 to 1,400 tokens per task, which cannot decide a run where one API call carries about 30,000 tokens of context. What decides it is calls: TypeScript and Go reach the same 3-call loop as SSPUR without reading any reference, while Python agents take 4 to 7 calls. The one place SSPUR is ahead of all three is the 1,117-definition codebase, where `sspur start NAME...` returns the spec plus exactly the definitions, tests and callers the edit needs and the task takes 3 calls: 0.60x Python, 0.74x TypeScript, 0.35x Go (Go's number is flattered by shell friction; see the report).
+The run 11 totals against TypeScript and Go are below 1.0x, but the medians are not, and SSPUR is cheaper than TypeScript on only 6 of 17 cells: that is parity. Run 11 also excludes 20 pilot cells from four attempts that were restarted after a spec or prompt fix, which favors the counted run; averaging every attempt gives 0.99x TypeScript.
+
+SSPUR source is the smallest of the four, but by 400 to 1,400 tokens per task, which cannot decide a run where one API call carries about 30,000 tokens of context. What decides it is calls: TypeScript and Go reach the same 3-call loop as SSPUR without reading any reference, while Python agents take 4 to 7 calls. On the 1,117-definition codebase, `sspur start NAME...` returns the spec plus exactly the definitions, tests and callers the edit needs; it took 3 calls in runs 9 and 10 (0.74x TypeScript) and 4 in run 11 (0.80x Python, 0.99x TypeScript, 0.47x Go; Go's number is flattered by shell friction, see the report).
 
 The per-model Python comparison, from runs 4 to 8:
 
@@ -148,7 +150,7 @@ Where the savings come from: when the agent follows the loop, a task takes 3 cal
 
 These numbers are real, but they are narrower than a headline makes them sound:
 
-- **The Python result is not a general result.** Run 10's TypeScript and Go ratios (1.06x and 0.96x, medians 1.02x and 1.01x) are inside the plus or minus 20% run-to-run band, so the honest statement about them is "no measured advantage". Do not read 0.70x against Python as 0.70x against whatever you use today.
+- **The Python result is not a general result.** Run 11's TypeScript and Go ratios (0.95x and 0.86x, medians 1.01x and 1.00x) are inside the plus or minus 20% run-to-run band, so the honest statement about them is "no measured advantage". Do not read 0.65x against Python as 0.65x against whatever you use today.
 - **Most cells ran once.** Python's own totals moved by up to 24% between identical runs, and Haiku varies far more (one task took 61 calls, then 8). Only the large-codebase result has two runs (they agree within 0.3%).
 - **Reruns were targeted.** The Haiku 0.83x, the neutral-task 0.66x and several fixes rerun only the SSPUR cells that did worst, against the same Python cells. Cells chosen for doing badly have room to improve on a second try, so part of each improvement is regression to the mean. The Python cells were not rerun.
 - **I wrote the language, the spec, the a-tasks and the harness.** The b-tasks come from neutral sources (LeetCode, an RFC, the AWK book and others) to check for that, and landed close to the a-task result, but they were adapted by the same model family that solved them.

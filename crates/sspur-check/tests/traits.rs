@@ -18,6 +18,15 @@ fn one(src: &str, code: &str, hint: &str) {
 const P: &str = "type P = {x: Int}\n";
 
 #[test]
+fn trait_methods_as_values_need_a_known_parameter_type() {
+    let t = "trait Shape\n  fn area(s: Self) -> Int\ntype Sq = {n: Int}\nimpl Shape for Sq\n  fn area(s: Sq) -> Int = s.n * s.n\n";
+    assert!(errors(&format!("{t}fn f(xs: List[Sq]) -> List[Int]\n= xs.map(area)")).is_empty());
+    one(&format!("{t}fn f() -> List[Int]\n= [1].map(area)"), "E_TRAIT_MISSING", "");
+    one(&format!("{t}fn f() -> Int\n= do\n  g = area\n  g(Sq{{n: 1}})"), "E_UNKNOWN_NAME", "needs a known parameter type");
+    one(&format!("{t}fn app[A](f: A -> Int, x: A) -> Int = f(x)\nfn f() -> Int\n= app(area, Sq{{n: 1}})"), "E_UNKNOWN_NAME", "x => x.area");
+}
+
+#[test]
 fn clean_trait_program_has_no_diags() {
     let src = "trait Shape\n  fn area(s: Self) -> Int\n  fn label(s: Self) -> Str = \"a{s.area}\"\ntype Sq = {n: Int} derive Eq, Ord, Show, Hash, Json\nimpl Shape for Sq\n  fn area(s: Sq) -> Int = s.n * s.n\nfn total[T: Shape + Show](xs: List[T]) -> Int\n= xs.map(_.area).sum\ntest t = total([Sq{n: 2}]) == 4 and Sq{n: 1} < Sq{n: 2} and Sq{n: 3}.label == \"a9\"";
     let m = parse(src).unwrap();
@@ -99,10 +108,13 @@ fn operators_on_user_types_suggest_the_trait() {
 }
 
 #[test]
-fn trait_methods_are_not_values() {
-    let es = errors(&format!("{P}impl Show for P\n  fn show(p: P) -> Str = \"\"\nfn f(xs: List[P]) -> List[Str] = xs.map(show)"));
-    assert_eq!(es[0].code, "E_UNKNOWN_NAME");
-    assert!(es[0].hint.as_deref().unwrap().contains("x => x.show"));
+fn trait_methods_are_values_resolved_statically() {
+    let m = parse(&format!("{P}impl Show for P\n  fn show(p: P) -> Str = \"p\"\nfn f(xs: List[P]) -> List[Str] = xs.map(show)")).unwrap();
+    let out = check(&m);
+    assert!(!out.has_errors(), "{:?}", out.diags);
+    let (m2, _) = elab::lower(&m, &out).unwrap().unwrap();
+    let text = sspur_syntax::print_module(&m2);
+    assert!(text.contains("xs.map(m__0 => show__P(m__0))"), "{text}");
 }
 
 #[test]

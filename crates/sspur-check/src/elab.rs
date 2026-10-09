@@ -236,6 +236,16 @@ impl Elab<'_> {
 
     fn node(&mut self, x: &mut Expr, mono: &HashMap<String, Type>) {
         let key = expr_key(x);
+        if let ExprKind::Name(n) = &x.kind
+            && let Some(&arity) = self.t.method_values.get(&key)
+        {
+            let params: Vec<String> = (0..arity).map(|i| format!("m__{i}")).collect();
+            let recv = Box::new(name_expr(&params[0]));
+            let mut body = Expr::new(ExprKind::Method { recv, name: n.clone(), targs: vec![], args: params[1..].iter().map(|p| name_expr(p)).collect() }, x.span);
+            self.node(&mut body, mono);
+            x.kind = ExprKind::Lambda { params, body: Box::new(body), implicit: false };
+            return;
+        }
         if let Some(targs) = self.t.insts.get(&key).cloned() {
             let name = match &x.kind {
                 ExprKind::Name(n) => Some(n.clone()),

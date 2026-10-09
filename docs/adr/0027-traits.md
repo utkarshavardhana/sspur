@@ -65,6 +65,6 @@ type Vec2 = {x: Int, y: Int} derive Eq, Ord, Show, Hash, Json
 
 - `dyn Trait` (doc 05 section 9): erasure with vtables.
 - Static methods and associated constants (`fn zero() -> Self`), supertraits (`trait Ord: Eq`), associated types beyond trait parameters, and specialization.
-- Trait methods as function values (`xs.map(show)`; write `xs.map(_.show)`), and trait-qualified calls for two traits with one method name.
+- Trait-qualified calls for two traits with one method name. (Trait methods as function values, `xs.map(show)`, came in ADR 0028.)
 - `Deref`, `Call`, `Rem` and `Pow` operator traits; `+=` style compound operators.
 - User `derive` generators through `comptime`, and impl-aware built-in containers.

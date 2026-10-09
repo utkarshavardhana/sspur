@@ -1872,6 +1872,10 @@ impl Checker {
                 self.push_diag("E_STATIC_ACCESS", "error", e.span, format!("static '{n}' can only be used through its access methods"), Some(static_hint(n)), vec![]);
                 self.statics[n].clone()
             }
+            ExprKind::Name(n) if self.method_value_ahead(n) => match self.method_value(n, exp, e.span) {
+                Some(t) => t,
+                None => self.infer_name(n, e.span),
+            },
             ExprKind::Name(n) => self.infer_name(n, e.span),
             ExprKind::Field(x, f) if matches!(&x.kind, ExprKind::Name(n) if self.is_static(n)) => self.infer_static(x, f, &[], e.span),
             ExprKind::Method { recv, name, args, .. } if matches!(&recv.kind, ExprKind::Name(n) if self.is_static(n)) => self.infer_static(recv, name, args, e.span),
@@ -2406,13 +2410,33 @@ impl Checker {
             "print" | "println" | "puts" | "console" => Some("write 'log(s)' and declare '! log'".to_string()),
             "throw" => Some("write 'raise Ctor{..}' and declare '! fail[E]'".to_string()),
             "self" | "this" => Some("no 'self': a method is a fn whose first parameter is the receiver".to_string()),
-            _ if self.method_trait.contains_key(n) => Some(format!("'{n}' is a method of trait {}: call it as x.{n}(..), or pass x => x.{n}", self.method_trait[n])),
+            _ if self.method_trait.contains_key(n) => Some(format!("'{n}' is a method of trait {}: as a value it needs a known parameter type, as in xs.map({n}); here call it as x.{n}(..) or pass x => x.{n}", self.method_trait[n])),
             _ if self.methods.keys().any(|(_, m)| m == n) => Some(format!("'{n}' is a method: write 'x.{n}' for '{n}(x)', and 'x.{n}(a)' for '{n}(x, a)'")),
             _ => None,
         };
         let hint = foreign.or_else(|| suggest(n, locals.iter().chain(self.fns.keys()).chain(self.globals.keys()).chain(self.ctors.keys())));
         self.push_diag("E_UNKNOWN_NAME", "error", span, format!("unknown name '{n}'"), hint, vec![]);
         self.fresh()
+    }
+
+    fn method_value_ahead(&self, n: &str) -> bool {
+        self.method_trait.contains_key(n) && self.lookup(n).is_none() && !self.ctors.contains_key(n) && !self.fns.contains_key(n) && !self.globals.contains_key(n)
+    }
+
+    /// `xs.map(area)` for a trait method `area`: checked as `m__0 => m__0.area`, which the
+    /// elaborator resolves to the impl for the parameter's type.
+    fn method_value(&mut self, n: &str, exp: Option<&Type>, span: Span) -> Option<Type> {
+        let Some(Type::Fn(ps, _, _)) = exp.map(|t| self.resolve(t)) else { return None };
+        let tr = self.method_trait.get(n)?.clone();
+        let arity = self.traits.get(&tr)?.schemes.get(n)?.params.len();
+        if ps.len() != arity || arity == 0 || matches!(self.resolve(&ps[0]), Type::Var(_)) {
+            return None;
+        }
+        let params: Vec<String> = (0..arity).map(|i| format!("m__{i}")).collect();
+        let name = |p: &String| Expr::new(ExprKind::Name(p.clone()), Span::default());
+        let body = Expr::new(ExprKind::Method { recv: Box::new(name(&params[0])), name: n.to_string(), targs: vec![], args: params[1..].iter().map(name).collect() }, span);
+        self.tout.method_values.insert((span.start, span.end, 8), arity);
+        Some(self.infer_lambda(&params, &body, exp, span))
     }
 
     fn infer_lambda(&mut self, params: &[String], body: &Expr, exp: Option<&Type>, span: Span) -> Type {

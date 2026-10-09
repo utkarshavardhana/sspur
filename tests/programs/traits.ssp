@@ -39,6 +39,9 @@ fn grid(cs: List[Cell]) -> Str
 fn loud(r: Rect) -> Str ! log
 = r.announce("ann")
 
+fn areas[T: Shape](xs: List[T]) -> F64
+= xs.map(area).sum
+
 test default_method = Rect{w: 2.0, h: 3.0}.describe == "shape of area 6.0"
 test overridden_default = Circle{r: 1.0}.describe == "circle of area 3.0"
 test call_form = area(Rect{w: 1.0, h: 4.0}) == 4.0
@@ -47,3 +50,4 @@ test builtin_show = Box{v: "x"}.show == "Box(x)" and 5.show == "5"
 test sum_impl = grid([Empty, Full{n: 3}, Empty]) == ".3."
 test effectful_method = loud(Rect{w: 1.0, h: 2.0}) == "ann: 1.0 by 2.0"
 test zero_arg_field_form = Circle{r: 2.0}.name == "circle"
+test method_values = [Rect{w: 1.0, h: 2.0}].map(area) == [2.0] and areas([Circle{r: 1.0}]) == 3.0 and [1, 2].fold(0, add) == 3 and [Empty, Full{n: 4}].map(show).join("") == ".4"

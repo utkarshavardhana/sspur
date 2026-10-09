@@ -16,6 +16,8 @@ pub struct TraitOut {
     pub active: bool,
     /// Trait method calls and operators: the trait and the `Self` type at the site.
     pub sites: HashMap<ExprKey, (String, Type)>,
+    /// Trait methods passed as values (`xs.map(area)`): the name's site and the method's arity.
+    pub method_values: HashMap<ExprKey, usize>,
     /// References to bounded generic functions: their type arguments.
     pub insts: HashMap<ExprKey, Vec<Type>>,
     pub impls: HashMap<(String, String), ImplOut>,

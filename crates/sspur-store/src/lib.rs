@@ -159,13 +159,18 @@ pub struct Loaded {
 impl Loaded {
     /// The program to run: traits elaborated into plain definitions (ADR 0027).
     pub fn executable(self) -> Result<Loaded, Vec<Diag>> {
+        Ok(self.exec_view()?.unwrap_or(self))
+    }
+
+    /// Like `executable`, or `None` when the program has no traits to elaborate.
+    pub fn exec_view(&self) -> Result<Option<Loaded>, Vec<Diag>> {
         match sspur_check::elab::lower(&self.module, &self.check) {
-            Ok(None) => Ok(self),
+            Ok(None) => Ok(None),
             Ok(Some((module, check))) => {
                 let res = Resolution { user_methods: Some(&check.user_methods), record_types: Some(&check.record_types) };
                 let hashes = hash_module_with(&module, &res).into_iter().collect();
                 let own = module.own.unwrap_or(module.defs.len());
-                Ok(Loaded { module, check, hashes, own, ..self })
+                Ok(Some(Loaded { src: self.src.clone(), module, check, hashes, partial: false, own, pkgs: self.pkgs.clone(), exports: self.exports.clone() }))
             }
             Err(e) => Err(vec![pkg::dep_diag(&e)]),
         }
@@ -993,7 +998,7 @@ impl Store {
             return Err(TxResult::diags(next.check.diags, Some(next.src)));
         }
         if gate == Some("tests") {
-            let full = pkg::load(mat.src.clone(), &env, false).map_err(|d| TxResult::diags(d, None))?;
+            let full = pkg::load(mat.src.clone(), &env, false).and_then(Loaded::executable).map_err(|d| TxResult::diags(d, None))?;
             let mut it = sspur_eval::Interp::new(&full.module, full.check.record_types.clone(), full.check.user_methods.clone(), full.check.gen_loops.clone());
             it.set_ownership(full.check.own.moves.clone(), full.check.own.inplace.clone());
             it.set_check(&full.check);

@@ -738,7 +738,22 @@ fn native_failed(args: &Args, what: &str, then: &str) {
     }
 }
 
+fn exec_or<'a>(l: &'a Loaded, tmp: &'a mut Option<Loaded>) -> &'a Loaded {
+    match l.exec_view() {
+        Ok(Some(x)) => tmp.insert(x),
+        Ok(None) => l,
+        Err(d) => {
+            for x in d {
+                eprintln!("error: {} {}", x.code, x.msg);
+            }
+            l
+        }
+    }
+}
+
 fn native_interp(l: &Loaded, args: &Args) -> Interp {
+    let mut tmp = None;
+    let l = exec_or(l, &mut tmp);
     let mut it = interp(l);
     if args.has("--interp") {
         return it;
@@ -780,6 +795,8 @@ fn file_env(path: &str) -> Result<pkg::Env, String> {
 }
 
 pub fn interp(l: &Loaded) -> Interp {
+    let mut tmp = None;
+    let l = exec_or(l, &mut tmp);
     let mut it = Interp::new(&l.module, l.check.record_types.clone(), l.check.user_methods.clone(), l.check.gen_loops.clone());
     it.foreign = l.module.defs[l.own..].iter().map(|d| d.name().to_string()).collect();
     it.set_check(&l.check);

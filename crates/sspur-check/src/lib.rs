@@ -801,7 +801,7 @@ impl Checker {
 
     fn collect(&mut self, m: &Module) {
         let mut seen: HashMap<String, Span> = HashMap::new();
-        for d in &m.defs {
+        for d in m.defs.iter().filter(|d| !matches!(d, Def::Impl(_))) {
             if let Some(prev) = seen.insert(d.name().to_string(), d.span()) {
                 let _ = prev;
                 self.err("E_DUPLICATE", d.span(), format!("'{}' is defined more than once", d.name()));

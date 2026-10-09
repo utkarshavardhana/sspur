@@ -37,7 +37,7 @@ SSPUR_INTRO = """You are working on a large codebase written in SSPUR, a new pro
 
 # Run 10 on: the edit goes through a file the agent writes with its file tool (--r9 keeps the -e line).
 R9_EDIT = "- Change code only with `./sspur edit` as the reference describes. `./sspur test` and `./sspur check` are also available.\n- Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."
-R10_EDIT = "- To change code, write the new and changed definitions to {dir}/change.ssp with your file-writing tool, then run `cd {dir} && ./sspur edit --test change.ssp` in the same turn, as the reference describes. `./sspur test` and `./sspur check` are also available.\n- Do not read or write anything under .sspur/ directly, do not create other .ssp files, and do not run `./sspur init`."
+R10_EDIT = "- To change code, write the new and changed definitions to {dir}/change.ssp with the Write tool (not a shell heredoc, which the sandbox refuses), then run `cd {dir} && ./sspur edit --test change.ssp` in the same turn, as the reference describes. `./sspur test` and `./sspur check` are also available.\n- Do not read or write anything under .sspur/ directly, do not create other .ssp files, and do not run `./sspur init`."
 
 # Runs 5 to 7 (--r7): the spec alone first, then searches.
 SSPUR_INTRO_R7 = SSPUR_INTRO.split("\n- Start with")[0] + """

@@ -50,7 +50,7 @@ R7_START = "./sspur spec && ./sspur src`: the language reference (the only docum
 # Run 10 on: the edit goes through a file the agent writes with its file tool, which no shell
 # sandbox refuses (runs 2 to 9 passed the definitions in one quoted -e argument).
 R9_EDIT = "- Change code only with `./sspur edit` as the reference describes. `./sspur q`, `./sspur test` and `./sspur check` are also available.\n- Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."
-R10_EDIT = "- To change code, write the new and changed definitions to {dir}/change.ssp with your file-writing tool, then run `cd {dir} && ./sspur edit --test change.ssp` in the same turn, as the reference describes. `./sspur q`, `./sspur test` and `./sspur check` are also available.\n- Do not read or write anything under .sspur/ directly, do not create other .ssp files, and do not run `./sspur init`."
+R10_EDIT = "- To change code, write the new and changed definitions to {dir}/change.ssp with the Write tool (not a shell heredoc, which the sandbox refuses), then run `cd {dir} && ./sspur edit --test change.ssp` in the same turn, as the reference describes. `./sspur q`, `./sspur test` and `./sspur check` are also available.\n- Do not read or write anything under .sspur/ directly, do not create other .ssp files, and do not run `./sspur init`."
 
 PY_INTRO = """You are working on a small Python 3.9 codebase. Working directory: {dir}
 

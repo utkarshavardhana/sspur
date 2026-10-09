@@ -532,6 +532,7 @@ fn kind_of(s: &str) -> Kind {
         "type" => Kind::Type,
         "ctor" => Kind::Ctor,
         "effect" => Kind::Effect,
+        "trait" => Kind::Trait,
         _ => Kind::Op,
     }
 }
@@ -676,6 +677,7 @@ pub fn link(src: &str, env: &Env) -> Result<Linked, Vec<Diag>> {
                     Err(e) => errs.push(syntax_diag(&e)),
                 }
             }
+        } else if matches!(d, Def::Impl(_)) {
         } else if let Some((p, _)) = n.split_once('.') {
             errs.push(perr("E_DEP_READONLY", format!("{n} belongs to dependency {p}; dependency code can't be edited here"), d.span()));
         } else if n.contains("__") && !env.is_empty() {
@@ -768,12 +770,16 @@ pub fn build_pkg(m: &Manifest, src: &str, deps: &BTreeMap<String, Arc<Pkg>>) -> 
     let mut map: HashMap<String, String> = HashMap::new();
     let mut items: BTreeMap<String, PItem> = BTreeMap::new();
     for d in &own {
+        if matches!(d, Def::Impl(_)) {
+            continue;
+        }
         let n = d.name().to_string();
         let mg = link::mangle(&m.name, &n);
         let (kind, arity) = match d {
             Def::Fn(f) => ("fn", f.params.len()),
             Def::Type(_) => ("type", 0),
             Def::Effect(_) => ("effect", 0),
+            Def::Trait(_) => ("trait", 0),
             _ => ("static", 0),
         };
         items.insert(n.clone(), PItem { kind: kind.into(), mangled: mg.clone(), public: d.is_pub(), arity, owner: None });
@@ -785,6 +791,13 @@ pub fn build_pkg(m: &Manifest, src: &str, deps: &BTreeMap<String, Arc<Pkg>>) -> 
                 items.entry(v.name.clone()).or_insert(PItem { kind: "ctor".into(), mangled: vm, public: d.is_pub(), arity: 0, owner: Some(n.clone()) });
             }
         }
+        if let Def::Trait(t) = d {
+            for x in &t.methods {
+                let om = link::mangle(&m.name, &x.sig.name);
+                map.insert(x.sig.name.clone(), om.clone());
+                items.entry(x.sig.name.clone()).or_insert(PItem { kind: "op".into(), mangled: om, public: d.is_pub(), arity: x.sig.params.len(), owner: Some(n.clone()) });
+            }
+        }
         if let Def::Effect(e) = d {
             for op in &e.ops {
                 let om = link::mangle(&m.name, &op.name);
@@ -794,7 +807,9 @@ pub fn build_pkg(m: &Manifest, src: &str, deps: &BTreeMap<String, Arc<Pkg>>) -> 
         }
     }
     let mut defs: Vec<Def> = own.iter().map(|d| (*d).clone()).collect();
-    rename_defs(&mut defs, &map, &loaded.check.user_methods);
+    let mut methods = loaded.check.user_methods.clone();
+    methods.extend(loaded.check.traits.sites.keys().filter(|k| matches!(k.2, 4 | 5)).map(|k| (k.0, k.1)));
+    rename_defs(&mut defs, &map, &methods);
     let mut pubs = BTreeSet::new();
     for d in &mut defs {
         if d.is_pub() {
@@ -804,13 +819,15 @@ pub fn build_pkg(m: &Manifest, src: &str, deps: &BTreeMap<String, Arc<Pkg>>) -> 
             Def::Fn(f) => f.public = false,
             Def::Type(t) => t.public = false,
             Def::Effect(e) => e.public = false,
+            Def::Trait(t) => t.public = false,
             _ => {}
         }
     }
     let piece = defs.iter().map(printer::print_def).collect::<Vec<_>>().join("\n\n");
     let prelude = env.prelude();
     let full = if prelude.is_empty() { format!("{piece}\n") } else { format!("{piece}\n\n{prelude}\n") };
-    let module = parse(&full).map_err(|e| format!("{}: internal: the renamed package does not parse: {}", m.name, e.msg))?;
+    let mut module = parse(&full).map_err(|e| format!("{}: internal: the renamed package does not parse: {}", m.name, e.msg))?;
+    module.own = Some(0);
     let check = check_cached(full.clone(), module, None);
     if check.check.has_errors() {
         return Err(format!("{}: internal: the renamed package does not check:\n{}", m.name, lines(&full, &check.check.diags)));
@@ -821,8 +838,12 @@ pub fn build_pkg(m: &Manifest, src: &str, deps: &BTreeMap<String, Arc<Pkg>>) -> 
         if !pubs.contains(d.name()) {
             continue;
         }
-        let local = items.iter().find(|(_, it)| it.mangled == d.name() && it.owner.is_none()).map(|(n, _)| n.clone()).unwrap_or_default();
         let (sig, effects, contracts) = sig_parts(d, &show);
+        if let Def::Impl(i) = d {
+            exports.insert(show(&i.key), Export { kind: "impl".into(), sig, effects, contracts, hash: check.hashes.get(d.name()).cloned().unwrap_or_default() });
+            continue;
+        }
+        let local = items.iter().find(|(_, it)| it.mangled == d.name() && it.owner.is_none()).map(|(n, _)| n.clone()).unwrap_or_default();
         let kind = items[&local].kind.clone();
         exports.insert(local, Export { kind, sig, effects, contracts, hash: check.hashes.get(d.name()).cloned().unwrap_or_default() });
     }

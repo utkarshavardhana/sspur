@@ -30,6 +30,7 @@ fn run_suite() {
 
         let res = Resolution { user_methods: Some(&out.user_methods), record_types: Some(&out.record_types) };
         assert_eq!(hash_module_with(&module, &res), hash_module_with(&module, &res));
+        let (module, out) = sspur_check::elab::lower(&module, &out).unwrap_or_else(|e| panic!("{}: {e}", path.display())).unwrap_or((module, out));
 
         let mut interp = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone());
         interp.set_check(&out);
@@ -79,6 +80,7 @@ fn native_release_matches_interpreter_on_every_suite_program() {
             let src = std::fs::read_to_string(&path).unwrap();
             let module = parse(&src).unwrap();
             let out = check(&module);
+            let (module, out) = sspur_check::elab::lower(&module, &out).unwrap_or_else(|e| panic!("{}: {e}", path.display())).unwrap_or((module, out));
             let mut first = Interp::new(&module, out.record_types.clone(), out.user_methods.clone(), out.gen_loops.clone());
             first.set_check(&out);
             let interp = first.run_tests();

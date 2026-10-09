@@ -1,0 +1,49 @@
+trait Shape
+  fn area(s: Self) -> F64
+  fn name(s: Self) -> Str = "shape"
+  fn describe(s: Self) -> Str = "{s.name} of area {s.area}"
+
+trait Announce
+  fn announce(x: Self, who: Str) -> Str ! log
+
+type Circle = {r: F64}
+type Rect = {w: F64, h: F64}
+type Box[T] = {v: T}
+type Cell = Empty | Full{n: Int}
+
+impl Shape for Circle
+  fn area(c: Circle) -> F64 = 3.0 * c.r * c.r
+  fn name(c: Circle) -> Str = "circle"
+
+impl Shape for Rect
+  fn area(r: Self) -> F64 = r.w * r.h
+
+impl Announce for Rect
+  fn announce(r: Rect, who: Str) -> Str ! log
+  = do
+    log("{who} sees a rect")
+    "{who}: {r.w} by {r.h}"
+
+impl[T: Show] Show for Box[T]
+  fn show(b: Box[T]) -> Str = "Box({b.v.show})"
+
+impl Show for Cell
+  fn show(c: Cell) -> Str
+  = match c
+    | Empty => "."
+    | Full{n} => n.str
+
+fn grid(cs: List[Cell]) -> Str
+= cs.map(_.show).join("")
+
+fn loud(r: Rect) -> Str ! log
+= r.announce("ann")
+
+test default_method = Rect{w: 2.0, h: 3.0}.describe == "shape of area 6.0"
+test overridden_default = Circle{r: 1.0}.describe == "circle of area 3.0"
+test call_form = area(Rect{w: 1.0, h: 4.0}) == 4.0
+test generic_impl = Box{v: Box{v: 7}}.show == "Box(Box(7))"
+test builtin_show = Box{v: "x"}.show == "Box(x)" and 5.show == "5"
+test sum_impl = grid([Empty, Full{n: 3}, Empty]) == ".3."
+test effectful_method = loud(Rect{w: 1.0, h: 2.0}) == "ann: 1.0 by 2.0"
+test zero_arg_field_form = Circle{r: 2.0}.name == "circle"

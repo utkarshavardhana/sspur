@@ -5,7 +5,7 @@
 
 use super::*;
 
-const MAX_SPECS: usize = 2000;
+const MAX_SPECS: usize = 500;
 
 enum Target {
     Fn(String),
@@ -172,7 +172,7 @@ impl Elab<'_> {
         self.taken.insert(name.clone());
         self.specs.insert(key, name.clone());
         if self.specs.len() > MAX_SPECS {
-            self.err.get_or_insert_with(|| format!("E_TRAIT_RECURSION {template} is specialized more than {MAX_SPECS} times; a bounded generic may not call itself at a growing type"));
+            self.err.get_or_insert_with(|| format!("E_TRAIT_RECURSION {template} is specialized more than {MAX_SPECS} times: a bounded generic calls itself at a growing type; make the recursive helper unbounded or fix its type"));
         } else {
             self.queue.push((name.clone(), template.to_string(), map));
         }
@@ -249,7 +249,7 @@ impl Elab<'_> {
             if let Some(n) = name
                 && let Some((_, f)) = self.templates.get(&n)
             {
-                let map: HashMap<String, Type> = f.tparams.iter().map(|p| p.name.clone()).zip(targs.iter().map(|t| subst_params(t, mono))).collect();
+                let map: HashMap<String, Type> = f.tparams.iter().filter(|p| p.name.starts_with(|c: char| c.is_ascii_uppercase())).map(|p| p.name.clone()).zip(targs.iter().map(|t| subst_params(t, mono))).collect();
                 let s = self.spec(&n, map);
                 match &mut x.kind {
                     ExprKind::Name(n) => *n = s,

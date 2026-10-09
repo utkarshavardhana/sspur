@@ -183,6 +183,8 @@ impl Checker {
         }
         if let Some(p) = t.params.iter().find(|p| p.kind.is_some() || !p.bounds.is_empty() || !p.name.starts_with(|c: char| c.is_ascii_uppercase())) {
             self.push_diag("E_TRAIT_PARAMS", "error", t.span, format!("trait parameter '{}' must be a plain type parameter like T", p.name), Some(format!("write 'trait {}[T]'", t.name)), vec![]);
+            self.traits.insert(t.name.clone(), TraitInfo { params: t.params.iter().map(|p| p.name.clone()).collect(), methods: vec![], schemes: HashMap::new(), defaults: HashSet::new(), builtin });
+            return;
         }
         let params: Vec<String> = t.params.iter().map(|p| p.name.clone()).collect();
         self.traits.insert(t.name.clone(), TraitInfo { params: params.clone(), methods: vec![], schemes: HashMap::new(), defaults: HashSet::new(), builtin });
@@ -248,7 +250,7 @@ impl Checker {
             }
         }
         if let Some(p) = declared.iter().find(|p| !params.contains(p)) {
-            self.push_diag("E_IMPL_TARGET", "error", i.span, format!("impl parameter '{p}' does not appear in {}", printer::ty(&i.target)), None, vec![]);
+            self.push_diag("E_IMPL_TARGET", "error", i.span, format!("impl parameter '{p}' does not appear in {}", printer::ty(&i.target)), Some(format!("drop '{p}' from impl[..] or use it in the type")), vec![]);
             return None;
         }
         Some((params, i.target.clone()))
@@ -285,7 +287,7 @@ impl Checker {
                 continue;
             }
             if seen.contains(x) {
-                self.push_diag("E_DUPLICATE", "error", t.span, format!("{} derives {x} twice", t.name), None, vec![]);
+                self.push_diag("E_DUPLICATE", "error", t.span, format!("{} derives {x} twice", t.name), Some(format!("list {x} once")), vec![]);
                 continue;
             }
             if matches!(t.body, TypeBody::Alias(..)) {
@@ -342,7 +344,7 @@ impl Checker {
         let targs: Vec<Type> = i.trait_args.iter().map(|a| self.conv_ty(a)).collect();
         self.tparams = saved_tps;
         let Type::Con(con, _) = self_ty.clone() else {
-            self.push_diag("E_IMPL_TARGET", "error", i.span, format!("'{}' is not a named type", printer::ty(&i.target)), None, vec![]);
+            self.push_diag("E_IMPL_TARGET", "error", i.span, format!("'{}' is not a named type", printer::ty(&i.target)), Some("impls are for named types; wrap it: type My = new T".into()), vec![]);
             return;
         };
         if matches!(self.types.get(&con).map(|t| &t.kind), Some(TypeKind::Alias(_))) {
@@ -388,7 +390,7 @@ impl Checker {
                 continue;
             };
             if fns.contains_key(&mname) {
-                self.push_diag("E_DUPLICATE", "error", f.sig_span, format!("'{}' is defined twice in this impl", f.name), None, vec![]);
+                self.push_diag("E_DUPLICATE", "error", f.sig_span, format!("'{}' is defined twice in this impl", f.name), Some("keep one definition".into()), vec![]);
                 continue;
             }
             let unit = unit_name(&mname, &con);
@@ -554,6 +556,8 @@ impl Checker {
     pub(crate) fn missing_hint(&self, t: &Type, tr: &str) -> Option<String> {
         match self.resolve(t) {
             Type::Param(p) => Some(format!("add the bound to the type parameter: [{p}: {tr}]")),
+            Type::Con(c, _) if self.impls.get(&(tr.to_string(), c.clone())).is_some_and(|i| !i.own && !i.public) => Some(format!("export it from its package: 'pub impl {tr} for {}'", c.rsplit("__").next().unwrap_or(&c))),
+            Type::Con(c, _) if c.contains("__") => Some(format!("an impl of {tr} for {t} must come from its package; or wrap it: 'type My = new {t}' and impl {tr} for My", t = self.resolve(t))),
             Type::Con(c, _) if self.types.contains_key(&c) && !c.starts_with('#') => {
                 let shown = c.rsplit("__").next().unwrap_or(&c).to_string();
                 if DERIVABLE.contains(&tr) {
@@ -640,6 +644,9 @@ impl Checker {
         if !self.trait_target(&t, tr, false) {
             return false;
         }
+        if tr == "Eq" && matches!(&t, Type::Con(c, _) if self.impls.get(&(tr.to_string(), c.clone())).is_some_and(|i| i.derived)) {
+            return false;
+        }
         self.pending_sites.push(((span.start, span.end, tag), tr.to_string(), t, span));
         true
     }
@@ -674,19 +681,21 @@ impl Checker {
             self.tout.sites.insert(key, (tr, z));
         }
         for (key, fname, targs, tparams, bounds, span) in std::mem::take(&mut self.pending_insts) {
+            let mut unknown = Vec::new();
             for (p, t) in tparams.iter().zip(&targs) {
                 if matches!(self.resolve(t), Type::Var(_)) {
                     let mine: Vec<&Bound> = bounds.iter().filter(|(bp, _, _)| bp == p).collect();
                     if !mine.iter().all(|(_, tr, _)| self.intrinsic("Unit", &[], tr).is_some()) {
                         let need: Vec<&str> = mine.iter().map(|(_, tr, _)| tr.as_str()).collect();
                         self.push_diag("E_TRAIT_AMBIGUOUS", "error", span, format!("cannot infer {p} of {fname} (it needs {})", need.join(" + ")), Some("give the argument a known type, for example through a typed parameter or a non-empty list".into()), vec![]);
+                        unknown.push(p.clone());
                     }
                 }
             }
             let targs: Vec<Type> = targs.iter().map(|t| self.zonk(t)).collect();
             let map: HashMap<String, Type> = tparams.iter().cloned().zip(targs.iter().cloned()).collect();
             for (p, tr, _) in &bounds {
-                let Some(t) = map.get(p) else { continue };
+                let Some(t) = map.get(p).filter(|_| !unknown.contains(p)) else { continue };
                 if let Err(why) = self.implements(t, tr, 0) {
                     let shown = fname.rsplit("__").next().unwrap_or(&fname).to_string();
                     let hint = self.missing_hint(t, tr);

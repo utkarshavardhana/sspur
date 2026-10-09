@@ -29,6 +29,9 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 - `big(n)`, `decimal("1.25")` (Opt); `regex(p)` (Res) `.is_match(s) captures(s)` (Opt of groups, 0 first) `find_all replace(s, "$1")`; `date(y, m, d)` (Opt); `json.encode(v) json.decode[T](s)` (Res).
 - `! fs`: `read_file(p) write_file(p, s)` (`Res[_, Str]`); `! io`: `read_line`; `! time`: `now`; `! env`: `env_var`; `! proc`: `run_cmd`.
 
+## Edit
+`./sspur edit --test change.ssp` is one atomic, typechecked transaction. Spellings from other languages that have one meaning (`&&`, `len(x)`, `None`, `s.slice(a, b)`, a missing effect) are stored in SSPUR form and listed after `stored as:`. A failing test prints the values it compared (`left 7, right 8`).
+
 ## Elsewhere
 `./sspur spec --full` covers concurrency (`! conc`, `par`, `atomic`, `chan`), services (`store`, `db.get`, `svc`, `ep`, `migrate_S`), packages (`./sspur add`, `pub`, `use lib.{f}`) and C, sys, bare and GPU (`extern fn`, `profile`, `kernel fn`).
 

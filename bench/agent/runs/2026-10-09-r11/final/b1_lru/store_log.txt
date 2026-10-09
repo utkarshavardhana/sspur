@@ -1,0 +1,2 @@
+#j4e467z7qtt2  2026-10-09T11:00:41Z  edit    [~Cache ~describe ~described +evict_lru ~get_or +get_or_hit +get_or_miss ~keys ~lookup ~lookup_hit ~lookup_miss ~main +mk +new_bad ~new_cache +new_ok +peek +peek_pure ~put +put_existing +put_existing_value ~put_two +resize +resize_bad +resize_grows +resize_shrinks ~size +touch +trim]
+#gkwe3jriykko  2026-10-09T09:40:08Z  import  import start.ssp  [+Cache +CacheErr +Entry +describe +described +get_or +keys +lookup +lookup_hit +lookup_miss +main +new_cache +put +put_two +size]

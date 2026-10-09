@@ -303,7 +303,7 @@ impl Interp {
             *self.output.borrow_mut() = Some(vec![]);
             let r = match self.eval(&t.body, &Env::child(&self.globals)).and_then(|v| kernel::sync().map(|_| v)) {
                 Ok(Value::Bool(true)) => Ok(()),
-                Ok(Value::Bool(false)) => Err("evaluated to false".to_string()),
+                Ok(Value::Bool(false)) => Err(self.explain(&t.body, &Env::child(&self.globals)).unwrap_or_else(|| "evaluated to false".to_string())),
                 Ok(v) => Err(format!("expected Bool, got {v}")),
                 Err(c) => Err(describe(c)),
             };
@@ -311,6 +311,103 @@ impl Interp {
             out.push((t.name.clone(), r));
         }
         out
+    }
+
+    /// Why a test body that evaluated to false is false: the values of the comparison that failed.
+    /// Re-evaluates the parts it shows; `None` if nothing more specific than "false" can be said.
+    fn explain(&self, e: &Expr, env: &Rc<Env>) -> Option<String> {
+        use BinOp::*;
+        let show = |v: &Value| clip(value::Quoted(v).to_string());
+        let is_false = |v: &R| matches!(v, Ok(Value::Bool(false)));
+        match &e.kind {
+            ExprKind::Binary(And, l, r) => match self.truthy(l, env).ok()? {
+                false => self.explain(l, env),
+                true => self.explain(r, env),
+            },
+            ExprKind::Binary(Or, l, r) => match (self.explain(l, env), self.explain(r, env)) {
+                (Some(a), Some(b)) => Some(format!("{a}; {b}")),
+                (a, b) => a.or(b),
+            },
+            ExprKind::Binary(op @ (Eq | Ne | Lt | Le | Gt | Ge), l, r) => {
+                let a = self.eval(l, env).ok()?;
+                let b = self.eval(r, env).ok()?;
+                let ok = match op {
+                    Eq => a == b,
+                    Ne => a != b,
+                    Lt => a < b,
+                    Le => a <= b,
+                    Gt => a > b,
+                    _ => a >= b,
+                };
+                (!ok).then(|| format!("left {}, right {}", show(&a), show(&b)))
+            }
+            ExprKind::Unary(UnOp::Not, x) => match &x.kind {
+                ExprKind::Binary(Eq | Ne | Lt | Le | Gt | Ge, l, r) => {
+                    let a = self.eval(l, env).ok()?;
+                    let b = self.eval(r, env).ok()?;
+                    Some(format!("left {}, right {}", show(&a), show(&b)))
+                }
+                _ => None,
+            },
+            ExprKind::Method { recv, name, args, .. } if !args.iter().any(|a| matches!(a.kind, ExprKind::Lambda { .. })) => {
+                let rv = self.eval(recv, env).ok()?;
+                let avs: Vec<String> = args.iter().map(|a| self.eval(a, env).ok().map(|v| show(&v))).collect::<Option<_>>()?;
+                is_false(&self.eval(e, env)).then(|| format!("{}.{name}({}) is false", show(&rv), avs.join(", ")))
+            }
+            ExprKind::Method { recv, name, .. } => {
+                let rv = self.eval(recv, env).ok()?;
+                is_false(&self.eval(e, env)).then(|| format!("{name} is false on {}", show(&rv)))
+            }
+            ExprKind::Catch(body, arms) => match self.eval(body, env) {
+                Ok(Value::Bool(false)) => self.explain(body, env),
+                Err(Ctrl::Raise(v)) => {
+                    for a in arms {
+                        let inner = Env::child(env);
+                        if !self.bind_pat(&a.pat, &v, &inner) || a.guard.as_ref().is_some_and(|g| !self.truthy(g, &inner).unwrap_or(false)) {
+                            continue;
+                        }
+                        let why = match a.body.kind {
+                            ExprKind::Bool(false) => None,
+                            _ => self.explain(&a.body, &inner),
+                        };
+                        return Some(match why {
+                            Some(w) => format!("raised {}: {w}", show(&v)),
+                            None => format!("raised {}", show(&v)),
+                        });
+                    }
+                    None
+                }
+                _ => None,
+            },
+            ExprKind::Match(s, arms) => {
+                let v = self.eval(s, env).ok()?;
+                for a in arms {
+                    let inner = Env::child(env);
+                    if !self.bind_pat(&a.pat, &v, &inner) || a.guard.as_ref().is_some_and(|g| !self.truthy(g, &inner).unwrap_or(false)) {
+                        continue;
+                    }
+                    return match a.body.kind {
+                        ExprKind::Bool(false) => Some(format!("matched {}", show(&v))),
+                        _ => self.explain(&a.body, &inner),
+                    };
+                }
+                None
+            }
+            ExprKind::If(c, a, b) => match self.truthy(c, env).ok()? {
+                true => self.explain(a, env),
+                false => self.explain(b.as_deref()?, env),
+            },
+            ExprKind::Block(stmts) if !stmts.iter().any(|s| matches!(s, Stmt::Fn(_))) => {
+                let (Stmt::Expr(last), init) = stmts.split_last()? else { return None };
+                let mut frames = vec![Env::child(env)];
+                for s in init {
+                    let cur = frame_for(s, &mut frames);
+                    self.exec(s, &cur).ok()?;
+                }
+                self.explain(last, frames.last()?)
+            }
+            _ => None,
+        }
     }
 
     pub fn set_ownership(&mut self, moves: HashSet<(u32, u32)>, inplace: HashSet<(u32, u32)>) {
@@ -639,7 +736,12 @@ impl Interp {
         }
         for pre in &f.pres {
             if !self.truthy(pre, &env)? {
-                return trap(format!("contract violated: pre {} in {}", printer::expr(pre, 0), f.name));
+                let shown: Vec<String> = visit::mentioned_params(&f.params, pre)
+                    .into_iter()
+                    .filter_map(|i| env.get(&f.params[i].name).map(|v| format!("{} = {}", f.params[i].name, value::Quoted(&v))))
+                    .collect();
+                let vals = if shown.is_empty() { String::new() } else { format!(" ({})", shown.join(", ")) };
+                return trap(format!("contract violated: pre {} in {}{vals}", printer::expr(pre, 0), f.name));
             }
         }
         let body = match &f.body.kind {
@@ -1572,4 +1674,17 @@ pub fn describe(c: Ctrl) -> String {
         Ctrl::Abort(..) => "effect handler result escaped its handle".into(),
         Ctrl::Escape(_, c) => describe(*c),
     }
+}
+
+/// A value shown in a failing test's explanation, cut to a size an agent can read.
+fn clip(s: String) -> String {
+    const MAX: usize = 300;
+    if s.len() <= MAX {
+        return s;
+    }
+    let mut end = MAX;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &s[..end])
 }

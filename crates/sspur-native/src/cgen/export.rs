@@ -148,7 +148,7 @@ impl Cx<'_> {
             let i = index[&f.name];
             names[i] = c_lit(lower::original_name(&f.name));
             for (k, p) in f.pres.iter().enumerate() {
-                writeln!(contracts, "    if (code == {T_PRE} && st->func == {i} && st->clause == {k}) x_put(&b, {});", c_lit(&format!("contract violated: pre {} in {}", printer::expr(p, 0), f.name))).unwrap();
+                writeln!(contracts, "    if (code == {T_PRE} && !b.len && st->func == {i} && st->clause == {k}) x_put(&b, {});", c_lit(&format!("contract violated: pre {} in {}", printer::expr(p, 0), f.name))).unwrap();
             }
             for (k, p) in f.posts.iter().enumerate() {
                 let msg = format!("contract violated: post {} in {}", printer::expr(p, 0), f.name);
@@ -186,6 +186,7 @@ impl Cx<'_> {
     case 19: x_put(&b, "byte index "); sb_int(&b, st->value); x_put(&b, " out of bounds for a string of "); sb_int(&b, st->clause); x_put(&b, " bytes"); break;
     case {T_GUESS}: x_put(&b, "guess confidence "); sb_f64d(&b, bitsd(st->value)); x_put(&b, " is outside [0, 1]"); break;
     case {T_MSG}: if (st->rbuf) sb_put(&b, (const char*)st->rbuf, st->rlen); break;
+    case {T_PRE}: if (st->rbuf) sb_put(&b, (const char*)st->rbuf, st->rlen); break;
     case {T_RAISE}: x_put(&b, "unhandled error: "); switch (st->err_type) {{ {raised}default: break; }} break;
     default: break;
     }}

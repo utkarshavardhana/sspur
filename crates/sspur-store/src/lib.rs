@@ -307,6 +307,7 @@ struct PWrite {
     base: Option<Ids>,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum Outcome {
     Done(TxResult),
     Rebase,

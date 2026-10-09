@@ -174,6 +174,15 @@ pub(crate) struct RichFn {
     pub(crate) ret: Type,
 }
 
+thread_local! {
+    /// Parameter values a Cranelift function recorded before a `pre` trap, shown in the message.
+    static PRE_NOTES: std::cell::RefCell<Vec<i64>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+extern "C" fn sspur_note(v: i64) {
+    PRE_NOTES.with(|n| n.borrow_mut().push(v));
+}
+
 extern "C" fn sspur_pow(base: i64, exp: i64, st: *mut Status) -> i64 {
     let st = unsafe { &mut *st };
     if exp < 0 {
@@ -242,6 +251,7 @@ impl Compiled {
         }
         let mut st = Status { limit: self.max_depth.get(), ..Status::default() };
         let s = &mut st as *mut Status;
+        PRE_NOTES.with(|n| n.borrow_mut().clear());
         let r = unsafe {
             match arity {
                 0 => std::mem::transmute::<*const u8, extern "C" fn(*mut Status) -> i64>(ptr)(s),
@@ -363,7 +373,26 @@ impl Compiled {
                 let v = self.decode_rbuf(st, t).unwrap_or_else(|| scalar_display(t, st.value));
                 format!("contract violated: post {} in {} (r = {v})", printer::expr(&f.posts[st.clause as usize], 0), f.name)
             }
-            (T_PRE, Some(f)) => format!("contract violated: pre {} in {}", printer::expr(&f.pres[st.clause as usize], 0), f.name),
+            (T_PRE, _) if !st.rbuf.is_null() => {
+                let bytes = unsafe { std::slice::from_raw_parts(st.rbuf as *const u8, st.rlen as usize) };
+                let m = String::from_utf8_lossy(bytes).into_owned();
+                if let Some(free) = self.inner.free {
+                    unsafe { free(st.rbuf) };
+                }
+                m
+            }
+            (T_PRE, Some(f)) => {
+                let pre = &f.pres[st.clause as usize];
+                let notes = PRE_NOTES.with(|n| std::mem::take(&mut *n.borrow_mut()));
+                let idx = sspur_syntax::visit::mentioned_params(&f.params, pre);
+                let vals = if notes.len() == idx.len() && !idx.is_empty() {
+                    let shown: Vec<String> = idx.iter().zip(&notes).map(|(j, v)| format!("{} = {}", f.params[*j].name, Self::show(f, kind_of(Some(&f.params[*j].ty)), *v))).collect();
+                    format!(" ({})", shown.join(", "))
+                } else {
+                    String::new()
+                };
+                format!("contract violated: pre {} in {}{vals}", printer::expr(pre, 0), f.name)
+            }
             (T_POST, Some(f)) => format!(
                 "contract violated: post {} in {} (r = {})",
                 printer::expr(&f.posts[st.clause as usize], 0),
@@ -588,6 +617,7 @@ pub fn compile(m: &Module) -> Result<Compiled, String> {
     let isa = cranelift_native::builder().map_err(|e| e.to_string())?.finish(settings::Flags::new(flags)).map_err(|e| e.to_string())?;
     let mut jb = JITBuilder::with_isa(isa, default_libcall_names());
     jb.symbol("sspur_pow", sspur_pow as *const u8);
+    jb.symbol("sspur_note", sspur_note as *const u8);
     let mut module = JITModule::new(jb);
     let ptr_ty = module.target_config().pointer_type();
 
@@ -618,6 +648,9 @@ pub fn compile(m: &Module) -> Result<Compiled, String> {
     pow_sig.params.extend([AbiParam::new(types::I64), AbiParam::new(types::I64), AbiParam::new(ptr_ty)]);
     pow_sig.returns.push(AbiParam::new(types::I64));
     let pow_id = module.declare_function("sspur_pow", Linkage::Import, &pow_sig).map_err(|e| e.to_string())?;
+    let mut note_sig = module.make_signature();
+    note_sig.params.push(AbiParam::new(types::I64));
+    let note_id = module.declare_function("sspur_note", Linkage::Import, &note_sig).map_err(|e| e.to_string())?;
 
     let frontend_cfg = module.target_config();
     let mut ctx = module.make_context();
@@ -638,8 +671,9 @@ pub fn compile(m: &Module) -> Result<Compiled, String> {
                 fun_refs.insert(n.clone(), module.declare_func_in_func(*fid, b.func));
             }
             let pow_ref = module.declare_func_in_func(pow_id, b.func);
+            let note_ref = module.declare_func_in_func(note_id, b.func);
             let mf = MemFlagsData::new();
-            let mut g = Gen { b, mf, st, depth, scopes: vec![HashMap::new()], fun_refs, pow_ref, fidx: index[&f.name] as i64, exit: None, result: None };
+            let mut g = Gen { b, mf, st, depth, scopes: vec![HashMap::new()], fun_refs, pow_ref, note_ref, fidx: index[&f.name] as i64, exit: None, result: None };
             g.function(f, &params);
             g.b.seal_all_blocks();
             g.b.finalize(frontend_cfg);
@@ -684,6 +718,7 @@ struct Gen<'a> {
     scopes: Vec<HashMap<String, Variable>>,
     fun_refs: HashMap<String, cranelift_codegen::ir::FuncRef>,
     pow_ref: cranelift_codegen::ir::FuncRef,
+    note_ref: cranelift_codegen::ir::FuncRef,
     fidx: i64,
     exit: Option<cranelift_codegen::ir::Block>,
     result: Option<Variable>,
@@ -707,10 +742,22 @@ impl Gen<'_> {
     }
 
     fn trap_if(&mut self, cond: Value, code: i64, clause: i64, value: Option<Value>) {
+        self.trap_noting_value(cond, code, clause, value, &[]);
+    }
+
+    /// A trap that first records `notes` (parameter values) for the message.
+    fn trap_noting(&mut self, cond: Value, code: i64, clause: i64, notes: &[Value]) {
+        self.trap_noting_value(cond, code, clause, None, notes);
+    }
+
+    fn trap_noting_value(&mut self, cond: Value, code: i64, clause: i64, value: Option<Value>, notes: &[Value]) {
         let trap = self.b.create_block();
         let cont = self.b.create_block();
         self.b.ins().brif(cond, trap, &[], cont, &[]);
         self.b.switch_to_block(trap);
+        for v in notes {
+            self.b.ins().call(self.note_ref, &[*v]);
+        }
         let c = self.iconst(code);
         let fi = self.iconst(self.fidx);
         let cl = self.iconst(clause);
@@ -757,7 +804,8 @@ impl Gen<'_> {
         for (i, pre) in f.pres.iter().enumerate() {
             let ok = self.expr(pre);
             let bad = self.b.ins().icmp_imm_s(IntCC::Equal, ok, 0);
-            self.trap_if(bad, T_PRE, i as i64, None);
+            let notes: Vec<Value> = sspur_syntax::visit::mentioned_params(&f.params, pre).into_iter().map(|j| params[j]).collect();
+            self.trap_noting(bad, T_PRE, i as i64, &notes);
         }
         let exit = self.b.create_block();
         let result = self.b.declare_var(types::I64);

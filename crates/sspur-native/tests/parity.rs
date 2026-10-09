@@ -30,7 +30,7 @@ fn contract_traps_match_the_interpreter() {
     let src = "fn half(x: Int where _ >= 0) -> Int\n  pre x < 100\n  post r * 2 == x\n= x / 2";
     assert_eq!(run(src, "half", &[4]), Ok(2));
     assert_eq!(run(src, "half", &[3]), Err("contract violated: post r * 2 == x in half (r = 1)".into()));
-    assert_eq!(run(src, "half", &[200]), Err("contract violated: pre x < 100 in half".into()));
+    assert_eq!(run(src, "half", &[200]), Err("contract violated: pre x < 100 in half (x = 200)".into()));
     assert_eq!(run(src, "half", &[-2]), Err("contract violated: parameter 'x' of half where _ >= 0 (value = -2)".into()));
 }
 
@@ -69,7 +69,7 @@ fn proven_check_removal_keeps_real_traps() {
     assert_eq!(run(src, "dv", &[7, 0]), Ok(0));
     assert_eq!(run(src, "ng", &[i64::MIN]), Ok(0));
     assert_eq!(run(src, "c", &[3]), Ok(1));
-    assert_eq!(run(src, "c", &[-3]), Err("contract violated: pre a >= 0 in m".into()));
+    assert_eq!(run(src, "c", &[-3]), Err("contract violated: pre a >= 0 in m (a = -3)".into()));
     assert_eq!(run(src, "g", &[84, 36]), Ok(12));
 }
 
@@ -86,7 +86,7 @@ fn smt_proofs_remove_checks_but_keep_real_traps() {
     let src = "fn clamp(x: Int, lo: Int, hi: Int) -> Int\n  pre lo <= hi\n  post r >= lo and r <= hi\n= if x < lo then lo else if x > hi then hi else x\nfn pct(x: Int) -> Int\n= clamp(x, 0, 100) * 3 + 1\nfn w(x: Int) -> Int\n= clamp(x, 5, x)\nfn sub(a: Int, b: Int) -> Int\n  pre a <= b\n= b - a\nfn bad(a: Int, b: Int) -> Int\n  post r >= a\n= a - b\nfn gap(a: Int, b: Int) -> Int\n  pre a >= 0 and a <= b\n  post r >= 0\n= b - a\nfn twice(a: Int, b: Int) -> Int\n= if a >= 0 and a <= b then gap(a, b) + gap(a, b) else 0";
     assert_eq!(release(src, "pct", &[i64::MAX]), Ok(301));
     assert_eq!(release(src, "pct", &[i64::MIN]), Ok(1));
-    assert_eq!(release(src, "w", &[3]), Err("contract violated: pre lo <= hi in clamp".into()));
+    assert_eq!(release(src, "w", &[3]), Err("contract violated: pre lo <= hi in clamp (lo = 5, hi = 3)".into()));
     assert_eq!(release(src, "w", &[9]), Ok(9));
     assert_eq!(release(src, "sub", &[i64::MIN, 0]), Err("integer overflow".into()));
     assert_eq!(release(src, "bad", &[1, 1]), Err("contract violated: post r >= a in bad (r = 0)".into()));

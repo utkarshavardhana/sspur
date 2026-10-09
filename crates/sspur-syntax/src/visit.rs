@@ -314,3 +314,15 @@ fn strip_expr(e: &mut Expr) {
         }
     });
 }
+
+/// Indices of the parameters that `e` mentions by name, in parameter order (what a failed `pre` shows).
+pub fn mentioned_params(params: &[Param], e: &Expr) -> Vec<usize> {
+    let mut seen = std::collections::HashSet::new();
+    walk_expr(e, &mut |x| {
+        if let ExprKind::Name(n) = &x.kind {
+            seen.insert(n.clone());
+        }
+        true
+    });
+    params.iter().enumerate().filter(|(_, p)| seen.contains(&p.name)).map(|(i, _)| i).collect()
+}

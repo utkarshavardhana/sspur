@@ -2359,7 +2359,22 @@ impl<'a> Cx<'a> {
         }
         for (i, pre) in f.pres.iter().enumerate() {
             let c = self.expr(pre)?;
-            writeln!(s, "  if (UNLIKELY(!({c}))) TRAPV({T_PRE}, {i}, 0);").unwrap();
+            let shown = sspur_syntax::visit::mentioned_params(&f.params, pre);
+            if shown.is_empty() {
+                writeln!(s, "  if (UNLIKELY(!({c}))) TRAPV({T_PRE}, {i}, 0);").unwrap();
+                continue;
+            }
+            let head = format!("contract violated: pre {} in {} (", printer::expr(pre, 0), lower::original_name(&f.name));
+            let mut msg = format!("SB mb_ = {{0}}; sb_put(&mb_, {}, {}); ", c_lit(&head), head.len());
+            for (k, j) in shown.into_iter().enumerate() {
+                let p = &f.params[j];
+                let (cv, t) = self.scopes[0][&p.name].clone();
+                let sh = self.helper_show(&t)?;
+                let label = format!("{}{} = ", if k > 0 { ", " } else { "" }, p.name);
+                write!(msg, "sb_put(&mb_, {}, {}); {sh}(&mb_, {cv}, 1); ", c_lit(&label), label.len()).unwrap();
+            }
+            msg.push_str("sb_put(&mb_, \")\", 1); char* mc_ = (char*)malloc((size_t)mb_.len + 1); memcpy(mc_, mb_.p, (size_t)mb_.len); st->rbuf = (int64_t*)mc_; st->rlen = mb_.len; ");
+            writeln!(s, "  if (UNLIKELY(!({c}))) {{ {msg}TRAPV({T_PRE}, {i}, 0); }}").unwrap();
         }
         if split {
             let args: String = (0..params.len()).map(|i| format!("a{i}, ")).collect();

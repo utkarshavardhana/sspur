@@ -133,7 +133,7 @@ cube_side = 3
 cube_side failed (100): unhandled error: BadInput{what: \"negative volume -8.0\"}
 parse_sum = 42
 label = geo:3:7
-steps failed (3): contract violated: pre n >= 0 in steps
+steps failed (3): contract violated: pre n >= 0 in steps (n = -1)
 fact failed (1): integer overflow
 fact(20) = 2432902008176640000
 has_home = true

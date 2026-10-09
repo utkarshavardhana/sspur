@@ -58,6 +58,7 @@
   - [ADR 0024: LLVM backend, PGO and LTO, inline asm, Cortex-M, fixed arrays and statics](docs/adr/0024-llvm-and-embedded.md)
   - [ADR 0025: Hardening pass before v0.2.0](docs/adr/0025-hardening.md)
   - [ADR 0026: Packages and dependencies](docs/adr/0026-packages.md)
+  - [ADR 0027: Traits, bounds, operator traits and derive](docs/adr/0027-traits.md)
 
 ---
 

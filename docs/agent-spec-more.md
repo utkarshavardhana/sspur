@@ -29,8 +29,16 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 - `big(n)`, `decimal("1.25")` (Opt); `regex(p)` (Res) `.is_match(s) captures(s)` (Opt of groups, 0 first) `find_all replace(s, "$1")`; `date(y, m, d)` (Opt); `json.encode(v) json.decode[T](s)` (Res).
 - `! fs`: `read_file(p) write_file(p, s)` (`Res[_, Str]`); `! io`: `read_line`; `! time`: `now`; `! env`: `env_var`; `! proc`: `run_cmd`.
 
+## Traits
+- `trait Sh` + indented `fn area(x: Self) -> F64` lines; `= e` (same or next line) is a default. The first parameter is `Self`, and a method's effects bound its impls'.
+- `impl Sh for Circle` + indented fns with bodies (`Self` or `Circle` in signatures); a generic type: `impl[T: Show] Show for Box[T]`. Call `c.area`, `c.area()` or `area(c)`.
+- Bounds `fn f[T: Ord + Show](xs: List[T])` are checked in `f`; a call with a type that lacks an impl is `E_TRAIT_MISSING`. Bounded fns are compiled per type.
+- Built in: `Eq eq`, `Ord cmp` (negative, 0, positive; `< <= > >=`), `Show show`, `Hash hash`, `Json to_json`, `Add Sub Mul Div` (`+ - * /`; `fn add(a: Self, b: Self) -> Self`), `Neg neg` (`-x`), `Index[K, V] index` (`x[k]`). Numbers, `Str`, `Bool`, lists, tuples, `Opt`, `Map` have them; `==`, `sort` and `.str` stay structural.
+- `type P = {..} derive Eq, Ord, Show, Hash, Json` adds structural impls (variants order by name).
+- One impl per (trait, type), in the trait's or the type's package; `pub trait` and `pub impl` export them, and `use lib.{Sh}` brings its methods.
+
 ## Edit
-`./sspur edit --test change.ssp` is one atomic, typechecked transaction. Spellings from other languages that have one meaning (`&&`, `len(x)`, `None`, `s.slice(a, b)`, a missing effect) are stored in SSPUR form and listed after `stored as:`. A failing test prints the values it compared (`left 7, right 8`).
+`./sspur edit --test change.ssp` is one atomic, typechecked transaction. Spellings from other languages that have one meaning (`&&`, `len(x)`, `None`, `s.slice(a, b)`, a missing effect) are stored in SSPUR form and listed after `stored as:`. A failing test prints the values it compared (`left 7, right 8`). An impl is the definition `impl Sh for P` (`remove impl Sh for P`).
 
 ## Elsewhere
 `./sspur spec --full` covers concurrency (`! conc`, `par`, `atomic`, `chan`), services (`store`, `db.get`, `svc`, `ep`, `migrate_S`), packages (`./sspur add`, `pub`, `use lib.{f}`) and C, sys, bare and GPU (`extern fn`, `profile`, `kernel fn`).

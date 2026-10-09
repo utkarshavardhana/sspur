@@ -111,7 +111,7 @@ type Order = {...} derive Sql
 - **`comptime`**: any function proven pure and total can run at compile time. That is strictly more than `constexpr`.
 - **Code is data**: comptime functions receive and return graph nodes (`Node`, `TypeNode`, `FnNode`). Metaprogramming is graph transformation, not text or token pasting.
 - Generated nodes are hashed and cached like any other node, so they cost nothing on rebuild.
-- `derive X` is just a call to a comptime generator.
+- `derive X` is just a call to a comptime generator. Implemented for `Eq`, `Ord`, `Show`, `Hash` and `Json` as built-in structural generators; user generators wait for `comptime` (ADR 0027).
 - No textual macros and no preprocessor.
 
 ## 9. Generics
@@ -121,11 +121,11 @@ type Order = {...} derive Sql
 - Const generics with arithmetic: `Matrix[F32, R, C]`, `fn mul[R, K, C](a: Matrix[F32, R, K], b: Matrix[F32, K, C]) -> Matrix[F32, R, C]`. Dimension equations are checked by SMT.
 - Variadics: `fn tuple_map[..Ts](t: (..Ts), f: ...)`.
 - Specialization: an `impl` for a more specific type wins. Specializations must be non-overlapping, or ordered by a proof of subsumption.
-- Constraints on generics are traits, and they're checked at definition, not at instantiation (no template error explosions).
+- Constraints on generics are traits, and they're checked at definition, not at instantiation (no template error explosions). Implemented as `[T: Ord + Show]` bounds, with each bounded function specialized per type (ADR 0027).
 
 ## 10. Operators
 
-Operators are trait methods: `Add`, `Mul`, `Index`, `Deref`, `Call`, `Cmp`, and so on. There is one impl per (trait, type), resolved statically. This gives operator overloading without name overloading.
+Operators are trait methods: `Add`, `Mul`, `Index`, `Deref`, `Call`, `Cmp`, and so on. There is one impl per (trait, type), resolved statically. This gives operator overloading without name overloading. Implemented for `Add`, `Sub`, `Mul`, `Div`, `Neg`, `Eq`, `Ord` (the `Cmp` role) and `Index` (ADR 0027).
 
 ## 11. Errors and panics
 

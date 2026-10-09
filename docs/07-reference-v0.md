@@ -4,7 +4,7 @@ This is everything the current compiler implements, and it's all an agent needs 
 
 ## Program shape
 
-A program is a set of definitions: `type`, `fn`, `extern fn`, `effect`, `test`, and for services `store` and `svc`. Order doesn't matter. Definitions of other packages are named `lib.f` or imported with `use` (see Packages). `//` line comments are skipped in files but aren't stored in the codebase. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
+A program is a set of definitions: `type`, `fn`, `extern fn`, `effect`, `trait`, `impl`, `test`, and for services `store` and `svc`. Order doesn't matter. Definitions of other packages are named `lib.f` or imported with `use` (see Packages). `//` line comments are skipped in files but aren't stored in the codebase. Indentation is 2 spaces. A file's entry point is `fn main() -> Unit ! log`.
 
 ```
 type Item = {sku: Str, qty: Int where _ > 0, price: Int where _ >= 0}
@@ -34,7 +34,7 @@ test total_empty = total([]) == 0
 | Refinement | `Int where _ > 0` on fields, params, and aliases. `_` is the value. Checked at runtime |
 | Newtype | `type UserId = new Str`. Construct with `UserId("a")`, unwrap with `.raw`. It doesn't mix with `Str` or other newtypes |
 
-There are no implicit conversions: `1 + 2.0` is an error, so use `n.to_f64`. Values are compared structurally with `==`; `<`, `<=`, `>` and `>=` work on numbers, `Str`, `Time`, `Duration`, `BigInt` and `Dec`, and `sort` orders any type.
+There are no implicit conversions: `1 + 2.0` is an error, so use `n.to_f64`. Values are compared structurally with `==`; `<`, `<=`, `>` and `>=` work on numbers, `Str`, `Time`, `Duration`, `BigInt` and `Dec`, and on user types that derive or implement `Ord`, and `sort` orders any type. `type P = {x: Int} derive Eq, Ord, Show, Hash, Json` adds structural impls of those traits (see Traits).
 
 ## Functions
 
@@ -52,7 +52,56 @@ fn name[A, e](p: A, f: A -> A ! e) -> A ! e
 - Lambdas: `x => e`, `(a, b) => e`, `() => e`. Lambda bodies are a single expression, and blocks are not allowed inside parentheses, so move multi-line logic into a named `fn`.
 - `_` inside a call argument or a list element makes a one-parameter lambda. Every `_` in that argument or element is the same parameter: `xs.map(_.price * _.qty)` means `xs.map(x => x.price * x.qty)`, and `[_ + 1, _ * 2]` is a list of two functions. Tuples are not boundaries: `sort_by((-_.1, _.0))` is one lambda returning a tuple.
 - A function name can be passed as a value: `xs.map(fizzbuzz)`, `xs.fold(Leaf, insert)`.
-- There's no overloading and there are no default arguments.
+- There's no overloading and there are no default arguments. Uppercase type parameters can have trait bounds, `[T: Ord + Show]` (see Traits).
+
+## Traits
+
+A trait names methods; an impl gives them for one type. Generic functions use them through bounds, and operators are trait methods (ADR 0027).
+
+```
+trait Shape
+  fn area(s: Self) -> F64
+  fn name(s: Self) -> Str = "shape"
+  fn describe(s: Self) -> Str = "{s.name}: {s.area}"
+
+type Circle = {r: F64}
+type Vec2 = {x: Int, y: Int} derive Eq, Ord, Show
+
+impl Shape for Circle
+  fn area(c: Circle) -> F64 = 3.14 * c.r * c.r
+
+impl Add for Vec2
+  fn add(a: Vec2, b: Vec2) -> Vec2 = Vec2{x: a.x + b.x, y: a.y + b.y}
+
+fn total[T: Shape](xs: List[T]) -> F64
+= xs.map(_.area).sum
+
+fn largest[T: Ord + Show](xs: List[T]) -> Str
+= xs.sort.last.map(_.show).or("none")
+
+test t = Circle{r: 1.0}.describe == "shape: 3.14" and Vec2{x: 1, y: 2} + Vec2{x: 2, y: 3} == Vec2{x: 3, y: 5}
+```
+
+- `trait Name` or `trait Name[K, V]` is followed by indented method signatures. The first parameter of every method has type `Self`, so methods are called as `x.area`, `x.area()` or `area(x)`. A method with `= body` (on the same line or the next) has a default that impls may override. A method's effect row bounds its impls: an impl may declare the same effects or fewer (`E_IMPL_EFFECT`). Method names are unique across traits.
+- `impl Name for Type` is followed by indented method definitions, written with `Self` or the type. Generic types take parameters, with optional bounds: `impl[T: Show] Show for Box[T]`. An impl must give every method without a default (`E_IMPL_MISSING`), only the trait's methods (`E_IMPL_EXTRA`), with the trait's signatures (`E_IMPL_SIG`), and is for a whole type, not `Box[Int]` (`E_IMPL_TARGET`). Trait parameters are given in the impl: `impl Index[Int, F64] for Row`.
+- Coherence: one impl per (trait, type) in a program (`E_IMPL_DUP`, also against a `derive` or a built-in impl), and an impl lives in the package of its trait or of its type (`E_IMPL_ORPHAN`; wrap a foreign type in a newtype to implement a foreign trait for it).
+- Bounds `[T: Ord]`, `[T: Eq + Show]` and `[R: Index[Int, F64]]` are checked where the function is defined: its body may only use the bounded traits' methods and operators on `T` (`E_TRAIT_MISSING`, `E_OPERATOR`). A call is checked at the call site, which names the missing impl (`E_TRAIT_MISSING: max_of needs T: Ord, but Point does not implement Ord`). An unknown trait is `E_TRAIT_UNKNOWN`, a wrong number of trait arguments `E_TRAIT_ARGS`, and a type parameter that can't be inferred `E_TRAIT_AMBIGUOUS` (an empty list defaults to `Unit` when `Unit` meets the bounds).
+- Resolution is static. Every call of a trait method or overloaded operator becomes a call of the impl for the type at that site, and every function with bounds is compiled once per type it is called with (`max_of__Int`, `max_of__Point`), in the interpreter and in native code alike. A bounded function that calls itself at a growing type is `E_TRAIT_RECURSION`.
+
+| Trait | Method | Operators | Built-in impls |
+|---|---|---|---|
+| `Eq` | `eq(a: Self, b: Self) -> Bool` | `==` `!=` | every type but functions, views and channels |
+| `Ord` | `cmp(a: Self, b: Self) -> Int` (negative, zero, positive) | `<` `<=` `>` `>=` | the same |
+| `Show` | `show(x: Self) -> Str` | | the same, as `.str` |
+| `Hash` | `hash(x: Self) -> Int` | | the same: FNV-1a of `.str` |
+| `Json` | `to_json(x: Self) -> Str` | | types `json.encode` takes |
+| `Add`, `Sub`, `Mul`, `Div` | `add(a: Self, b: Self) -> Self`, `sub`, `mul`, `div` | `+` `-` `*` `/` | numbers; `Add` also `Str` and `List` |
+| `Neg` | `neg(a: Self) -> Self` | unary `-` | numbers |
+| `Index[K, V]` | `index(x: Self, k: K) -> V` | `x[k]` | `List[T]` as `Index[Int, T]` |
+| `Copy` | | | every type except a `res` type (sys profile) |
+
+- Built-in types keep their own semantics: `Int` arithmetic traps on overflow whether it is reached directly or through a bound. A hand-written impl applies where the static type is the type with the impl; `==` on lists and records that contain it, `sort`, `unique`, `contains`, map keys and `.str` stay structural.
+- `derive Eq, Ord, Show, Hash, Json` on a record, sum or newtype adds structural impls: equality and order as `==` and `sort` (fields in declaration order, variants by name), `show` as `.str`, `to_json` as `json.encode`. Every field type must implement the trait (`E_DERIVE_FIELD`); other names are `E_DERIVE_UNKNOWN`. A generic type's derived impl needs its parameters to implement the trait.
 
 ## Statements (inside `do` blocks)
 
@@ -572,9 +621,9 @@ textutils = { path = "../textutils" }
 greet = { git = "file:///srv/greet.git", rev = "v0.1.0" }   # a tag, branch or commit
 ```
 
-- `pub fn`, `pub type` and `pub effect` export a definition. A pub sum type exports its variants and a pub effect its operations. Other definitions are private to the package.
+- `pub fn`, `pub type`, `pub effect`, `pub trait` and `pub impl` export a definition. A pub sum type exports its variants, a pub effect its operations and a pub trait its methods. Other definitions are private to the package; a private impl is used only by its own package's code (`E_TRAIT_MISSING ... needs 'pub impl'` in a dependent).
 - Any dependency in the manifest can be used qualified: `lib.f(x)`, `lib.f` as a value, `lib.T` in types, `lib.Ctor` and `lib.Ctor{f: 1}` in expressions and patterns, `fail[lib.E]` and `! lib.e` in effect rows.
-- `use lib.{f, T}` imports names unqualified; a type brings its variants, an effect its operations, and an imported function also works as a method (`s.f(a)`). Repeated `use` lines for one package merge. `use lib` alone is allowed.
+- `use lib.{f, T}` imports names unqualified; a type brings its variants, an effect its operations, a trait its methods (`x.area` for `lib.Area`; a bound `[T: lib.Area]` also brings them for `T`), and an imported function also works as a method (`s.f(a)`). An impl of a dependency's trait for your type is `impl lib.Area for Tri`; an impl for a type and a trait that both come from elsewhere is `E_IMPL_ORPHAN`. The one-version rule makes every impl unique in the graph. Repeated `use` lines for one package merge. `use lib` alone is allowed.
 - A dependency's effects are part of its signatures, so calling `lib.clip` makes the caller declare `fail[lib.TextErr]` (or catch it), and its `pre` clauses are proved at the caller's call sites by `sspur verify`.
 - Values of a dependency's types print and encode to JSON with their own names (`Box{w: 1}`), exactly as inside the library. A dependency's tests and examples are not run by `sspur test` of the dependent.
 - `sspur.lock` pins every package in the graph, direct or not, by the hash of its exports: the Merkle root over the hashes of its pub definitions, which include everything they call. A build reads only the lock and the cache in `~/.cache/sspur/pkgs/<hash>` (or `$SSPUR_CACHE/pkgs`), and fetches and verifies a missing package. A dependent's definition hashes include the hashes of the dependency definitions it uses.

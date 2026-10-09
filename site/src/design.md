@@ -32,4 +32,5 @@ The design documents in this section describe the system as a whole: the [vision
 | [0024](docs/adr/0024-llvm-and-embedded.md) | LLVM backend, PGO and LTO, inline asm, Cortex-M, fixed arrays and statics | Systems |
 | [0025](docs/adr/0025-hardening.md) | Hardening pass before v0.2.0 | Quality |
 | [0026](docs/adr/0026-packages.md) | Packages and dependencies | Packages |
+| [0027](docs/adr/0027-traits.md) | Traits, bounds, operator traits and derive | Language |
 

@@ -14,6 +14,7 @@ The method-by-method list is in the [Builtins section of the language reference]
 | Time | `Time` and `Duration` in milliseconds, calendar math, ISO 8601, and IANA time zones through `Zone` |
 | Data | `json.encode(v)` and `json.decode[T](s)` for any data type, with readable decode errors (`lines[0].qty: expected Int, found a string`) |
 | Files and processes | `fs` (files, streaming `File` handles, directories, copies, symlinks and permission bits), `io` (stdin, stderr), `time`, `env` and `proc` (child processes), each its own effect |
+| Traits | `Eq`, `Ord`, `Show`, `Hash`, `Json`, `Add`, `Sub`, `Mul`, `Div`, `Neg`, `Index` and `Copy`, implemented by the built-in types and by `derive`, used through bounds such as `[T: Ord]` and by the operators; see [Traits](docs/07-reference-v0.md#traits) |
 | Concurrency | `for x in par(xs)`, `Atomic[Int]` and channels under the `conc` effect, with data races rejected by the checker |
 
 ## Errors and absence

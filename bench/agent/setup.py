@@ -1,11 +1,13 @@
 """Create fresh work directories and print one agent prompt per (language, task).
 
-  python3 setup.py <work_root> [--v1] [--r7] [--tmo] [--new] [--b] [--langs=sspur,python,ts,go]
+  python3 setup.py <work_root> [--v1] [--r7] [--r9] [--tmo] [--new] [--b] [--langs=sspur,python,ts,go]
       -> <work_root>/<lang>/<task>/ and <work_root>/prompts.json
 
 --v1 uses the SSPUR instructions of the first run (q + apply tx.json); the default uses `edit`.
 --new sets up only the tasks marked "new" (a9, outside the 8-task comparison).
 --b sets up only the independently specified tasks (b1 to b8, "set": "b").
+--r9 keeps the edit line of runs 8 and 9 (`./sspur edit` as the reference describes) instead of
+run 10's (write change.ssp with the file tool, then `./sspur edit --test change.ssp`).
 --r7 keeps the first step of runs 2 to 7 (`./sspur spec && ./sspur src`) instead of `./sspur start` (run 8 on).
 --langs (run 9 on) picks the languages; the default is sspur,python. ts and go are the TypeScript
        and Go ports (tasks/<id>/ts, tasks/<id>/go, xlang/xlang.py).
@@ -45,6 +47,11 @@ SSPUR_INTRO = """You are working on a small codebase written in SSPUR, a new pro
 
 R7_START = "./sspur spec && ./sspur src`: the language reference (the only documentation) and the whole codebase."
 
+# Run 10 on: the edit goes through a file the agent writes with its file tool, which no shell
+# sandbox refuses (runs 2 to 9 passed the definitions in one quoted -e argument).
+R9_EDIT = "- Change code only with `./sspur edit` as the reference describes. `./sspur q`, `./sspur test` and `./sspur check` are also available.\n- Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."
+R10_EDIT = "- To change code, write the new and changed definitions to {dir}/change.ssp with your file-writing tool, then run `cd {dir} && ./sspur edit --test change.ssp` in the same turn, as the reference describes. `./sspur q`, `./sspur test` and `./sspur check` are also available.\n- Do not read or write anything under .sspur/ directly, do not create other .ssp files, and do not run `./sspur init`."
+
 PY_INTRO = """You are working on a small Python 3.9 codebase. Working directory: {dir}
 
 - All code is in app.py, with its tests at the bottom. Run them with `cd {dir} && LC_ALL=en_US.UTF-8 python3 -m pytest -q app.py`."""
@@ -60,7 +67,7 @@ GO_INTRO = """You are working on a small Go codebase (package main). Working dir
 - The task text writes names in snake_case; in the code they are camelCase (total_value is totalValue). Where it says raise E, return an error of type *E."""
 
 
-def main(root, v1=False, tmo=False, new=False, b=False, r7=False, langs=("sspur", "python")):
+def main(root, v1=False, tmo=False, new=False, b=False, r7=False, langs=("sspur", "python"), r9=False):
     tasks = [t for t in json.load(open(os.path.join(HERE, "tasks.json"))) if t.get("new", False) == new and (t.get("set", "a") == "b") == b]
     prompts = []
     for lang in langs:
@@ -85,7 +92,8 @@ def main(root, v1=False, tmo=False, new=False, b=False, r7=False, langs=("sspur"
                 shutil.copy(src, os.path.join(d, "start.ssp"))
                 subprocess.run([SSPUR, "init", "start.ssp"], cwd=d, check=True, capture_output=True)
                 os.remove(os.path.join(d, "start.ssp"))
-                intro = (SSPUR_INTRO_V1 if v1 else SSPUR_INTRO.replace("./sspur start`: the language reference (the only documentation) and the whole codebase, in one command.", R7_START) if r7 else SSPUR_INTRO).format(dir=d)
+                base = SSPUR_INTRO if r9 or r7 else SSPUR_INTRO.replace(R9_EDIT, R10_EDIT)
+                intro = (SSPUR_INTRO_V1 if v1 else base.replace("./sspur start`: the language reference (the only documentation) and the whole codebase, in one command.", R7_START) if r7 else base).format(dir=d)
                 if tmo:
                     w = os.path.join(d, "sspur")
                     open(w, "w").write(f'#!/bin/sh\nexec {TMO} 300 {SSPUR} "$@"\n')
@@ -107,4 +115,4 @@ def main(root, v1=False, tmo=False, new=False, b=False, r7=False, langs=("sspur"
 
 if __name__ == "__main__":
     langs = next((a.split("=", 1)[1].split(",") for a in sys.argv[2:] if a.startswith("--langs=")), ["sspur", "python"])
-    main(sys.argv[1], "--v1" in sys.argv[2:], "--tmo" in sys.argv[2:], "--new" in sys.argv[2:], "--b" in sys.argv[2:], "--r7" in sys.argv[2:], langs)
+    main(sys.argv[1], "--v1" in sys.argv[2:], "--tmo" in sys.argv[2:], "--new" in sys.argv[2:], "--b" in sys.argv[2:], "--r7" in sys.argv[2:], langs, "--r9" in sys.argv[2:])

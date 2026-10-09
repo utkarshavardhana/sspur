@@ -1,6 +1,6 @@
 """Create the two work directories for the large-codebase task and write their prompts.
 
-  python3 setup_scale.py <work_root> [--r7] [--langs=sspur,python,ts,go]   -> <work_root>/<lang>/s1_shop/ and <work_root>/prompts.json
+  python3 setup_scale.py <work_root> [--r7] [--r9] [--langs=sspur,python,ts,go]   -> <work_root>/<lang>/s1_shop/ and <work_root>/prompts.json
 
 --langs (run 9 on): ts and go are the TypeScript and Go versions from gen_xlang.py.
 
@@ -35,6 +35,10 @@ SSPUR_INTRO = """You are working on a large codebase written in SSPUR, a new pro
 - Change code only with `./sspur edit` as the reference describes. `./sspur test` and `./sspur check` are also available.
 - Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."""
 
+# Run 10 on: the edit goes through a file the agent writes with its file tool (--r9 keeps the -e line).
+R9_EDIT = "- Change code only with `./sspur edit` as the reference describes. `./sspur test` and `./sspur check` are also available.\n- Do not read or write anything under .sspur/ directly, do not create .ssp files, and do not run `./sspur init`."
+R10_EDIT = "- To change code, write the new and changed definitions to {dir}/change.ssp with your file-writing tool, then run `cd {dir} && ./sspur edit --test change.ssp` in the same turn, as the reference describes. `./sspur test` and `./sspur check` are also available.\n- Do not read or write anything under .sspur/ directly, do not create other .ssp files, and do not run `./sspur init`."
+
 # Runs 5 to 7 (--r7): the spec alone first, then searches.
 SSPUR_INTRO_R7 = SSPUR_INTRO.split("\n- Start with")[0] + """
 - Start with `cd {dir} && ./sspur spec`: the language reference (the only documentation).
@@ -67,7 +71,7 @@ Required interface (hidden tests call exactly these names): {iface}
 Do not look at, list, or search any directory other than {dir}. When every step is done and the tests pass, reply with the single word DONE."""
 
 
-def main(root, r7=False, langs=("sspur", "python")):
+def main(root, r7=False, langs=("sspur", "python"), r9=False):
     gen = tempfile.mkdtemp()
     subprocess.run([sys.executable, os.path.join(HERE, "gen.py"), gen], check=True, capture_output=True)
     subprocess.run([sys.executable, os.path.join(HERE, "gen_xlang.py"), gen], check=True, capture_output=True, cwd=HERE)
@@ -83,7 +87,7 @@ def main(root, r7=False, langs=("sspur", "python")):
             w = os.path.join(d, "sspur")
             open(w, "w").write(f'#!/bin/sh\nexec {TMO} 300 {SSPUR} "$@"\n')
             os.chmod(w, 0o755)
-            intro = (SSPUR_INTRO_R7 if r7 else SSPUR_INTRO).format(dir=d)
+            intro = (SSPUR_INTRO_R7 if r7 else SSPUR_INTRO if r9 else SSPUR_INTRO.replace(R9_EDIT, R10_EDIT)).format(dir=d)
         elif lang == "ts":
             for x in ("shop", "tests"):
                 shutil.copytree(os.path.join(gen, "ts", x), os.path.join(d, x))
@@ -106,4 +110,4 @@ def main(root, r7=False, langs=("sspur", "python")):
 
 if __name__ == "__main__":
     langs = next((a.split("=", 1)[1].split(",") for a in sys.argv[2:] if a.startswith("--langs=")), ["sspur", "python"])
-    main(sys.argv[1], "--r7" in sys.argv[2:], langs)
+    main(sys.argv[1], "--r7" in sys.argv[2:], langs, "--r9" in sys.argv[2:])

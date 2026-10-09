@@ -279,6 +279,7 @@ fn strip_tparam(p: &mut TParam) {
     if let Some(r) = &mut p.refine {
         strip_expr(r);
     }
+    p.bounds.iter_mut().for_each(strip_ty);
 }
 
 fn strip_field(f: &mut Field) {

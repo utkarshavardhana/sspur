@@ -13,7 +13,7 @@ Everything SSPUR does goes through one binary, `sspur`. This is its usage text, 
 | Run and test a file | `sspur run FILE`, `sspur test FILE`, `sspur check FILE [--json]`, `sspur fmt FILE [--write]` |
 | Find bugs and prove properties | `sspur fuzz FILE` (contracts as property tests), `sspur fuzz --differential FILE` (native against the interpreter), `sspur verify FILE` (Z3) |
 | Work on a codebase | `sspur init [FILE]`, `sspur start [NAME...]`, `sspur q QUERY TARGET`, `sspur edit --test -e SRC`, `sspur log`, `sspur src` |
-| Agents and MCP | `sspur spec [--full]`, `sspur start`, `sspur mcp [--dir PATH]` |
+| Agents and MCP | `sspur spec [--more|--full]`, `sspur start`, `sspur mcp [--dir PATH]` |
 | Packages | `sspur init --pkg NAME`, `sspur add PATH-OR-URL[@REV]`, `sspur deps fetch`, `sspur deps update [--force]`, `sspur deps tree` |
 | Native code and C | `sspur native FILE`, `sspur run --O3`, `--pgo`, `--lto`, `sspur explain-opt FILE`, `sspur bind HEADER.h`, `sspur export-c FILE` |
 | Bare metal and GPU | `sspur build --target riscv64-qemu\|aarch64-qemu\|thumbv7em-mps2 FILE`, `sspur gpu FILE --emit metal\|opencl\|spirv\|ptx` |

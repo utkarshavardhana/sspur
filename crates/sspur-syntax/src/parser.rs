@@ -1,14 +1,21 @@
 use crate::ast::*;
-use crate::lexer::{lex, Tok, Token};
+use crate::lexer::{lex, Tok, Token, SOFT_KEYWORDS};
 use crate::SyntaxError;
 
 type PResult<T> = Result<T, SyntaxError>;
 
 pub fn parse(src: &str) -> PResult<Module> {
+    parse_noted(src).map(|(m, _)| m)
+}
+
+/// Like `parse`, and also returns one note per foreign spelling the parser accepted
+/// (`&&`, `elif`, `let`, ...); the module holds the canonical form.
+pub fn parse_noted(src: &str) -> PResult<(Module, Vec<String>)> {
     let toks = lex(src)?;
-    let mut m = Parser::new(toks).module()?;
+    let mut p = Parser::new(toks);
+    let mut m = p.module()?;
     normalize(&mut m);
-    Ok(m)
+    Ok((m, p.notes))
 }
 
 const BUILTIN_TYPE_NAMES: &[&str] = &["Int", "I8", "I16", "I32", "U8", "U16", "U32", "U64", "F32", "F64", "Bool", "Str", "Unit", "List", "Opt", "Res", "Map", "Secret", "Pii", "Untrusted", "Guess"];
@@ -41,6 +48,7 @@ struct Parser {
     pos: usize,
     line_indent: u32,
     in_refine: bool,
+    notes: Vec<String>,
 }
 
 fn is_upper(s: &str) -> bool {
@@ -49,7 +57,7 @@ fn is_upper(s: &str) -> bool {
 
 impl Parser {
     fn new(toks: Vec<Token>) -> Self {
-        Parser { toks, pos: 0, line_indent: 0, in_refine: false }
+        Parser { toks, pos: 0, line_indent: 0, in_refine: false, notes: Vec::new() }
     }
 
     fn peek(&self) -> &Tok {
@@ -82,7 +90,7 @@ impl Parser {
     }
 
     fn is_kw(&self, k: &str) -> bool {
-        matches!(self.peek(), Tok::Kw(x) if *x == k)
+        matches!(self.peek(), Tok::Kw(x) if *x == k) || (SOFT_KEYWORDS.contains(&k) && matches!(self.peek(), Tok::Ident(x) if x == k))
     }
 
     fn eat_sym(&mut self, s: &str) -> bool {
@@ -101,6 +109,17 @@ impl Parser {
         } else {
             false
         }
+    }
+
+    fn note(&mut self, n: &str) {
+        if !self.notes.iter().any(|x| x == n) {
+            self.notes.push(n.to_string());
+        }
+    }
+
+    /// `&&` or `||` as two adjacent symbol tokens.
+    fn doubled(&self, s: &str) -> bool {
+        self.is_sym(s) && matches!(self.peek_at(1), Tok::Sym(x) if *x == s) && self.toks.get(self.pos + 1).is_some_and(|t| t.span.start == self.span().end)
     }
 
     fn err<T>(&self, code: &'static str, msg: impl Into<String>) -> PResult<T> {
@@ -226,7 +245,7 @@ impl Parser {
                 Ok(Def::Type(t))
             }
             Tok::Kw("fn") => self.fn_def().map(Def::Fn),
-            Tok::Kw("rule") => self.rule_def().map(Def::Fn),
+            Tok::Ident(w) if w == "rule" => self.rule_def().map(Def::Fn),
             Tok::Ident(w) if w == "extern" && matches!(self.peek_at(1), Tok::Kw("fn")) => self.extern_def().map(Def::Fn),
             Tok::Ident(w) if w == "kernel" && matches!(self.peek_at(1), Tok::Kw("fn")) => {
                 self.bump();
@@ -253,11 +272,11 @@ impl Parser {
                 let init = self.expr()?;
                 Ok(Def::Static(StaticDef { name, ty, init, span: start.to(self.prev_span()) }))
             }
-            Tok::Kw("effect") => self.effect_def().map(Def::Effect),
-            Tok::Kw("store") => self.store_def().map(Def::Store),
-            Tok::Kw("svc") => self.svc_def().map(Def::Svc),
-            Tok::Kw(k @ ("trait" | "impl" | "queue")) => {
-                let k = *k;
+            Tok::Ident(w) if w == "effect" => self.effect_def().map(Def::Effect),
+            Tok::Ident(w) if w == "store" => self.store_def().map(Def::Store),
+            Tok::Ident(w) if w == "svc" => self.svc_def().map(Def::Svc),
+            Tok::Ident(k) if matches!(k.as_str(), "trait" | "impl" | "queue") => {
+                let k = k.clone();
                 self.err("E_UNSUPPORTED", format!("'{k}' definitions are not supported by this compiler version yet"))
             }
             _ => self.err("E_PARSE_DEF", format!("expected a definition, found {}", self.describe())),
@@ -743,7 +762,7 @@ impl Parser {
         loop {
             let unsafe_ahead = |p: &Self, i: usize| matches!(p.peek_at(i), Tok::Ident(u) if u == "unsafe") && matches!(p.peek_at(i + 1), Tok::Str(_));
             let irq_ahead = |p: &Self, i: usize| matches!(p.peek_at(i), Tok::Ident(u) if u == "interrupt") && matches!(p.peek_at(i + 1), Tok::Int(_) | Tok::Ident(_));
-            if self.newline_then(|t| matches!(t, Tok::Kw("pre" | "post" | "ex"))).is_some() || (matches!(self.peek(), Tok::Newline(_)) && (unsafe_ahead(self, 1) || irq_ahead(self, 1))) {
+            if self.newline_then(|t| matches!(t, Tok::Ident(w) if matches!(w.as_str(), "pre" | "post" | "ex"))).is_some() || (matches!(self.peek(), Tok::Newline(_)) && (unsafe_ahead(self, 1) || irq_ahead(self, 1))) {
                 self.bump();
             }
             if unsafe_ahead(self, 0) {
@@ -831,17 +850,7 @@ impl Parser {
             Tok::Kw("if") => {
                 let if_indent = self.line_indent;
                 self.bump();
-                let c = self.expr()?;
-                self.expect_kw("then")?;
-                let t = self.branch()?;
-                if let Some(col) = self.newline_then(|t| matches!(t, Tok::Kw("else")))
-                    && col >= if_indent {
-                        self.line_indent = col;
-                        self.bump();
-                    }
-                let e = if self.eat_kw("else") { Some(Box::new(self.branch()?)) } else { None };
-                self.line_indent = if_indent;
-                Ok(Expr::new(ExprKind::If(Box::new(c), Box::new(t), e), start.to(self.prev_span())))
+                self.if_rest(start, if_indent)
             }
             Tok::Kw(k @ ("match" | "catch")) => {
                 let is_match = *k == "match";
@@ -915,6 +924,30 @@ impl Parser {
                 Ok(Expr::new(ExprKind::With(Box::new(base), updates), start.to(self.prev_span())))
             }
         }
+    }
+
+    fn if_rest(&mut self, start: Span, if_indent: u32) -> PResult<Expr> {
+        let c = self.expr()?;
+        self.expect_kw("then")?;
+        let t = self.branch()?;
+        let is_elif = |t: &Tok| matches!(t, Tok::Ident(w) if w == "elif");
+        if let Some(col) = self.newline_then(|t| matches!(t, Tok::Kw("else")) || is_elif(t))
+            && col >= if_indent {
+                self.line_indent = col;
+                self.bump();
+            }
+        let e = if self.eat_kw("else") {
+            Some(Box::new(self.branch()?))
+        } else if is_elif(self.peek()) {
+            self.note("elif -> else if");
+            let s2 = self.bump().span;
+            let indent = self.line_indent;
+            Some(Box::new(self.if_rest(s2, indent)?))
+        } else {
+            None
+        };
+        self.line_indent = if_indent;
+        Ok(Expr::new(ExprKind::If(Box::new(c), Box::new(t), e), start.to(self.prev_span())))
     }
 
     fn path_assign_ahead(&self, mut i: usize) -> bool {
@@ -1153,6 +1186,39 @@ impl Parser {
             self.line_indent = indent;
             return Ok(vec![Stmt::Fn(Box::new(f))]);
         }
+        if let Tok::Ident(w) = self.peek().clone()
+            && matches!(w.as_str(), "let" | "const" | "val")
+            && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Sym("("))
+            && !matches!(self.peek_at(2), Tok::Sym(":=")) {
+                self.bump();
+                if matches!(self.peek(), Tok::Ident(m) if m == "mut") && matches!(self.peek_at(1), Tok::Ident(_)) {
+                    self.bump();
+                    self.note("let mut x = e -> var x = e");
+                    let name = self.expect_ident()?;
+                    self.expect_sym("=")?;
+                    return Ok(vec![Stmt::Var(name, self.expr()?)]);
+                }
+                self.note("let x = e -> x = e");
+            }
+        if let (Tok::Ident(name), Tok::Sym(op @ ("+" | "-" | "*" | "/" | "%")), Tok::Sym("=")) = (self.peek().clone(), self.peek_at(1).clone(), self.peek_at(2))
+            && self.toks[self.pos + 2].span.start == self.toks[self.pos + 1].span.end {
+                let bop = match op {
+                    "+" => BinOp::Add,
+                    "-" => BinOp::Sub,
+                    "*" => BinOp::Mul,
+                    "/" => BinOp::Div,
+                    _ => BinOp::Rem,
+                };
+                let span = self.span();
+                self.bump();
+                self.bump();
+                self.bump();
+                self.note(&format!("x {op}= e -> x := x {op} e"));
+                let rhs = self.expr()?;
+                let full = span.to(rhs.span);
+                let value = Expr::new(ExprKind::Binary(bop, Box::new(Expr::new(ExprKind::Name(name.clone()), span)), Box::new(rhs)), full);
+                return Ok(vec![Stmt::Assign(name, value, span)]);
+            }
         if self.eat_kw("var") {
             if self.is_sym("(") {
                 let p = self.pat()?;
@@ -1254,6 +1320,12 @@ impl Parser {
                     return Ok(Pat::Ctor { name, args: CtorArgs::Positional(items) });
                 }
                 if is_upper(&name) && self.eat_sym("{") {
+                    if (self.is_sym("_") || self.is_sym("..")) && matches!(self.peek_at(1), Tok::Sym("}")) {
+                        self.bump();
+                        self.bump();
+                        self.note("Ctor{_} pattern -> Ctor");
+                        return Ok(Pat::Ctor { name, args: CtorArgs::None });
+                    }
                     let mut fields = Vec::new();
                     while !self.is_sym("}") {
                         let f = self.expect_ident()?;
@@ -1292,6 +1364,8 @@ impl Parser {
             Tok::Sym(">=") => BinOp::Ge,
             Tok::Kw("and") => BinOp::And,
             Tok::Kw("or") => BinOp::Or,
+            Tok::Sym("&") if self.doubled("&") => BinOp::And,
+            Tok::Sym("|") if self.doubled("|") => BinOp::Or,
             _ => return None,
         })
     }
@@ -1311,6 +1385,10 @@ impl Parser {
             if prec < min {
                 break;
             }
+            if self.is_sym("&") || self.is_sym("|") {
+                self.bump();
+                self.note(if op == BinOp::And { "&& -> and" } else { "|| -> or" });
+            }
             self.bump();
             let next_min = if op == BinOp::Pow { prec } else { prec + 1 };
             let rhs = self.binary(next_min)?;
@@ -1324,6 +1402,11 @@ impl Parser {
         let start = self.span();
         if self.eat_kw("not") {
             let e = self.binary(4)?;
+            return Ok(Expr::new(ExprKind::Unary(UnOp::Not, Box::new(e)), start.to(self.prev_span())));
+        }
+        if self.eat_sym("!") {
+            self.note("!x -> not x");
+            let e = self.unary()?;
             return Ok(Expr::new(ExprKind::Unary(UnOp::Not, Box::new(e)), start.to(self.prev_span())));
         }
         if self.eat_sym("&") {

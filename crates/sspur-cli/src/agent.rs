@@ -76,6 +76,9 @@ fn tx_text_for(r: &TxResult, named: Option<&BTreeSet<String>>) -> String {
     let shown: Vec<&Change> = r.changes.iter().filter(|c| named.is_none_or(|n| c.old.is_none() || c.new.is_none() || c.renamed_from.is_some() || n.contains(&c.path))).collect();
     let touched: BTreeSet<String> = shown.iter().map(|c| c.path.clone()).collect();
     let mut lines = vec![if shown.is_empty() { "ok, no changes".to_string() } else { format!("ok {}", shown.iter().map(|c| change_text(c)).collect::<Vec<_>>().join(" ")) }];
+    if !r.notes.is_empty() {
+        lines.push(format!("stored as: {}", r.notes.join(", ")));
+    }
     lines.extend(diag_lines(src, &r.diags, Some(&touched)));
     lines.join("\n")
 }
@@ -120,7 +123,7 @@ pub fn edit_ops(store: &Store, input: &str) -> Result<Vec<Json>, String> {
         }
         body.push('\n');
     }
-    let module = sspur_syntax::parse_all(&body).map_err(|errs| {
+    let (module, said) = sspur_syntax::parse_all_noted(&body).map_err(|errs| {
         let mut lines = vec!["rejected, nothing changed".to_string()];
         for e in &errs {
             let (l, c) = line_col(&body, e.span.start);
@@ -148,12 +151,19 @@ pub fn edit_ops(store: &Store, input: &str) -> Result<Vec<Json>, String> {
         ops.push(json!({"op": kind, "path": d.name(), "src": print_def(d)}));
     }
     ops.extend(removes);
+    ops.extend(said.into_iter().map(|n| json!({"op": "note", "text": n})));
     Ok(ops)
 }
 
 pub fn run_edit(store: &Store, ops: Vec<Json>, agent: &str, test: Option<&dyn Fn(&sspur_store::Loaded) -> Interp>) -> (String, bool) {
+    let (said, ops): (Vec<Json>, Vec<Json>) = ops.into_iter().partition(|o| o["op"] == "note");
     let named: BTreeSet<String> = ops.iter().flat_map(|o| ["path", "target", "to"].map(|k| o.get(k).and_then(Json::as_str).map(String::from))).flatten().collect();
-    let r = store.apply(Tx { base: None, agent: Some(agent.into()), reason: None, gate: None, merge: false, ops });
+    let mut r = store.apply(Tx { base: None, agent: Some(agent.into()), reason: None, gate: None, merge: false, ops, normalize: true });
+    if r.ok {
+        let mut all: Vec<String> = said.iter().filter_map(|o| o["text"].as_str().map(String::from)).collect();
+        all.append(&mut r.notes);
+        r.notes = all;
+    }
     let mut text = tx_text_for(&r, Some(&named));
     if !r.ok {
         return (text, false);

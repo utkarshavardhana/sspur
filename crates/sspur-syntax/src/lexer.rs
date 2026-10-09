@@ -26,6 +26,10 @@ pub const KEYWORDS: &[&str] = &[
     "false", "and", "or", "not", "par", "ex", "while", "rule", "trait", "impl", "store", "svc", "queue", "effect",
 ];
 
+/// Reserved words that are keywords only where they start a construct; anywhere else
+/// (a parameter, a local, a field) they lex as identifiers.
+pub const SOFT_KEYWORDS: &[&str] = &["profile", "derive", "pre", "post", "dec", "cost", "new", "ex", "rule", "trait", "impl", "store", "svc", "queue", "effect"];
+
 const SYMBOLS: &[&str] = &[
     "...", ":=", "==", "!=", "<=", ">=", "->", "=>", "**", "..", "(", ")", "[", "]", "{", "}", ",",
     ":", ".", "=", "<", ">", "+", "-", "*", "/", "%", "|", "!", "?", ";", "&", "@",
@@ -120,7 +124,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SyntaxError> {
                     }
                 }
                 let word = &src[start..i];
-                let tok = match KEYWORDS.iter().find(|k| **k == word) {
+                let tok = match KEYWORDS.iter().find(|k| **k == word && !SOFT_KEYWORDS.contains(k)) {
                     Some(k) => Tok::Kw(k),
                     None if word == "_" => Tok::Sym("_"),
                     None => Tok::Ident(word.to_string()),

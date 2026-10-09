@@ -82,9 +82,11 @@ fn edit_and_test_cycle_over_stdio() {
     assert_eq!(out, "ok +double +double_t\n1 passed, 0 failed");
     assert!(d.join(".sspur").is_dir(), "the first edit creates the store");
 
-    let (out, err) = c.tool("edit", json!({"src": "fn quad(x: Int) -> Bool\n= double(x) > 0 && x > 0\n\nfn bad() -> Int\n= len([1])"}));
+    let (out, err) = c.tool("edit", json!({"src": "fn quad(x: Int) -> Bool\n= double(x) > 0 ? true : false\n\nfn bad() -> Int\n= len([1], 2)"}));
     assert!(err, "{out}");
-    assert!(out.starts_with("rejected, nothing changed\n") && out.contains("hint: no '&&' operator: write 'and'") && out.ends_with("resend the whole edit in one call"), "{out}");
+    assert!(out.starts_with("rejected, nothing changed\n") && out.contains("hint: no '?:' operator") && out.ends_with("resend the whole edit in one call"), "{out}");
+    let (out, err) = c.tool("edit", json!({"src": "fn quad(x: Int) -> Bool\n= double(x) > 0 && len([x]) > 0"}));
+    assert!(!err && out == "ok +quad\nstored as: && -> and, len(x) -> x.len", "{out}");
 
     let (out, err) = c.tool("edit", json!({"src": "fn quad(x: Int) -> Int\n= double(double(x))\n\ntest quad_t = quad(3) == 13", "test": true}));
     assert!(err && out.contains("FAIL  quad_t") && out.ends_with("1 passed, 1 failed"), "{out}");

@@ -1,6 +1,6 @@
 //! Fix hints for syntax errors, mostly constructs from other languages.
 
-use crate::{parse, Module, SyntaxError};
+use crate::{parse, parser::parse_noted, Module, SyntaxError};
 
 fn ident_end(s: &str) -> usize {
     s.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(s.len())
@@ -97,7 +97,12 @@ pub fn syntax_hint(src: &str, e: &SyntaxError) -> Option<String> {
 /// Like `parse`, but on failure each top-level definition is parsed on its own so every
 /// definition with a syntax error is reported, not only the first.
 pub fn parse_all(src: &str) -> Result<Module, Vec<SyntaxError>> {
-    let first = match parse(src) {
+    parse_all_noted(src).map(|(m, _)| m)
+}
+
+/// `parse_all`, plus the parser's notes on the foreign spellings it accepted.
+pub fn parse_all_noted(src: &str) -> Result<(Module, Vec<String>), Vec<SyntaxError>> {
+    let first = match parse_noted(src) {
         Ok(m) => return Ok(m),
         Err(e) => e,
     };

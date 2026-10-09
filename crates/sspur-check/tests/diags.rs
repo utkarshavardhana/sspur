@@ -85,9 +85,12 @@ fn unknown_name_suggests() {
 #[test]
 fn foreign_spellings_get_exact_hints() {
     let hint = |src: &str| diags(src).into_iter().find(|d| d.severity == "error").and_then(|d| d.hint).unwrap_or_default();
-    assert_eq!(hint("fn f(xs: List[Int]) -> Int\n= len(xs)"), "'len' is a method: write 'x.len' for 'len(x)', and 'x.len(a)' for 'len(x, a)'");
-    assert_eq!(hint("fn f() -> Opt[Int]\n= None"), "write 'none'");
-    assert_eq!(hint("fn f() -> Opt[Int]\n= Some(1)"), "write 'some(x)'");
+    assert_eq!(hint("fn f(xs: List[Int]) -> Int\n= len(xs, 1)"), "'len' is a method: write 'x.len' for 'len(x)', and 'x.len(a)' for 'len(x, a)'");
+    for src in ["fn f(xs: List[Int]) -> Int\n= len(xs)", "fn f() -> Opt[Int]\n= None", "fn f() -> Opt[Int]\n= Some(1)", "fn f(s: Str) -> Str\n= s.slice(1, 2)", "fn f(n: Int) -> Int\n= n.get"] {
+        let d = diags(src);
+        assert_eq!(codes(src), vec!["N_FOREIGN"], "{src}");
+        assert_eq!(d[0].fix[0]["op"], "norm", "{src}");
+    }
     assert_eq!(hint("fn f(xs: List[Int]) -> Opt[Int]\n= xs.head"), "write '.first' (an Opt)");
     assert_eq!(hint("type P = {qty: Int, name: Str}\nfn f(p: P) -> Int\n= p.quantity"), "P has fields qty, name");
     assert_eq!(hint("fn f(n: Int) -> Str\n= \"n=\" + n"), "convert with '.str', or interpolate: \"n={n}\"");

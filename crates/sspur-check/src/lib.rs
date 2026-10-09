@@ -440,6 +440,43 @@ fn suggest<'a>(name: &str, candidates: impl Iterator<Item = &'a String>) -> Opti
         .map(|(_, c)| format!("did you mean '{c}'?"))
 }
 
+/// A normalization as a fix op: `{"op": "norm", "def": D, "kind": K, ...}`.
+pub fn fix_json(def: &str, f: &fixup::Fix) -> serde_json::Value {
+    use fixup::Fix::*;
+    let sp = |s: &Span| json!([s.start, s.end]);
+    match f {
+        Method { span, to } => json!({"op": "norm", "def": def, "kind": "method", "span": sp(span), "to": to}),
+        CallToMethod { span, to } => json!({"op": "norm", "def": def, "kind": "call_to_method", "span": sp(span), "to": to}),
+        StrSlice { span } => json!({"op": "norm", "def": def, "kind": "str_slice", "span": sp(span)}),
+        DropMethod { span } => json!({"op": "norm", "def": def, "kind": "drop_method", "span": sp(span)}),
+        Name { span, to } => json!({"op": "norm", "def": def, "kind": "name", "span": sp(span), "to": to}),
+        PatCtor { from, to } => json!({"op": "norm", "def": def, "kind": "pat_ctor", "from": from, "to": to}),
+        Lift { span } => json!({"op": "norm", "def": def, "kind": "lift", "span": sp(span)}),
+    }
+}
+
+/// The inverse of `fix_json`: the definition and the fix.
+pub fn fix_of_json(v: &serde_json::Value) -> Option<(String, fixup::Fix)> {
+    use fixup::Fix::*;
+    if v["op"] != "norm" {
+        return None;
+    }
+    let def = v["def"].as_str()?.to_string();
+    let span = || -> Option<Span> { Some(Span { start: v["span"][0].as_u64()? as u32, end: v["span"][1].as_u64()? as u32 }) };
+    let to = || v["to"].as_str().map(str::to_string);
+    let f = match v["kind"].as_str()? {
+        "method" => Method { span: span()?, to: to()? },
+        "call_to_method" => CallToMethod { span: span()?, to: to()? },
+        "str_slice" => StrSlice { span: span()? },
+        "drop_method" => DropMethod { span: span()? },
+        "name" => Name { span: span()?, to: to()? },
+        "pat_ctor" => PatCtor { from: v["from"].as_str()?.into(), to: to()? },
+        "lift" => Lift { span: span()? },
+        _ => return None,
+    };
+    Some((def, f))
+}
+
 /// Methods from other languages, with the SSPUR spelling.
 fn method_alias(name: &str) -> Option<&'static str> {
     Some(match name {
@@ -1447,6 +1484,11 @@ impl Checker {
             return Type::list(Type::con(host));
         }
         let found = self.methods.get(&(con.clone(), name.to_string())).or_else(|| self.methods.get(&("*".to_string(), name.to_string()))).cloned();
+        if found.is_none()
+            && !self.types.get(&con).is_some_and(|t| matches!(&t.kind, TypeKind::Record(fs) if fs.iter().any(|(f, _)| f == name)))
+            && let Some(t) = self.foreign_method(recv, &rt, &con, name, args, span) {
+                return t;
+            }
         match found {
             Some(s) => self.call_scheme(&s, name, Some((rt, recv.span)), args, span),
             None => {
@@ -1467,6 +1509,58 @@ impl Checker {
                 self.fresh()
             }
         }
+    }
+
+    fn norm(&mut self, span: Span, msg: String, fix: fixup::Fix) {
+        let j = fix_json(self.cur_def.as_deref().unwrap_or_default(), &fix);
+        self.push_diag("N_FOREIGN", "error", span, msg, None, vec![j]);
+    }
+
+    fn has_method(&self, con: &str, m: &str) -> Option<Scheme> {
+        self.methods.get(&(con.to_string(), m.to_string())).or_else(|| self.methods.get(&("*".to_string(), m.to_string()))).cloned()
+    }
+
+    /// A method spelled the way another language spells it, with one SSPUR meaning on this
+    /// receiver: records the canonical form and types the call as that form.
+    fn foreign_method(&mut self, recv: &Expr, rt: &Type, con: &str, name: &str, args: &[Expr], span: Span) -> Option<Type> {
+        if con == "Str" && matches!(name, "slice" | "substring") && (1..=2).contains(&args.len()) {
+            for a in args {
+                let t = self.infer(a, Some(&Type::int()));
+                self.expect(&Type::int(), &t, a.span);
+            }
+            let (from, to) = if args.len() == 1 { ("(a)", "'s.drop(a)'") } else { ("(a, b)", "'s.drop(a).take(b - a)'") };
+            self.norm(span, format!("'s.{name}{from}' is written {to}"), fixup::Fix::StrSlice { span });
+            return Some(Type::con("Str"));
+        }
+        if matches!(name, "get" | "unwrap") && args.is_empty() && !matches!(con, "Opt" | "Res" | "") && self.has_method(con, name).is_none() {
+            let shown = self.resolve(rt);
+            let r = sspur_syntax::printer::expr(recv, 0);
+            self.norm(span, format!("'{r}.{name}' is written '{r}' (it is already {shown})"), fixup::Fix::DropMethod { span });
+            return Some(rt.clone());
+        }
+        let n = args.len();
+        let canon = match (name, n) {
+            ("length" | "size" | "count", 0) => "len",
+            ("to_string" | "toString" | "to_str" | "string", 0) => "str",
+            ("startsWith" | "startswith", 1) => "starts_with",
+            ("endsWith" | "endswith", 1) => "ends_with",
+            ("toLowerCase" | "to_lower" | "lowercase" | "to_lowercase" | "toLower" | "downcase", 0) => "lower",
+            ("toUpperCase" | "to_upper" | "uppercase" | "to_uppercase" | "toUpper" | "upcase", 0) => "upper",
+            ("strip" | "trim_space" | "trimmed", 0) => "trim",
+            ("reversed", 0) => "reverse",
+            ("sorted", 0) => "sort",
+            ("sorted" | "sort_by_key", 1) => "sort_by",
+            ("includes", 1) => "contains",
+            ("contains_key" | "has_key" | "containsKey", 1) => "has",
+            ("isEmpty" | "empty", 0) => "is_empty",
+            ("indexOf", 1) => "index_of",
+            ("unwrap", 0) if con == "Opt" => "get",
+            ("unwrap_or" | "get_or" | "value_or" | "getOrElse" | "unwrapOr", 1) if matches!(con, "Opt" | "Res") => "or",
+            _ => return None,
+        };
+        let s = self.has_method(con, canon).or_else(|| self.has_method(con, &format!("{canon}_")))?;
+        self.norm(span, format!("'.{name}' is written '.{canon}'"), fixup::Fix::Method { span, to: canon.into() });
+        Some(self.call_scheme(&s, canon, Some((rt.clone(), recv.span)), args, span))
     }
 
     fn infer_mmio(&mut self, recv: &Expr, width: &Ty, args: &[Expr], span: Span) -> Type {
@@ -1778,6 +1872,33 @@ impl Checker {
                         && let Some(s) = self.fns.get(n).or_else(|| self.globals.get(n)).cloned() {
                             return self.call_scheme(&s, n, None, args, e.span);
                         }
+                    if self.lookup(n).is_none() && !self.ctors.contains_key(n) && !self.types.contains_key(n) && args.len() == 1 {
+                        let canon = match n.as_str() {
+                            "len" | "length" | "size" | "count" => Some("len"),
+                            "str" | "string" | "to_string" | "String" => Some("str"),
+                            "sorted" => Some("sort"),
+                            "reversed" => Some("reverse"),
+                            "sum" | "abs" | "lower" | "upper" | "trim" | "chars" | "words" | "unique" | "is_empty" | "enumerate" => Some(n.as_str()),
+                            _ => None,
+                        };
+                        if let Some(c) = canon
+                            && matches!(args[0].kind, ExprKind::Lambda { implicit: true, .. }) {
+                                self.norm(e.span, format!("'{n}(x)' is written 'x.{c}'"), fixup::Fix::CallToMethod { span: e.span, to: c.to_string() });
+                                return self.fresh();
+                            }
+                        if let Some(c) = canon {
+                            let rt = self.infer(&args[0], None);
+                            let con = match self.resolve(&rt) {
+                                Type::Con(c, _) => c,
+                                _ => String::new(),
+                            };
+                            if let Some(s) = self.has_method(&con, c) {
+                                let c = c.to_string();
+                                self.norm(e.span, format!("'{n}(x)' is written 'x.{c}'"), fixup::Fix::CallToMethod { span: e.span, to: c.clone() });
+                                return self.call_scheme(&s, &c, Some((rt, args[0].span)), &[], e.span);
+                            }
+                        }
+                    }
                 }
                 let ft = self.infer(f, None);
                 self.call_value(ft, args, e.span)
@@ -1796,6 +1917,13 @@ impl Checker {
                 let it = self.infer(i, Some(&Type::int()));
                 self.expect(&Type::int(), &it, i.span);
                 elem
+            }
+            ExprKind::Lambda { implicit: true, .. } if exp.map(|t| self.resolve(t)).is_some_and(|t| matches!(t, Type::Con(..) | Type::Tuple(_))) => {
+                let want = self.resolve(exp.unwrap());
+                let fix = fixup::Fix::Lift { span: e.span };
+                let j = fix_json(self.cur_def.as_deref().unwrap_or_default(), &fix);
+                self.push_diag("N_FOREIGN", "error", e.span, format!("this '_' would make a function where {want} is expected, so it binds one call further out"), Some("in 'f(g(_))' the '_' belongs to g; write 'x => f(g(x))'".into()), vec![j]);
+                want
             }
             ExprKind::Lambda { params, body, .. } => self.infer_lambda(params, body, exp, e.span),
             ExprKind::Binary(op, l, r) => self.infer_binary(*op, l, r, e.span),
@@ -2123,6 +2251,24 @@ impl Checker {
             }
             return Type::Fn(params, Box::new(ret), row);
         }
+        let canon = match n {
+            "True" => Some("true"),
+            "False" => Some("false"),
+            "None" | "Nothing" | "null" | "nil" | "Nil" => Some("none"),
+            "Some" | "Just" => Some("some"),
+            "Ok" => Some("ok"),
+            "Err" => Some("err"),
+            "print" | "println" | "puts" => Some("log"),
+            _ => None,
+        };
+        if let Some(c) = canon
+            && !self.ctors.contains_key(n) {
+                self.norm(span, format!("'{n}' is written '{c}'"), fixup::Fix::Name { span, to: c.into() });
+                return match c {
+                    "true" | "false" => Type::bool(),
+                    _ => self.infer_name(c, span),
+                };
+            }
         let locals: Vec<String> = self.scopes.iter().flat_map(|s| s.keys().cloned()).collect();
         let foreign = match n {
             "True" | "False" | "None" => Some(format!("write '{}'", n.to_ascii_lowercase())),
@@ -2765,6 +2911,25 @@ impl Checker {
                     let t = Type::Con(name.clone(), params.iter().map(|p| map[p].clone()).collect());
                     (t, Some(fs.into_iter().map(|(n, t)| (n, subst_params(&t, &map))).collect()))
                 } else {
+                    let canon = match name.as_str() {
+                        "None" | "Nothing" | "Nil" => Some("none"),
+                        "Some" | "Just" => Some("some"),
+                        "Ok" => Some("ok"),
+                        "Err" => Some("err"),
+                        "True" => Some("true"),
+                        "False" => Some("false"),
+                        _ => None,
+                    };
+                    if let Some(c) = canon {
+                        let fix = fixup::Fix::PatCtor { from: name.clone(), to: c.into() };
+                        self.norm(Span::default(), format!("pattern '{name}' is written '{c}'"), fix);
+                        let p = match (c, args) {
+                            ("true" | "false", _) => Pat::Bool(c == "true"),
+                            (_, a) => Pat::Ctor { name: c.into(), args: a.clone() },
+                        };
+                        self.check_pat(&p, ty);
+                        return;
+                    }
                     let hint = suggest(name, self.ctors.keys());
                     self.push_diag("E_UNKNOWN_CTOR", "error", Span::default(), format!("unknown constructor '{name}' in pattern"), hint, vec![]);
                     return;

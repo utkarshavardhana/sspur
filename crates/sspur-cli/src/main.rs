@@ -19,6 +19,7 @@ use std::process::ExitCode;
 
 pub const REFERENCE: &str = include_str!("../../../docs/07-reference-v0.md");
 pub const AGENT_SPEC: &str = include_str!("../../../docs/agent-spec.md");
+pub const AGENT_SPEC_MORE: &str = include_str!("../../../docs/agent-spec-more.md");
 
 const USAGE: &str = "usage:
   sspur init [file.ssp] [--pkg NAME]    create a codebase in .sspur/ (optionally import a file; --pkg also writes sspur.toml)
@@ -29,7 +30,7 @@ const USAGE: &str = "usage:
   sspur q <query> [target] [--budget N] query the codebase (list [types|fns|tests] sig body callers callees effects find grep pack why impact holes diag log; body and pack take A,B,C)
     q find 'a|b*'  names matching, with signatures   q grep TEXT  definitions whose source contains TEXT, with the lines   q body A,B  several bodies
   sspur start [NAME|PATTERN...]         the agent spec plus this codebase: all of it if small, else counts, q pack of NAMEs, q find of the rest
-  sspur spec [--full] [src] [QUERY TARGET...]  the spec, then optionally src and queries (spec find 'a|b' pack A,B), in one call
+  sspur spec [--more|--full] [src] [QUERY TARGET...]  the spec (--more: the rest of the builtins, --full: the reference), then optionally src and queries
   sspur src | log | export | mcp [--dir PATH] | --version
   sspur bind header.h [--lib NAME] [-o out.ssp]   generate extern declarations from a C header (uses clang)
   sspur export-c file.ssp [-o libfoo] [--shared] [--prefix P]  build a C library and header from the C-compatible functions
@@ -107,7 +108,7 @@ fn real_main() -> ExitCode {
     };
     match cmd.as_str() {
         "spec" => {
-            print!("{}", if args.has("--full") { REFERENCE } else { AGENT_SPEC });
+            print!("{}", if args.has("--full") { REFERENCE } else if args.has("--more") { AGENT_SPEC_MORE } else { AGENT_SPEC });
             if args.pos.len() == 1 {
                 return ExitCode::SUCCESS;
             }
@@ -286,7 +287,7 @@ fn init(file: Option<&String>, name: Option<&String>, json: bool) -> ExitCode {
     };
     let ops: Vec<Json> = module.defs.iter().map(|d| json!({"op": "add", "path": d.name(), "src": sspur_syntax::printer::print_def(d)})).collect();
     let n = ops.len();
-    let r = store.apply(Tx { base: None, agent: Some("import".into()), reason: Some(format!("import {path}")), gate: None, merge: false, ops });
+    let r = store.apply(Tx { base: None, agent: Some("import".into()), reason: Some(format!("import {path}")), gate: None, merge: false, ops, normalize: false });
     if json {
         println!("{}", serde_json::to_string(&r).unwrap());
     } else if r.ok {

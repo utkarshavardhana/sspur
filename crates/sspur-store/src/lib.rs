@@ -82,6 +82,10 @@ pub struct Tx {
     #[serde(default)]
     pub merge: bool,
     pub ops: Vec<Json>,
+    /// Store unambiguous foreign spellings and missing effects in canonical form instead of
+    /// rejecting them (what `sspur edit` asks for).
+    #[serde(default)]
+    pub normalize: bool,
 }
 
 impl Tx {
@@ -123,6 +127,9 @@ pub struct TxResult {
     pub rebase: Option<Json>,
     #[serde(skip)]
     pub src: Option<String>,
+    /// Foreign spellings that were stored in their canonical form, one line each.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 impl TxResult {
@@ -131,7 +138,7 @@ impl TxResult {
     }
 
     fn diags(diags: Vec<Diag>, src: Option<String>) -> Self {
-        TxResult { ok: false, root: None, commit: None, changes: vec![], diags, conflicts: vec![], rebase: None, src }
+        TxResult { ok: false, root: None, commit: None, changes: vec![], diags, conflicts: vec![], rebase: None, src, notes: vec![] }
     }
 }
 
@@ -289,6 +296,7 @@ struct Prep {
     reqs: BTreeMap<String, Vec<String>>,
     pinned: HashSet<String>,
     ours: HashMap<String, String>,
+    notes: Vec<String>,
 }
 
 struct PWrite {
@@ -638,7 +646,8 @@ impl Store {
             Ok(ix) => ix,
             Err(e) => return TxResult::fail("E_IO", e),
         };
-        match self.try_commit(&ix, prep, &tx, base.as_ref(), vec![]) {
+        let notes = prep.notes.clone();
+        let mut r = match self.try_commit(&ix, prep, &tx, base.as_ref(), vec![]) {
             Outcome::Done(r) => r,
             Outcome::Rebase => {
                 let cur = self.head_root();
@@ -650,7 +659,11 @@ impl Store {
                     Err(r) => r,
                 }
             }
+        };
+        if r.ok {
+            r.notes = notes;
         }
+        r
     }
 
     fn prepare(&self, base: Option<&Root>, tx: &Tx) -> Result<Prep, TxResult> {
@@ -665,7 +678,17 @@ impl Store {
                 return Err(r);
             }
         }
-        let next = self.load_env(render(&defs), true).map_err(|d| TxResult::diags(d, None))?;
+        let mut next = self.load_env(render(&defs), true).map_err(|d| TxResult::diags(d, None))?;
+        let mut notes = Vec::new();
+        for _ in 0..6 {
+            if !tx.normalize || !next.check.has_errors() {
+                break;
+            }
+            let Some((fixed, said)) = normalized(&next, &mut reqs) else { break };
+            let Ok(n) = self.load_env(render(&fixed), true) else { break };
+            notes.extend(said);
+            next = n;
+        }
         if next.check.has_errors() {
             return Err(TxResult::diags(next.check.diags, Some(next.src)));
         }
@@ -738,7 +761,7 @@ impl Store {
             }
         }
         writes.sort_by(|a, b| a.path.cmp(&b.path));
-        Ok(Prep { writes, next, reqs, pinned, ours })
+        Ok(Prep { writes, next, reqs, pinned, ours, notes })
     }
 
     fn conflict_of(&self, ix: &Index, w: &PWrite, kind: &str, dot: &str, ours: Option<String>) -> Conflict {
@@ -846,7 +869,7 @@ impl Store {
                 return Outcome::Done(TxResult::fail("E_IO", e));
             }
             let head = self.head();
-            return Outcome::Done(TxResult { ok: true, root: head, commit: None, changes: vec![], diags: prep.next.check.diags, conflicts: vec![], rebase: None, src: Some(prep.next.src) });
+            return Outcome::Done(TxResult { ok: true, root: head, commit: None, changes: vec![], diags: prep.next.check.diags, conflicts: vec![], rebase: None, src: Some(prep.next.src), notes: vec![] });
         }
         let mut next_ix = ix.clone();
         for c in &extra {
@@ -909,7 +932,7 @@ impl Store {
                 Diag { code: "E_CONFLICT".into(), severity: "error", def: Some(c.path.clone()), span: [0, 0], msg, hint: Some(hint), fix }
             })
             .collect();
-        TxResult { ok: false, root: None, commit: None, changes: vec![], diags, conflicts, rebase: Some(json!({"base": head, "ops": tx.ops})), src: Some(prep.next.src.clone()) }
+        TxResult { ok: false, root: None, commit: None, changes: vec![], diags, conflicts, rebase: Some(json!({"base": head, "ops": tx.ops})), src: Some(prep.next.src.clone()), notes: vec![] }
     }
 
     fn write_reqs(&self, next: &Loaded, reqs: &BTreeMap<String, Vec<String>>, agent: &str, reason: &str) -> Result<(), String> {
@@ -1010,7 +1033,7 @@ impl Store {
             self.write("HEAD", &hash).map_err(io)?;
         }
         crash_point("head");
-        Ok(TxResult { ok: true, root: Some(hash).filter(|h| !h.is_empty()), commit, changes, diags: next.check.diags, conflicts: vec![], rebase: None, src: Some(next.src) })
+        Ok(TxResult { ok: true, root: Some(hash).filter(|h| !h.is_empty()), commit, changes, diags: next.check.diags, conflicts: vec![], rebase: None, src: Some(next.src), notes: vec![] })
     }
 
     /// Merges commits from another replica (already ingested) into this one. Returns the
@@ -1030,7 +1053,7 @@ impl Store {
         let new: BTreeSet<String> = theirs.difference(&mine).cloned().collect();
         if new.is_empty() {
             let _ = std::fs::remove_file(self.dir.join("PENDING"));
-            return TxResult { ok: true, root: self.head(), commit: ix.heads.first().cloned(), changes: vec![], diags: vec![], conflicts: vec![], rebase: None, src: None };
+            return TxResult { ok: true, root: self.head(), commit: ix.heads.first().cloned(), changes: vec![], diags: vec![], conflicts: vec![], rebase: None, src: None, notes: vec![] };
         }
         if let Some(m) = new.iter().find(|c| self.commit(c).is_none()) {
             return TxResult::fail("E_SYNC", format!("commit {m} is missing; fetch it first"));
@@ -1179,7 +1202,7 @@ impl Store {
 
 impl Tx {
     fn clone_meta(&self) -> Tx {
-        Tx { base: None, agent: self.agent.clone(), reason: self.reason.clone(), gate: self.gate.clone(), merge: false, ops: vec![] }
+        Tx { base: None, agent: self.agent.clone(), reason: self.reason.clone(), gate: self.gate.clone(), merge: false, ops: vec![], normalize: self.normalize }
     }
 }
 
@@ -1264,6 +1287,48 @@ fn parse_effect(src: &str) -> Result<Effect, OpErr> {
     let m = parse(&format!("fn eff_probe() ! {src}\n= ()")).map_err(|e| (e.code.to_string(), format!("bad effect '{src}': {}", e.msg), None))?;
     let Def::Fn(f) = &m.defs[0] else { unreachable!() };
     f.effects.first().cloned().map_or_else(|| op_err("E_OP_SHAPE", format!("bad effect '{src}'")), Ok)
+}
+
+/// The own definitions of `next` with every foreign spelling and missing effect the checker
+/// found rewritten to the canonical form, and one note per rewrite; `None` if there is
+/// nothing to rewrite or a rewrite does not apply.
+fn normalized(next: &Loaded, reqs: &mut BTreeMap<String, Vec<String>>) -> Option<(Vec<Def>, Vec<String>)> {
+    let mut defs = next.own_defs().to_vec();
+    let mut notes = Vec::new();
+    let mut any = false;
+    for d in next.check.diags.iter().filter(|d| d.is_error()) {
+        for f in &d.fix {
+            if let Some((name, fix)) = sspur_check::fix_of_json(f) {
+                let def = defs.iter_mut().find(|x| x.name() == name)?;
+                if !fixup::apply(def, &fix) {
+                    return None;
+                }
+                let note = match d.msg.split_once(" is written ") {
+                    Some((a, b)) => format!("{} -> {}", a.trim_start_matches("pattern ").trim_matches('\''), b.replacen('\'', "", 2)),
+                    None if matches!(fix, fixup::Fix::Lift { .. }) => "f(g(_)) -> x => f(g(x))".to_string(),
+                    None => d.msg.clone(),
+                };
+                if !notes.contains(&note) {
+                    notes.push(note);
+                }
+                any = true;
+            } else if d.code == "E_EFFECT_MISSING" && f["op"] == "refine" {
+                let atom = f["contract"]["effects"][0].as_str()?.trim_start_matches('+').to_string();
+                let target = f["target"].as_str()?.to_string();
+                apply_op(f, &mut defs, reqs).ok()?;
+                let note = format!("{target} now declares {atom}");
+                if !notes.contains(&note) {
+                    notes.push(note);
+                }
+                any = true;
+            }
+        }
+    }
+    if !any {
+        return None;
+    }
+    notes.dedup();
+    Some((defs, notes))
 }
 
 fn apply_op(op: &Json, defs: &mut Vec<Def>, reqs: &mut BTreeMap<String, Vec<String>>) -> Result<(), OpErr> {

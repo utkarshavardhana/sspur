@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod ffi;
+pub mod fixup;
 pub mod hints;
 pub mod lexer;
 pub mod link;
@@ -9,8 +10,8 @@ pub mod rename;
 pub mod visit;
 
 pub use ast::*;
-pub use hints::{parse_all, syntax_hint};
-pub use parser::{parse, parse_expr};
+pub use hints::{parse_all, parse_all_noted, syntax_hint};
+pub use parser::{parse, parse_expr, parse_noted};
 pub use printer::print_module;
 
 #[derive(Clone, Debug, PartialEq)]

@@ -41,9 +41,16 @@ ok +bulk ~total
 3 passed, 0 failed
 // ANCHOR_END: edit
 // ANCHOR: rejected
-$ sspur edit --test -e 'fn total(items: List[Item]) -> Int = if subtotal(items) >= 50 && true then 1 else 2'
+$ sspur edit --test -e 'fn total(items: List[Item]) -> Int = items.head.price'
 rejected, nothing changed
-input:1:63 E_PARSE_EXPECTED expected 'then', found '&'
-  hint: no '&&' operator: write 'and'
+total:2:3 E_UNKNOWN_METHOD no method 'head' on List[Item]
+  hint: write '.first' (an Opt)
 fix these and resend the whole edit in one call
 // ANCHOR_END: rejected
+// ANCHOR: normalized
+$ sspur edit --test -e 'fn total(items: List[Item]) -> Int
+= if items.length == 0 || subtotal(items) < 50 then subtotal(items) else subtotal(items) * 9 / 10'
+ok ~total
+stored as: || -> or, .length -> .len
+3 passed, 0 failed
+// ANCHOR_END: normalized

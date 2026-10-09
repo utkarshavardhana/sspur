@@ -45,6 +45,7 @@ const CASES: &[(&str, &str, &str)] = &[
     ("fn f(n: Int) -> Int\n= check(n) + 1\n", "fn f(n: Int) -> Int ! fail[E]\n= check(n) + 1", "f now declares fail[E]"),
     ("fn f() -> Unit\n= print(\"x\")\n", "fn f() -> Unit ! log\n= log(\"x\")", "print -> log"),
     ("fn f(n: Int) -> Int\n= do\n  var a: Int = n\n  b: Int = a + 1\n  b\n", "fn f(n: Int) -> Int\n= do\n  var a = n\n  b = a + 1\n  b", "var x: T = e -> var x = e"),
+    ("fn f(xs: List[Int]) -> List[Int]\n= xs.map((x) => {\n  y = x * 2\n  return y + 1\n})\n", "fn f(xs: List[Int]) -> List[Int]\n= xs.map(x => do\n  y = x * 2\n  y + 1)", "x => { block } -> x => do block"),
 ];
 
 const FOREIGN: &[&str] = &["&&", "||", " !", "elif", "let ", "+=", "{_}", "None", "Some(", "True", ".length", ".slice(", ".size", ".to_string", ".unwrap", "print(", "len("];

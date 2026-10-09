@@ -12,6 +12,8 @@ fn foreign_syntax_gets_a_hint() {
     assert!(hint("type E = A{x: Int}\nfn f(e: E) -> Int\n= match e\n  | A{_, y} => 1").starts_with("a bare 'A' pattern ignores the fields"));
     assert_eq!(hint("fn f(xs: List[Int]) -> List[Int]\n= xs.map(x -> x + 1)"), "a lambda is 'x => e' or '(a, b) => e'");
     assert!(hint("fn f() -> Str\n= \"\\d+\"").starts_with("a regex escape doubles the backslash"));
+    assert!(hint("fn f(xs: List[Int]) -> List[Int]\n= do\n  ys = xs.map(x => do\n  y = x\n  y)\n  ys").starts_with("indent a lambda's block 2 deeper"));
+    assert!(hint("fn f(xs: List[Int]) -> List[Int]\n= do\n  ys = xs.map { x =>\n    x\n  }\n  ys").starts_with("a lambda goes inside the parentheses"));
 }
 
 #[test]
@@ -38,4 +40,29 @@ fn foreign_operators_parse_to_the_canonical_form() {
         let (m2, again) = parse_noted(&printed).unwrap();
         assert!(again.is_empty() && print_module(&m2) == printed, "the canonical form is a fixed point: {printed}");
     }
+}
+
+#[test]
+fn block_lambda_variants_parse_to_the_canonical_form() {
+    let canon = "fn f(xs: List[Int]) -> List[Int]\n= xs.map(x => do\n  y = x * 2\n  y + 1)\n";
+    for (src, note) in [
+        ("fn f(xs: List[Int]) -> List[Int]\n= xs.map(x => do\n  y = x * 2\n  y + 1)\n", ""),
+        ("fn f(xs: List[Int]) -> List[Int]\n= xs.map(x =>\n  y = x * 2\n  y + 1)\n", ""),
+        ("fn f(xs: List[Int]) -> List[Int]\n= xs.map(x => do\n    y = x * 2\n    y + 1\n)\n", ""),
+        ("fn f(xs: List[Int]) -> List[Int]\n= xs.map(x => do\n  y = x * 2\n  y + 1\n  )\n", ""),
+        ("fn f(xs: List[Int]) -> List[Int]\n= xs.map(\n  x => do\n    y = x * 2\n    y + 1\n)\n", ""),
+        ("fn f(xs: List[Int]) -> List[Int]\n= xs.map(x =>\n  do\n    y = x * 2\n    y + 1)\n", ""),
+        ("fn f(xs: List[Int]) -> List[Int]\n= xs.map((x) => {\n  const y = x * 2\n  return y + 1\n})\n", "x => { block } -> x => do block"),
+        ("fn f(xs: List[Int]) -> List[Int]\n= xs.map(x => do\n  y = x * 2\n  return y + 1)\n", "return e at the end of a lambda -> e"),
+    ] {
+        let (m, notes) = parse_noted(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
+        assert_eq!(print_module(&m), canon, "{src}");
+        assert!(note.is_empty() || notes.iter().any(|n| n == note), "{src}: {notes:?}");
+    }
+    let rec = "type P = {a: Int, b: Int}\n\nfn f(xs: List[Int]) -> List[P]\n= xs.map(x => {\n  a: x,\n  b: 1})\n";
+    assert!(print_module(&parse(rec).unwrap()).contains("xs.map(x => {a: x, b: 1})"));
+    let m = parse("fn f(xs: List[Int]) -> List[Int]\n= xs.map(x => match x\n  | 1 => 10\n  | _ => x)\n").unwrap();
+    let printed = print_module(&m);
+    assert_eq!(printed, "fn f(xs: List[Int]) -> List[Int]\n= xs.map(x => do\n  match x\n  | 1 => 10\n  | _ => x)\n");
+    assert_eq!(print_module(&parse(&printed).unwrap()), printed);
 }

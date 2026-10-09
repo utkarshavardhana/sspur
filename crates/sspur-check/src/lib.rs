@@ -2226,7 +2226,7 @@ impl Checker {
                 if self.task_depth > 0 && self.lambda_depth == 0 {
                     self.err("E_RETURN_IN_PAR", e.span, "'return' is not allowed inside a par task; the task's value is its result".into());
                 } else if self.lambda_depth > 0 {
-                    self.err("E_RETURN_IN_LAMBDA", e.span, "'return' is not allowed inside a lambda".into());
+                    self.push_diag("E_RETURN_IN_LAMBDA", "error", e.span, "'return' is not allowed inside a lambda".into(), Some("a lambda's value is its last line: write 'if c then a else do' and the rest, or move the early exit into a named fn".into()), vec![]);
                 } else if self.clause_depth > 0 {
                     self.err("E_RETURN_IN_HANDLER", e.span, "'return' is not allowed inside a handler arm; the arm's value is the result".into());
                 }

@@ -269,3 +269,15 @@ fn json_rejects_types_without_a_wire_form() {
 fn user_definitions_shadow_std_names() {
     assert!(codes("type Set = {n: Int}\nfn chunks(s: Set, k: Int) -> Int\n= s.n * k\nfn f() -> Int\n= Set{n: 2}.chunks(3)").is_empty());
 }
+
+#[test]
+fn early_return_in_a_block_lambda_is_rejected_with_a_hint() {
+    let d = diags("fn f(xs: List[Int]) -> List[Int]\n= xs.map(x => do\n  if x > 3 then return 0\n  x)");
+    assert_eq!(d[0].code, "E_RETURN_IN_LAMBDA");
+    assert!(d[0].hint.as_deref().unwrap_or("").contains("last line"), "{d:?}");
+    assert!(codes("fn f(xs: List[Int]) -> List[Int]\n= xs.map(x => do\n  y = x + 1\n  return y)").is_empty());
+    let src = "type E = Neg\nfn f(xs: List[Int]) -> Int\n= xs.map(x => do\n  log(\"{x}\")\n  if x < 0 then raise Neg\n  x).len";
+    let mut c = codes(src);
+    c.sort();
+    assert_eq!(c, ["E_EFFECT_MISSING", "E_EFFECT_MISSING"]);
+}

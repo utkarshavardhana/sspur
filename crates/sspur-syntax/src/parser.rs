@@ -926,7 +926,18 @@ impl Parser {
                 params.push(self.expect_ident()?);
             }
             self.expect_sym("=>")?;
-            let body = self.block_or_expr()?;
+            let mut body = if self.is_sym("{") && matches!(self.peek_at(1), Tok::Newline(_)) {
+                self.bump();
+                let b = self.block()?;
+                self.expect_sym("}")?;
+                self.note("x => { block } -> x => do block");
+                b
+            } else {
+                self.block_or_expr()?
+            };
+            if tail_return(&mut body) {
+                self.note("return e at the end of a lambda -> e");
+            }
             return Ok(Expr::new(ExprKind::Lambda { params, body: Box::new(body), implicit: false }, start.to(self.prev_span())));
         }
         match self.peek() {
@@ -1233,6 +1244,10 @@ impl Parser {
         };
         let mut stmts = Vec::new();
         while let Tok::Newline(c) = *self.peek() {
+            if c >= col && matches!(self.peek_at(1), Tok::Sym(")" | "]" | "}")) {
+                self.bump();
+                break;
+            }
             if c != col {
                 if c > col {
                     return self.err("E_PARSE_INDENT", "unexpected indentation");
@@ -1867,3 +1882,21 @@ pub fn has_placeholder(e: &Expr) -> bool {
     found
 }
 
+
+/// Replaces `return e` in tail position of a lambda body with `e`.
+fn tail_return(e: &mut Expr) -> bool {
+    match &mut e.kind {
+        ExprKind::Return(x) => {
+            let x = std::mem::replace(&mut **x, Expr::new(ExprKind::Unit, Span::default()));
+            *e = x;
+            true
+        }
+        ExprKind::Block(stmts) => match stmts.last_mut() {
+            Some(Stmt::Expr(x)) => tail_return(x),
+            _ => false,
+        },
+        ExprKind::If(_, t, Some(f)) => tail_return(t) | tail_return(f),
+        ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) => arms.iter_mut().fold(false, |h, a| tail_return(&mut a.body) | h),
+        _ => false,
+    }
+}

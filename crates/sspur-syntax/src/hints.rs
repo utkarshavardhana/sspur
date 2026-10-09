@@ -37,6 +37,17 @@ pub fn syntax_hint(src: &str, e: &SyntaxError) -> Option<String> {
     if e.code == "E_LEX_STRING" && e.msg.contains('{') {
         return h("'{' starts an interpolation; a literal '{' is '\\{'");
     }
+    let prev = src[..line_start].trim_end_matches('\n').rsplit('\n').next().unwrap_or("");
+    if e.code == "E_PARSE_BLOCK" && prev.contains("=>") {
+        return h("indent a lambda's block 2 deeper than the line the lambda starts on; its last line is the value, then ')'");
+    }
+    if rest.starts_with('{') && {
+        let b = before.trim_end();
+        let id = last_ident(b);
+        !id.is_empty() && b[..b.len() - id.len()].ends_with('.')
+    } {
+        return h("a lambda goes inside the parentheses: 'xs.map(x => do' and an indented block, ending with ')'");
+    }
     if rest.starts_with("&") {
         return h("no '&&' operator: write 'and'");
     }

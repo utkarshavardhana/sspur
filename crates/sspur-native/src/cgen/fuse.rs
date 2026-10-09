@@ -29,6 +29,10 @@ pub(super) fn traps(e: &Expr, out: &mut BTreeSet<i64>) -> bool {
         }
         ExprKind::If(c, a, b) => traps(c, out) && traps(a, out) && b.as_ref().is_none_or(|b| traps(b, out)),
         ExprKind::Tuple(xs) => xs.iter().all(|x| traps(x, out)),
+        ExprKind::Block(stmts) => stmts.iter().all(|s| match s {
+            Stmt::Let(Pat::Bind(_) | Pat::Wild, x) | Stmt::Expr(x) => traps(x, out),
+            _ => false,
+        }),
         ExprKind::Method { recv, name, args, .. } if args.is_empty() && matches!(name.as_str(), "to_f64" | "len") => traps(recv, out),
         _ => false,
     }

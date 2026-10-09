@@ -385,7 +385,11 @@ pub fn expr(e: &Expr, ind: usize) -> String {
         ExprKind::Lambda { body, implicit: true, .. } => expr(body, ind),
         ExprKind::Lambda { params, body, .. } => {
             let ps = if params.len() == 1 { params[0].clone() } else { format!("({})", params.join(", ")) };
-            format!("{} => {}", ps, expr(body, ind))
+            let b = expr(body, ind);
+            if b.contains('\n') && !matches!(body.kind, ExprKind::Block(_)) {
+                return format!("{ps} => do\n{}{}", pad(ind + 2), expr(body, ind + 2));
+            }
+            format!("{ps} => {b}")
         }
         ExprKind::Binary(op, l, r) => {
             let p = op.prec();

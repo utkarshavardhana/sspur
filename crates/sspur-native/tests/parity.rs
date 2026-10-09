@@ -113,3 +113,22 @@ fn smt_proofs_remove_checks_but_keep_real_traps() {
     assert!(body("sub__np").contains("overflow"));
     assert!(body("twice").contains("f_gap__np(") && body("twice").contains("overflow"));
 }
+
+#[test]
+fn block_lambda_pipelines_fuse_like_one_line_lambdas() {
+    let src = "fn blk(n: Int) -> Int\n= (0..n).map(x => do\n  y = x * 3\n  z = y - 1\n  if z > 4 then z else 0).filter(_ > 5).sum\nfn one(n: Int) -> Int\n= (0..n).map(x => if x * 3 - 1 > 4 then x * 3 - 1 else 0).filter(_ > 5).sum\nfn big(k: Int) -> Int\n= [1, 2, k].map(x => do\n  y = x * x\n  y + 1).sum";
+    for n in [0, 7, 5000] {
+        assert_eq!(release(src, "blk", &[n]), release(src, "one", &[n]));
+    }
+    assert_eq!(release(src, "big", &[4_000_000_000]), Err("integer overflow".into()));
+    let m = parse(src).unwrap();
+    let c = sspur_native::cgen::c_source(&m, &sspur_check::check(&m));
+    let body = |name: &str| {
+        let head = format!("static RR_I f_{name}(int64_t a0");
+        let start = c.lines().position(|l| l.starts_with(&head) && l.ends_with('{')).unwrap();
+        c.lines().skip(start).take_while(|l| *l != "}").collect::<Vec<_>>().join("\n")
+    };
+    for f in ["blk", "one"] {
+        assert!(body(f).contains("vb_") && !body(f).contains("sspur_alloc"), "{}", body(f));
+    }
+}

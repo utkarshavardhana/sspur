@@ -83,12 +83,16 @@ fn simple_var(s: &str) -> bool {
 }
 
 fn names(e: &Expr, out: &mut Vec<String>) {
+    let mut bound = Vec::new();
     visit::walk_expr(e, &mut |x| {
-        if let ExprKind::Name(n) = &x.kind {
-            out.push(n.clone());
+        match &x.kind {
+            ExprKind::Name(n) => out.push(n.clone()),
+            ExprKind::Block(stmts) => bound.extend(stmts.iter().filter_map(|s| if let Stmt::Let(Pat::Bind(n), _) = s { Some(n.clone()) } else { None })),
+            _ => {}
         }
         true
     });
+    out.retain(|n| !bound.contains(n));
 }
 
 impl Cx<'_> {
@@ -113,6 +117,14 @@ impl Cx<'_> {
             ExprKind::Unary(_, x) => self.vshape(x),
             ExprKind::If(c, a, b) => self.vshape(c) && self.vshape(a) && b.as_ref().is_some_and(|b| self.vshape(b)),
             ExprKind::Index(b, i) => list(b) && self.vshape(i),
+            ExprKind::Block(stmts) => {
+                let n = stmts.len();
+                stmts.iter().enumerate().all(|(k, s)| match s {
+                    Stmt::Let(Pat::Bind(_), x) => k + 1 < n && self.vshape(x),
+                    Stmt::Expr(x) => k + 1 == n && self.vshape(x),
+                    _ => false,
+                })
+            }
             ExprKind::Field(recv, name) => builtin(recv, name),
             ExprKind::Method { recv, name, args, .. } if args.is_empty() => builtin(recv, name),
             _ => false,

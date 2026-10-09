@@ -63,7 +63,11 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SyntaxError> {
                 while layout.last().is_some_and(|(d, ind)| *d == depth && indent < *ind) {
                     layout.pop();
                 }
-                let opens = matches!(out.last().map(|t: &Token| &t.tok), Some(Tok::Kw("do" | "then" | "else")) | Some(Tok::Sym("=>" | "=")));
+                let brace = matches!(out.last().map(|t: &Token| &t.tok), Some(Tok::Sym("{")))
+                    && out.len() >= 2
+                    && out[out.len() - 2].tok == Tok::Sym("=>")
+                    && !record_line(&src[next..]);
+                let opens = brace || matches!(out.last().map(|t: &Token| &t.tok), Some(Tok::Kw("do" | "then" | "else")) | Some(Tok::Sym("=>" | "=")));
                 let active = layout.last().is_some_and(|(d, _)| *d == depth);
                 if !active && opens {
                     layout.push((depth, indent));
@@ -154,6 +158,17 @@ pub fn lex(src: &str) -> Result<Vec<Token>, SyntaxError> {
     }
     out.push(Token { tok: Tok::Eof, span: Span::new(src.len(), src.len()) });
     Ok(out)
+}
+
+/// Whether a line after `=> {` continues a record literal (`a: 1,`, `a,`, `a}`) rather than a block.
+fn record_line(rest: &str) -> bool {
+    let line = rest.split('\n').next().unwrap_or("");
+    let n = line.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(line.len());
+    if n == 0 {
+        return false;
+    }
+    let after = line[n..].trim_start();
+    (after.starts_with(':') && !after.starts_with(":=") && !after.contains(" = ")) || after.starts_with(',') || after.starts_with('}')
 }
 
 fn measure_indent(bytes: &[u8], mut i: usize) -> (u32, usize) {

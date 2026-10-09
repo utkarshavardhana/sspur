@@ -68,6 +68,31 @@ fn per_iter(n: Int) -> Int
     s := s + bump(10) + c
   s
 
+fn running(xs: List[Int]) -> (Int, List[Int])
+= do
+  var total = 0
+  ys = xs.map(x => do
+    total := total + x
+    total)
+  (total, ys)
+
+fn blocky(n: Int) -> Int
+= (0..n).map(x => do
+  y = x * 3 - 1
+  if y > 4 then y else 0).filter(_ > 5).sum
+
+fn nested_blocks(xs: List[Int]) -> List[Str]
+= xs.map(x => do
+  inner = xs.map(z => do
+    w = z + x
+    w * 2).sum
+  match inner % 3
+  | 0 => "z"
+  | _ => inner.str)
+
 test c5 = nest(4) != 0
 test c6 = closure_read(2) == 24
 test c7 = per_iter(5) > 0
+test c8 = running([1, 2, 3]) == (6, [1, 3, 6])
+test c9 = blocky(1000) == (0..1000).map(x => if x * 3 - 1 > 4 then x * 3 - 1 else 0).filter(_ > 5).sum
+test c10 = nested_blocks([1, 2]) == ["10", "14"]

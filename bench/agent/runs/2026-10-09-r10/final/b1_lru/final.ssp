@@ -1,0 +1,95 @@
+type Cache = {cap: Int, entries: List[Entry], hits: Int, misses: Int}
+
+type CacheErr = BadCapacity{cap: Int}
+
+type Entry = {key: Str, value: Int}
+
+fn describe(c: Cache) -> Str
+= "cap={c.cap} [" + c.entries.map(e => "{e.key}={e.value}").join(", ") + "]"
+
+fn get_or(c: Cache, key: Str, default: Int) -> (Int, Cache)
+= do
+  r = lookup(c, key)
+  (r.0.or(default), r.1)
+
+fn keep_last(xs: List[Entry], n: Int) -> List[Entry]
+= if xs.len > n then xs.drop(xs.len - n) else xs
+
+fn keys(c: Cache) -> List[Str]
+= c.entries.map(_.key)
+
+fn lookup(c: Cache, key: Str) -> (Opt[Int], Cache)
+= match c.entries.find(_.key == key)
+| some(e) => (some(e.value), touch(c, e))
+| none => (none, miss(c))
+
+fn main() -> Unit ! log, fail[CacheErr]
+= log(describe(put(put(new_cache(2), "a", 1), "b", 2)))
+
+fn miss(c: Cache) -> Cache
+= c with misses := c.misses + 1
+
+fn new_cache(cap: Int) -> Cache ! fail[CacheErr]
+= do
+  if cap < 1 then raise BadCapacity{cap: cap}
+  Cache{cap: cap, entries: [], hits: 0, misses: 0}
+
+fn peek(c: Cache, key: Str) -> Opt[Int]
+= c.entries.find(_.key == key).map(_.value)
+
+fn put(c: Cache, key: Str, value: Int) -> Cache
+= c with entries := keep_last(c.entries.filter(_.key != key).push(Entry{key: key, value: value}), c.cap)
+
+fn resize(c: Cache, cap: Int) -> Cache ! fail[CacheErr]
+= do
+  if cap < 1 then raise BadCapacity{cap: cap}
+  (c with cap := cap) with entries := keep_last(c.entries, cap)
+
+fn size(c: Cache) -> Int
+= c.entries.len
+
+fn touch(c: Cache, e: Entry) -> Cache
+= (c with entries := c.entries.filter(_.key != e.key).push(e)) with hits := c.hits + 1
+
+test counters = do
+  c = put(new_cache(2), "a", 1)
+  c1 = lookup(c, "a").1
+  c2 = get_or(c1, "q", 0).1
+  c3 = peek(c2, "a")
+  c2.hits == 1 and c2.misses == 1 and c3 == some(1)
+
+test described = describe(put(new_cache(3), "x", 7)) == "cap=3 [x=7]"
+
+test evict = keys(put(put(put(new_cache(2), "a", 1), "b", 2), "c", 3)) == ["b", "c"]
+
+test get_or_hit = get_or(put(new_cache(2), "a", 5), "a", 0).0 == 5
+
+test lookup_hit = lookup(put(new_cache(2), "a", 1), "a").0 == some(1)
+
+test lookup_miss = get_or(new_cache(2), "z", -1).0 == -1
+
+test lookup_recency = keys(lookup(put(put(new_cache(2), "a", 1), "b", 2), "a").1) == ["b", "a"]
+
+test lookup_then_evict = keys(put(lookup(put(put(new_cache(2), "a", 1), "b", 2), "a").1, "c", 3)) == ["a", "c"]
+
+test miss_order = keys(lookup(put(put(new_cache(2), "a", 1), "b", 2), "z").1) == ["a", "b"]
+
+test new_bad = catch new_cache(0).cap == 1
+| BadCapacity{cap} => cap == 0
+
+test peek_nochange = do
+  c = put(put(new_cache(2), "a", 1), "b", 2)
+  peek(c, "a") == some(1) and keys(c) == ["a", "b"] and c.hits == 0 and c.misses == 0
+
+test peek_none = peek(new_cache(2), "a") == none
+
+test put_two = keys(put(put(new_cache(2), "a", 1), "b", 2)) == ["a", "b"]
+
+test replace = keys(put(put(put(new_cache(2), "a", 1), "b", 2), "a", 9)) == ["b", "a"]
+
+test resize_bad = catch resize(new_cache(2), 0).cap == 1
+| BadCapacity{cap} => cap == 0
+
+test resize_shrink = do
+  c = resize(put(put(put(new_cache(3), "a", 1), "b", 2), "c", 3), 2)
+  keys(c) == ["b", "c"] and c.cap == 2

@@ -1,0 +1,103 @@
+type Ledger = {accounts: List[Str], txns: List[Txn]}
+
+type LedgerErr = UnknownAccount{name: Str} | Unbalanced{id: Int, diff: Int} | TooFewPostings{id: Int} | DuplicateId{id: Int} | Overdrawn{account: Str, balance: Int} | UnknownTxn{id: Int}
+
+type Posting = {account: Str, amount: Int}
+
+type Txn = {id: Int, memo: Str, postings: List[Posting]}
+
+fn add_txn(l: Ledger, t: Txn) -> Ledger ! fail[LedgerErr]
+= do
+  if t.postings.len < 2 then raise TooFewPostings{id: t.id}
+  for x in t.postings
+    if not l.accounts.contains(x.account) then raise UnknownAccount{name: x.account}
+  s = t.postings.map(_.amount).sum
+  if s != 0 then raise Unbalanced{id: t.id, diff: s}
+  if l.txns.any(_.id == t.id) then raise DuplicateId{id: t.id}
+  l2 = l with txns := l.txns.push(t)
+  for x in t.postings
+    if x.account.starts_with("assets:") and balance(l2, x.account) < 0 then raise Overdrawn{account: x.account, balance: balance(l2, x.account)}
+  l2
+
+fn balance(l: Ledger, account: Str) -> Int
+= l.txns.flat_map(_.postings).filter(_.account == account).map(_.amount).sum
+
+fn chart() -> List[Str]
+= ["income:salary", "assets:bank", "expenses:food", "assets:cash", "equity:owner"]
+
+fn history(l: Ledger, account: Str) -> List[(Int, Int)]
+= l.txns.enumerate.filter(e => e.1.postings.any(_.account == account)).map(e => (e.1.id, balance(l with txns := l.txns.take(e.0 + 1), account)))
+
+fn main() -> Unit ! log
+= log(catch trial_balance(sample()).map(e => "{e.0} {e.1}").join("\n")
+| UnknownAccount{name} => "unknown account {name}"
+| _ => "error")
+
+fn new_ledger() -> Ledger
+= Ledger{accounts: chart(), txns: []}
+
+fn p(account: Str, amount: Int) -> Posting
+= Posting{account: account, amount: amount}
+
+fn reverse(l: Ledger, id: Int, new_id: Int) -> Ledger ! fail[LedgerErr]
+= do
+  t = l.txns.find(_.id == id).ok_or(UnknownTxn{id: id})
+  add_txn(l, Txn{id: new_id, memo: "reverse {id}", postings: t.postings.map(x => p(x.account, 0 - x.amount))})
+
+fn sample() -> Ledger ! fail[LedgerErr]
+= add_txn(add_txn(new_ledger(), Txn{id: 1, memo: "open", postings: [p("assets:bank", 1000), p("equity:owner", -1000)]}), Txn{id: 2, memo: "lunch", postings: [p("expenses:food", 30), p("assets:bank", -30)]})
+
+fn trial_balance(l: Ledger) -> List[(Str, Int)]
+= l.accounts.map(a => (a, balance(l, a))).filter(_.1 != 0).sort_by(_.0)
+
+test bank = catch balance(sample(), "assets:bank") == 970
+| _ => false
+
+test duplicate = catch add_txn(sample(), Txn{id: 2, memo: "x", postings: [p("assets:bank", 5), p("equity:owner", -5)]}).txns.len == 0
+| DuplicateId{id} => id == 2
+| _ => false
+
+test history_bank = catch history(sample(), "assets:bank") == [(1, 1000), (2, 970)]
+| _ => false
+
+test history_none = catch history(sample(), "assets:cash") == []
+| _ => false
+
+test order_unknown_before_unbalanced = catch add_txn(new_ledger(), Txn{id: 1, memo: "x", postings: [p("assets:gold", 5), p("equity:owner", -4)]}).txns.len == 0
+| UnknownAccount{name} => name == "assets:gold"
+| _ => false
+
+test overdrawn = catch add_txn(new_ledger(), Txn{id: 1, memo: "x", postings: [p("expenses:food", 5), p("assets:cash", -5)]}).txns.len == 0
+| Overdrawn{account, balance} => account == "assets:cash" and balance == -5
+| _ => false
+
+test reverse_memo_and_zero = catch trial_balance(reverse(sample(), 2, 3)).len == 2 and reverse(sample(), 2, 3).txns.last.get.memo == "reverse 2"
+| _ => false
+
+test reverse_ok = catch reverse(sample(), 2, 3).txns.last.get.postings == [p("expenses:food", -30), p("assets:bank", 30)]
+| _ => false
+
+test reverse_overdrawn = catch reverse(sample(), 1, 3).txns.len == 0
+| Overdrawn{account, balance} => account == "assets:bank" and balance == -30
+| _ => false
+
+test reverse_unknown = catch reverse(sample(), 9, 3).txns.len == 0
+| UnknownTxn{id} => id == 9
+| _ => false
+
+test too_few = catch add_txn(new_ledger(), Txn{id: 1, memo: "x", postings: [p("assets:bank", 0)]}).txns.len == 0
+| TooFewPostings{id} => id == 1
+| _ => false
+
+test trial_nonzero_sorted = catch trial_balance(sample()) == [("assets:bank", 970), ("equity:owner", -1000), ("expenses:food", 30)]
+| _ => false
+
+test trial_sums_to_zero = catch trial_balance(sample()).map(_.1).sum == 0
+| _ => false
+
+test unbalanced = catch add_txn(new_ledger(), Txn{id: 7, memo: "x", postings: [p("assets:bank", 5), p("equity:owner", -3)]}).txns.len == 0
+| Unbalanced{id, diff} => id == 7 and diff == 2
+| _ => false
+
+test unknown = catch add_txn(new_ledger(), Txn{id: 1, memo: "x", postings: [p("assets:gold", 5), p("equity:owner", -5)]}).txns.len == 0
+| UnknownAccount{name} => name == "assets:gold"

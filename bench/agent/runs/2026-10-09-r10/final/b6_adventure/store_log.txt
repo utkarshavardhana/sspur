@@ -1,0 +1,2 @@
+#7zy2r343tbt4  2026-10-09T06:22:54Z  edit    [~Game ~Room ~blocked ~counts_moves ~current +dispatch +drop_item +empty_cmd +forgiving ~go +inventory_cmd +inventory_text +locked_door +locked_no_move ~look +look_items ~main ~new_game ~play ~run +score +score_items +score_start +score_vault +set_room_items ~starts_in_hall ~step +take_drop +take_item +take_missing +unlocked ~walks ~world]
+#aickgrxnr6nb  2026-10-09T04:27:19Z  import  import start.ssp  [+Game +Room +blocked +counts_moves +current +go +look +main +new_game +play +run +starts_in_hall +step +walks +world]

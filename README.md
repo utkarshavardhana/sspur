@@ -34,7 +34,7 @@ $ sspur test cart.ssp
 
 Most languages are designed around a human at a keyboard. SSPUR starts from a different question: what does a language look like when the author is a model that reads every token, pays for every token, and never gets tired of writing contracts?
 
-- **Fewer tokens than Python, and a smaller codebase than any of the four languages measured.** On a benchmark of 16 multi-step feature tasks, agents working in SSPUR used 0.70x to 0.85x (Sonnet 5.5) and 0.76x (Opus 5.5) the total tokens of the same agents working in Python, with identical pass rates; Haiku 4.5 used 0.83x after the fix hints added in run 6. SSPUR source is the smallest of the four languages measured (0.95x Python, 0.88x TypeScript, 0.69x Go, counted on the reference solutions). **The advantage over Python does not transfer to the two statically typed controls:** on the same 17 cells Sonnet used 1.23x TypeScript's tokens and 1.11x Go's (all four passed every hidden test). SSPUR is ahead of all three only on the 1,100-definition codebase, where `sspur start NAME...` solves it in 3 API calls (0.60x Python, 0.74x TypeScript, 0.35x Go). [The full report](bench/agent/README.md) has every cell and the caveats.
+- **Fewer tokens than Python, and a smaller codebase than any of the four languages measured.** On a benchmark of 16 multi-step feature tasks, agents working in SSPUR used 0.70x to 0.85x (Sonnet 5.5) and 0.76x (Opus 5.5) the total tokens of the same agents working in Python, with identical pass rates; Haiku 4.5 used 0.83x after the fix hints added in run 6. SSPUR source is the smallest of the four languages measured (0.95x Python, 0.88x TypeScript, 0.69x Go, counted on the reference solutions). **Against the two statically typed controls there is no measured advantage, only parity:** in run 10, after edits through a file, canonical storage of foreign spellings and a 0.8k-token core spec, Sonnet used 0.72x Python's tokens, 1.06x TypeScript's and 0.96x Go's on 17 cells (run 9: 0.83x, 1.23x, 1.11x; every cell passed every hidden test). SSPUR is ahead of all three on the 1,100-definition codebase, where `sspur start NAME...` solves it in 3 API calls (0.59x Python, 0.73x TypeScript, 0.35x Go). [The full report](bench/agent/README.md) has every cell and the caveats.
 - **Every side effect is in the signature.** `log`, `fail[E]`, `db.read[T]`, `fs`, `proc`, `ffi`, `conc` and user-defined effects are tracked by the checker, so a reviewer, or a deployer, can see exactly what a function is allowed to do.
 - **Contracts are checked, not just documented.** `pre`, `post`, and refinement types (`Int where _ > 0`) are enforced at runtime, proved with Z3 where possible, turned into property tests by the fuzzer, and used by the optimizer to remove checks it can prove unnecessary.
 - **Edits are atomic.** `sspur edit` replaces definitions by name, typechecks the whole codebase, and either applies everything or nothing. One call can edit and run the tests.
@@ -198,7 +198,7 @@ More examples:
 Agents need only a short reference to write SSPUR. Point them at it with:
 
 ```
-sspur start [NAME...] # the compact agent reference (1.6k tokens) plus the codebase, or q pack of NAMEs if it is large
+sspur start [NAME...] # the core agent spec (0.8k tokens) plus the codebase, or q pack of NAMEs if it is large
 sspur spec            # the compact agent reference alone
 sspur spec --full     # the complete language reference
 sspur mcp             # serve the codebase over the Model Context Protocol

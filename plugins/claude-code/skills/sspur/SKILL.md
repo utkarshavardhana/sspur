@@ -11,21 +11,21 @@ Use the `sspur` MCP tools when they are available (`mcp__sspur__start`, `query`,
 
 ## Workflow
 
-1. **Learn the language and find the code in one call.** `sspur start NAME...` (MCP: the `start` tool with `names`), passing the definition names the task mentions. It prints the spec (about 1.6k tokens; read it fully before writing any code), then the codebase: all of it if it is small, otherwise counts per kind, `q pack` of each NAME (the definition, what it uses, its tests and its callers) and `q find` of other words. `sspur spec --full` is the long reference; open it only for what the spec points to (services, packages, concurrency, C FFI, GPU, bare metal).
+1. **Learn the language and find the code in one call.** `sspur start NAME...` (MCP: the `start` tool with `names`), passing the definition names the task mentions. It prints the core spec (about 0.8k tokens; read it fully before writing any code; `sspur spec --more` has the rest of the builtins), then the codebase: all of it if it is small, otherwise counts per kind, `q pack` of each NAME (the definition, what it uses, its tests and its callers) and `q find` of other words. `sspur spec --full` is the long reference; open it only for what the spec points to (services, packages, concurrency, C FFI, GPU, bare metal).
    - No `.sspur/` yet but a `.ssp` file: `sspur init file.ssp` imports it. With neither, the first `edit` creates the store.
 2. **Search more only if you need to.** On a large codebase, don't print everything (`src`). Use
    - `sspur q find 'ship|tax_*'` for names with their signatures,
    - `sspur q grep TEXT` for definitions whose source contains TEXT, with those lines (this is how to find callers to update),
    - `sspur q body A,B`, `q callers NAME`, `q pack A,B`.
-3. **Make every change in one edit.** Write all new and changed definitions, and new tests, in a single call:
+3. **Make every change in one edit.** Write all new and changed definitions, and new tests, to `change.ssp` with the Write tool, then run `sspur edit --test change.ssp` in the same turn (a long quoted `-e` argument or a heredoc gets refused by agent sandboxes):
    ```
-   sspur edit --test -e 'fn f(x: Int) -> Int
+   fn f(x: Int) -> Int
    = x + 1
 
-   test f_one = f(1) == 2'
+   test f_one = f(1) == 2
    ```
-   Each definition replaces the one with the same name or is added. Start with `rename OLD NEW` or `remove NAME` lines for those changes. If the shell refuses the command, write the definitions to a scratch file and run `sspur edit --test FILE`.
-4. **If it is rejected, nothing changed.** Every error line has a `hint:` with the exact fix (`no '&&' operator: write 'and'`, `'len' is a method: write 'x.len'`, `add 'fail[E]' to the effect row of f`). Apply all the hints and resend the **whole** edit in one call. Don't split it into one definition per call, and don't run `check` or `src` to confirm an edit that printed `ok`.
+   Each definition replaces the one with the same name or is added. Start with `rename OLD NEW` or `remove NAME` lines for those changes. Spellings from other languages that have one meaning (`&&`, `len(x)`, `None`, `s.slice(a, b)`, a missing effect) are stored in SSPUR form and listed after `stored as:`.
+4. **If it is rejected, nothing changed.** Every error line has a `hint:` with the exact fix. Fix them all in `change.ssp` and run it again in one call. Don't split it into one definition per call, and don't run `check` or `src` to confirm an edit that printed `ok`.
 5. **Tests.** `--test` runs every test after the edit and prints only failures plus `N passed, M failed`. `sspur test` runs them again. A test is a Bool expression: `test name = expr == expected`.
 6. **Prove contracts** when functions have `pre`, `post` or `where` clauses: `sspur verify` (needs Z3) reports each clause as proved, counterexample or unknown. `sspur fuzz` property-tests them.
 7. **Services.** For a `svc` with `store`s, `sspur deploy local file.ssp` serves it on 127.0.0.1 with emulated Lambda and DynamoDB (`sspur export > app.ssp` gives the file). `sspur deploy plan` writes the templates. Nothing here calls AWS.

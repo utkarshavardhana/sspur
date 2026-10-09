@@ -20,6 +20,7 @@ test t = catch take([], "a", 1).len == 0
 - `do` lines: `x = e`, `var x = e` then `x := e`, `for x in xs`, `while c`; the last is the value. `if` without `else` is for `raise`.
 - `match e`/`catch e` + `| Pat => e` arms of e's type; a nested `match` needs a helper fn.
 - `_` makes the innermost call argument a lambda. `"{x}"` interpolates; `\{` is a literal `{`.
-- `find first last to_int` give Opt (`or(d) get ok_or(e)`). `fold(init, (acc, x) => e)`. More builtins, Map, `pre`/`post`: `./sspur spec --more`.
+- List: `len map filter find fold(init, (acc, x) => e) any all sort sort_by(key) reverse sum push(x) take drop contains index_of unique enumerate join(sep) counts first last`. Str: `len trim split(sep) lower upper chars contains starts_with replace(a, b) take drop to_int`. `find first last index_of to_int` give Opt: `or(d) get is_some ok_or(e)`. Any: `.str`.
+- Rarely needed: `./sspur spec --more` (Map, Set, regex, JSON, `pre`/`post`, other builtins).
 
 In `change.ssp`, each definition replaces the one with its name or is added; `remove NAME` and `rename A B` lines too. Put every change in one edit; done at `N passed, 0 failed`.

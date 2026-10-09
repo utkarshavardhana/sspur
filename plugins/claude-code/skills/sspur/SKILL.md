@@ -11,7 +11,7 @@ Use the `sspur` MCP tools when they are available (`mcp__sspur__start`, `query`,
 
 ## Workflow
 
-1. **Learn the language and find the code in one call.** `sspur start NAME...` (MCP: the `start` tool with `names`), passing the definition names the task mentions. It prints the core spec (about 0.4k tokens; read it fully before writing any code; `sspur spec --more` has the rest of the builtins), then the codebase: all of it if it is small, otherwise counts per kind, `q pack` of each NAME (the definition, what it uses, its tests and its callers) and `q find` of other words. `sspur spec --full` is the long reference; open it only for what the spec points to (services, packages, concurrency, C FFI, GPU, bare metal).
+1. **Learn the language and find the code in one call.** `sspur start NAME...` (MCP: the `start` tool with `names`), passing the definition names the task mentions. It prints the core spec (about 0.5k tokens; read it fully before writing any code; `sspur spec --more` has the rest of the builtins), then the codebase: all of it if it is small, otherwise counts per kind, `q pack` of each NAME (the definition, what it uses, its tests and its callers) and `q find` of other words. `sspur spec --full` is the long reference; open it only for what the spec points to (services, packages, concurrency, C FFI, GPU, bare metal).
    - No `.sspur/` yet but a `.ssp` file: `sspur init file.ssp` imports it. With neither, the first `edit` creates the store.
 2. **Search more only if you need to.** On a large codebase, don't print everything (`src`). Use
    - `sspur q find 'ship|tax_*'` for names with their signatures,

@@ -11,6 +11,10 @@ SUB = os.path.expanduser("~/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88
 
 run, key, aid = sys.argv[1:4]
 path = os.path.join(SUB, f"agent-{aid}.jsonl")
+if not os.path.exists(path):
+    import glob
+    found = glob.glob(os.path.expanduser(f"~/.claude/projects/*/*/subagents/agent-{aid}.jsonl"))
+    path = found[0] if found else path
 f = os.path.join(run, "agents.json")
 agents = json.load(open(f)) if os.path.exists(f) else {}
 agents[key] = path

@@ -167,6 +167,7 @@ struct Checker {
     cur_def: Option<String>,
     cur_ret: Option<Type>,
     lambda_depth: u32,
+    in_test: bool,
     tparams: Vec<String>,
     holes: Vec<Hole>,
     record_types: HashMap<(u32, u32), String>,
@@ -266,6 +267,7 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
         cur_def: None,
         cur_ret: None,
         lambda_depth: 0,
+        in_test: false,
         tparams: vec![],
         holes: vec![],
         record_types: HashMap::new(),
@@ -452,6 +454,7 @@ pub fn fix_json(def: &str, f: &fixup::Fix) -> serde_json::Value {
         Name { span, to } => json!({"op": "norm", "def": def, "kind": "name", "span": sp(span), "to": to}),
         PatCtor { from, to } => json!({"op": "norm", "def": def, "kind": "pat_ctor", "from": from, "to": to}),
         Lift { span } => json!({"op": "norm", "def": def, "kind": "lift", "span": sp(span)}),
+        CatchTest { span } => json!({"op": "norm", "def": def, "kind": "catch_test", "span": sp(span)}),
     }
 }
 
@@ -472,6 +475,7 @@ pub fn fix_of_json(v: &serde_json::Value) -> Option<(String, fixup::Fix)> {
         "name" => Name { span: span()?, to: to()? },
         "pat_ctor" => PatCtor { from: v["from"].as_str()?.into(), to: to()? },
         "lift" => Lift { span: span()? },
+        "catch_test" => CatchTest { span: span()? },
         _ => return None,
     };
     Some((def, f))
@@ -1140,6 +1144,7 @@ impl Checker {
 
     fn check_test(&mut self, t: &TestDef) {
         self.cur_def = Some(t.name.clone());
+        self.in_test = true;
         self.scopes.push(HashMap::new());
         self.frames.push(Frame::new());
         let ty = self.infer(&t.body, Some(&Type::bool()));
@@ -1155,6 +1160,7 @@ impl Checker {
         self.check_chans();
         self.report_holes();
         self.cur_def = None;
+        self.in_test = false;
     }
 
     fn report_holes(&mut self) {
@@ -2450,7 +2456,13 @@ impl Checker {
 
     fn infer_catch(&mut self, body: &Expr, arms: &[Arm], exp: Option<&Type>, span: Span) -> Type {
         self.frames.push(Frame::new());
-        let bt = self.infer(body, exp);
+        let want_bool = self.in_test && self.lambda_depth == 0 && exp.is_some_and(|t| self.resolve(t) == Type::bool());
+        let mut bt = self.infer(body, if want_bool { None } else { exp });
+        if want_bool && matches!(self.resolve(&bt), Type::Con(..) | Type::Tuple(_)) && self.resolve(&bt) != Type::bool() {
+            let fix = fixup::Fix::CatchTest { span };
+            self.norm(span, "'catch e | ..' with a non-Bool e in a test is written 'catch do (_ = e) false | ..'".into(), fix);
+            bt = Type::bool();
+        }
         let frame = self.frames.pop().unwrap();
         let ctor_ty = arms.iter().find_map(|a| match &a.pat {
             Pat::Ctor { name, .. } => self.ctors.get(name).map(|c| c.ty.clone()),

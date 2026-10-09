@@ -1234,8 +1234,22 @@ impl Parser {
                 return Ok(out);
             }
             let name = self.expect_ident()?;
+            if self.eat_sym(":") {
+                self.ty()?;
+                self.note("var x: T = e -> var x = e");
+            }
             self.expect_sym("=")?;
             return Ok(vec![Stmt::Var(name, self.expr()?)]);
+        }
+        if let (Tok::Ident(_), Tok::Sym(":")) = (self.peek().clone(), self.peek_at(1)) {
+            let saved = self.pos;
+            let name = self.expect_ident()?;
+            self.bump();
+            if self.ty().is_ok() && self.eat_sym("=") {
+                self.note("x: T = e -> x = e");
+                return Ok(vec![Stmt::Let(Pat::Bind(name), self.expr()?)]);
+            }
+            self.pos = saved;
         }
         if self.eat_kw("for") {
             let pat = self.pat()?;

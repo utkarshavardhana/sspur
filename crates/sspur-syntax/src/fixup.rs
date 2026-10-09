@@ -21,6 +21,9 @@ pub enum Fix {
     /// `f(g(_))` where g takes no function: the implicit lambda at `span` moves out to
     /// the nearest enclosing call argument, as an explicit lambda.
     Lift { span: Span },
+    /// `catch f(x) | E => b` in a test, where f(x) is not a Bool: `catch do` + `_ = f(x)` +
+    /// `false`, so the test fails when nothing is raised.
+    CatchTest { span: Span },
 }
 
 fn def_exprs(d: &mut Def) -> Vec<&mut Expr> {
@@ -75,7 +78,7 @@ pub fn apply(d: &mut Def, fix: &Fix) -> bool {
 
 fn at(x: &Expr, fix: &Fix) -> bool {
     match fix {
-        Fix::Method { span, .. } | Fix::CallToMethod { span, .. } | Fix::StrSlice { span } | Fix::DropMethod { span } | Fix::Name { span, .. } => x.span == *span,
+        Fix::Method { span, .. } | Fix::CallToMethod { span, .. } | Fix::StrSlice { span } | Fix::DropMethod { span } | Fix::Name { span, .. } | Fix::CatchTest { span } => x.span == *span,
         _ => false,
     }
 }
@@ -116,6 +119,11 @@ fn rewrite(x: &mut Expr, fix: &Fix) -> bool {
         }
         (ExprKind::Method { recv, args, .. }, Fix::DropMethod { .. }) if args.is_empty() => (recv.kind, true),
         (ExprKind::Field(recv, _), Fix::DropMethod { .. }) => (recv.kind, true),
+        (ExprKind::Catch(body, arms), Fix::CatchTest { .. }) => {
+            let sp = body.span;
+            let block = Expr::new(ExprKind::Block(vec![Stmt::Let(Pat::Wild, *body), Stmt::Expr(Expr::new(ExprKind::Bool(false), sp))]), sp);
+            (ExprKind::Catch(Box::new(block), arms), true)
+        }
         (ExprKind::Name(_), Fix::Name { to, .. }) => (
             match to.as_str() {
                 "true" => ExprKind::Bool(true),

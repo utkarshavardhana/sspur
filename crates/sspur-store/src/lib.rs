@@ -1305,7 +1305,7 @@ fn normalized(next: &Loaded, reqs: &mut BTreeMap<String, Vec<String>>) -> Option
                     return None;
                 }
                 let note = match d.msg.split_once(" is written ") {
-                    Some((a, b)) => format!("{} -> {}", a.trim_start_matches("pattern ").trim_matches('\''), b.replacen('\'', "", 2)),
+                    Some((a, b)) => format!("{} -> {}", a.trim_start_matches("pattern ").replace('\'', ""), b.replacen('\'', "", 2)),
                     None if matches!(fix, fixup::Fix::Lift { .. }) => "f(g(_)) -> x => f(g(x))".to_string(),
                     None => d.msg.clone(),
                 };

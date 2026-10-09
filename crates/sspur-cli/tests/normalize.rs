@@ -44,6 +44,7 @@ const CASES: &[(&str, &str, &str)] = &[
     ("fn f(rs: List[Row]) -> List[Row]\n= rs.sort_by((-len(_.name), _.name))\n", "fn f(rs: List[Row]) -> List[Row]\n= rs.sort_by((-_.name.len, _.name))", "len(x) -> x.len"),
     ("fn f(n: Int) -> Int\n= check(n) + 1\n", "fn f(n: Int) -> Int ! fail[E]\n= check(n) + 1", "f now declares fail[E]"),
     ("fn f() -> Unit\n= print(\"x\")\n", "fn f() -> Unit ! log\n= log(\"x\")", "print -> log"),
+    ("fn f(n: Int) -> Int\n= do\n  var a: Int = n\n  b: Int = a + 1\n  b\n", "fn f(n: Int) -> Int\n= do\n  var a = n\n  b = a + 1\n  b", "var x: T = e -> var x = e"),
 ];
 
 const FOREIGN: &[&str] = &["&&", "||", " !", "elif", "let ", "+=", "{_}", "None", "Some(", "True", ".length", ".slice(", ".size", ".to_string", ".unwrap", "print(", "len("];
@@ -90,4 +91,15 @@ fn a_user_definition_wins_over_a_normalization() {
     let d = fresh("user");
     let (out, ok) = sspur(&d, &["edit"], "type T = None | Some{x: Int}\n\nfn len(r: Row) -> Int\n= 7\n\nfn f(t: T, r: Row) -> Int\n= match t\n  | None => len(r)\n  | Some{x} => x\n");
     assert!(ok && !out.contains("stored as"), "{out}");
+}
+
+#[test]
+fn catch_of_a_non_bool_in_a_test_is_stored_canonical() {
+    let d = fresh("catch");
+    let (out, ok) = sspur(&d, &["edit", "--test", "--interp"], "test t = catch check(-1)\n  | Bad{n} => n == -1\n");
+    assert!(ok && out.contains("stored as: catch e | .. with a non-Bool e in a test -> catch do (_ = e) false | .."), "{out}");
+    let (body, _) = sspur(&d, &["q", "body", "t"], "");
+    assert_eq!(body, "test t = catch do\n  _ = check(-1)\n  false\n| Bad{n} => n == -1");
+    let (again, ok) = sspur(&d, &["edit", "--interp"], &format!("{body}\n"));
+    assert!(ok && !again.contains("stored as"), "{again}");
 }

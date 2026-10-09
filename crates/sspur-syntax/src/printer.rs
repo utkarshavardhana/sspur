@@ -35,6 +35,30 @@ fn print_def_inner(d: &Def) -> String {
         Def::Static(s) => format!("static {}: {} = {}", s.name, ty(&s.ty), expr(&s.init, 0)),
         Def::Use(u) if u.names.is_empty() => format!("use {}", u.pkg),
         Def::Use(u) => format!("use {}.{{{}}}", u.pkg, u.names.join(", ")),
+        Def::Trait(t) => {
+            let mut s = format!("trait {}{}", t.name, tparams(&t.params));
+            for m in &t.methods {
+                s.push_str("\n  ");
+                if m.default {
+                    s.push_str(&print_fn_at(&m.sig, 2));
+                } else {
+                    let mut f = m.sig.clone();
+                    f.body = Expr::new(ExprKind::Unit, Span::default());
+                    let full = print_fn_at(&f, 2);
+                    s.push_str(full.rsplit_once("\n  = ").map_or(full.as_str(), |(h, _)| h));
+                }
+            }
+            s
+        }
+        Def::Impl(i) => {
+            let args = if i.trait_args.is_empty() { String::new() } else { format!("[{}]", i.trait_args.iter().map(ty).collect::<Vec<_>>().join(", ")) };
+            let mut s = format!("impl{} {}{} for {}", tparams(&i.tparams), i.trait_name, args, ty(&i.target));
+            for f in &i.fns {
+                s.push_str("\n  ");
+                s.push_str(&print_fn_at(f, 2));
+            }
+            s
+        }
     }
 }
 
@@ -70,6 +94,9 @@ fn tparams(ps: &[TParam]) -> String {
             let mut s = p.name.clone();
             if let Some(k) = &p.kind {
                 s.push_str(&format!(": {}", ty(k)));
+            }
+            if !p.bounds.is_empty() {
+                s.push_str(&format!(": {}", p.bounds.iter().map(ty).collect::<Vec<_>>().join(" + ")));
             }
             if let Some(r) = &p.refine {
                 s.push_str(&format!(" where {}", expr(r, 0)));

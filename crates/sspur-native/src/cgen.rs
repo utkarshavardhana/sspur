@@ -2823,6 +2823,16 @@ impl<'a> Cx<'a> {
                         let op = if n == "min" { "<" } else { ">" };
                         Ok(format!("({{ __auto_type x_ = {a}; __auto_type y_ = {b}; {c}(y_, x_) {op} 0 ? y_ : x_; }})"))
                     }
+                    "__cmp" if self.lookup(n).is_none() => {
+                        let (a, b) = (self.expr(&args[0])?, self.expr(&args[1])?);
+                        let at = self.ty(&args[0])?;
+                        let c = self.helper_cmp(&at)?;
+                        Ok(format!("({{ __auto_type x_ = {a}; __auto_type y_ = {b}; int c_ = {c}(x_, y_); (int64_t)((c_ > 0) - (c_ < 0)); }})"))
+                    }
+                    "__hash" if self.lookup(n).is_none() => {
+                        let a = self.expr(&args[0])?;
+                        Ok(format!("({{ Str s_ = {a}; uint64_t h_ = 0xcbf29ce484222325ULL; for (int64_t i_ = 0; i_ < s_.len; i_++) h_ = (h_ ^ (unsigned char)s_.p[i_]) * 0x100000001b3ULL; (int64_t)h_; }})"))
+                    }
                     "drop" | "leak" | "alloc" | "free" | "null" if self.sys && self.lookup(n).is_none() && !self.check.fn_types.contains_key(n) => self.sys_builtin(n, args, &t),
                     _ if self.bare && sspur_check::BARE_NAMES.contains(&n.as_str()) && self.lookup(n).is_none() && !self.check.fn_types.contains_key(n) => self.bare_builtin(n, args),
                     _ if self.lookup(n).is_none() && self.check.kernels.contains_key(n) && self.fn_def(n).is_some_and(|f| f.kernel.is_some()) => self.kernel_call(n, args),

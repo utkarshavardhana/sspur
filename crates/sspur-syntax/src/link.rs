@@ -12,6 +12,7 @@ pub enum Kind {
     Ctor,
     Effect,
     Op,
+    Trait,
 }
 
 #[derive(Clone, Debug)]
@@ -150,7 +151,38 @@ impl R<'_> {
             }
             Def::Fn(f) => {
                 self.tps = f.tparams.iter().map(|p| p.name.clone()).collect();
+                self.bounds(&mut f.tparams, span);
                 self.fn_def(f, &mut vec![]);
+            }
+            Def::Trait(t) => {
+                self.tps = t.params.iter().map(|p| p.name.clone()).chain(["Self".to_string()]).collect();
+                self.bounds(&mut t.params, span);
+                for m in &mut t.methods {
+                    let saved = self.tps.clone();
+                    self.tps.extend(m.sig.tparams.iter().map(|p| p.name.clone()));
+                    self.bounds(&mut m.sig.tparams, span);
+                    self.fn_def(&mut m.sig, &mut vec![]);
+                    self.tps = saved;
+                }
+            }
+            Def::Impl(i) => {
+                self.tps = i.tparams.iter().map(|p| p.name.clone()).chain(["Self".to_string()]).collect();
+                self.bounds(&mut i.tparams, span);
+                let before = i.trait_name.clone();
+                self.qual(&mut i.trait_name, span, &[Kind::Trait]);
+                let pkg = (i.trait_name != before).then(|| i.trait_name.split_once("__").map(|(p, _)| p.to_ascii_lowercase())).flatten();
+                i.trait_args.iter_mut().for_each(|t| self.ty(t, span));
+                self.ty(&mut i.target, span);
+                for f in &mut i.fns {
+                    if let Some(p) = &pkg {
+                        f.name = mangle(p, &f.name);
+                    }
+                    let saved = self.tps.clone();
+                    self.tps.extend(f.tparams.iter().map(|p| p.name.clone()));
+                    self.fn_def(f, &mut vec![]);
+                    self.tps = saved;
+                }
+                i.refresh_key();
             }
             Def::Test(t) => {
                 self.tps.clear();
@@ -218,6 +250,18 @@ impl R<'_> {
         l.push(f.params.iter().map(|p| p.name.clone()).collect());
         self.expr(&mut f.body, l);
         l.pop();
+    }
+
+    fn bounds(&mut self, ps: &mut [TParam], span: Span) {
+        for p in ps {
+            for b in &mut p.bounds {
+                if let Ty::Named { name, args, span: s } = b {
+                    let sp = if *s == Span::default() { span } else { *s };
+                    self.qual(name, sp, &[Kind::Trait]);
+                    args.iter_mut().for_each(|a| self.ty(a, span));
+                }
+            }
+        }
     }
 
     fn effects(&mut self, es: &mut [Effect]) {

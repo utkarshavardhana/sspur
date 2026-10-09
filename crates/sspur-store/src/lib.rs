@@ -157,6 +157,20 @@ pub struct Loaded {
 }
 
 impl Loaded {
+    /// The program to run: traits elaborated into plain definitions (ADR 0027).
+    pub fn executable(self) -> Result<Loaded, Vec<Diag>> {
+        match sspur_check::elab::lower(&self.module, &self.check) {
+            Ok(None) => Ok(self),
+            Ok(Some((module, check))) => {
+                let res = Resolution { user_methods: Some(&check.user_methods), record_types: Some(&check.record_types) };
+                let hashes = hash_module_with(&module, &res).into_iter().collect();
+                let own = module.own.unwrap_or(module.defs.len());
+                Ok(Loaded { module, check, hashes, own, ..self })
+            }
+            Err(e) => Err(vec![pkg::dep_diag(&e)]),
+        }
+    }
+
     pub fn own_defs(&self) -> &[Def] {
         &self.module.defs[..self.own]
     }
@@ -168,7 +182,7 @@ impl Loaded {
             return std::borrow::Cow::Borrowed(&self.module);
         }
         let defs = self.module.defs[self.own..].iter().chain(&self.module.defs[..self.own]).cloned().collect();
-        std::borrow::Cow::Owned(Module { profile: self.module.profile.clone(), defs })
+        std::borrow::Cow::Owned(Module { profile: self.module.profile.clone(), defs, own: None })
     }
 
     pub fn is_dep(&self, name: &str) -> bool {
@@ -229,8 +243,8 @@ pub fn crash_point(at: &str) {
 fn def_rank(d: &Def) -> u8 {
     match d {
         Def::Use(_) => 0,
-        Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Static(_) => 1,
-        Def::Fn(_) => 2,
+        Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Static(_) | Def::Trait(_) => 1,
+        Def::Fn(_) | Def::Impl(_) => 2,
         Def::Svc(_) | Def::Test(_) => 3,
     }
 }
@@ -247,7 +261,7 @@ fn text_rank(t: &str) -> u8 {
     if t.starts_with("use ") {
         return 0;
     }
-    if t.starts_with("type ") || t.starts_with("res type ") || t.starts_with("effect ") || t.starts_with("store ") {
+    if t.starts_with("type ") || t.starts_with("res type ") || t.starts_with("effect ") || t.starts_with("store ") || t.starts_with("trait ") {
         1
     } else if t.starts_with("test ") || t.starts_with("svc ") {
         3
@@ -1405,6 +1419,8 @@ fn apply_op(op: &Json, defs: &mut Vec<Def>, reqs: &mut BTreeMap<String, Vec<Stri
                     Def::Fn(f) => vec![&mut f.body],
                     Def::Test(t) => vec![&mut t.body],
                     Def::Static(s) => vec![&mut s.init],
+                    Def::Impl(i) => i.fns.iter_mut().map(|f| &mut f.body).collect(),
+                    Def::Trait(t) => t.methods.iter_mut().map(|m| &mut m.sig.body).collect(),
                     Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Svc(_) | Def::Use(_) => vec![],
                 };
                 for e in exprs.iter_mut() {

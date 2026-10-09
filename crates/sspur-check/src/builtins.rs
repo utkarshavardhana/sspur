@@ -5,6 +5,8 @@ pub const GLOBALS: &[&str] = &[
     "err[A, E](e: E) -> Res[A, E]",
     "empty_map[K, V]() -> Map[K, V]",
     "min[A](a: A, b: A) -> A",
+    "__cmp[A](a: A, b: A) -> Int",
+    "__hash(s: Str) -> Int",
     "max[A](a: A, b: A) -> A",
     "secret[A](x: A) -> Secret[A]",
     "pii[A](x: A) -> Pii[A]",

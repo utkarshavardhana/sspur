@@ -1,0 +1,429 @@
+//! Elaboration of traits into plain definitions (ADR 0027). Every trait method call and
+//! overloaded operator becomes a call of its impl function or the built-in operation, every
+//! bounded generic function is specialized per instantiation, and the result is printed, parsed
+//! and checked again as an ordinary program, which the interpreter and native code then run.
+
+use super::*;
+
+const MAX_SPECS: usize = 2000;
+
+enum Target {
+    Fn(String),
+    Builtin,
+}
+
+struct Elab<'a> {
+    t: &'a TraitOut,
+    templates: HashMap<String, (usize, FnDef)>,
+    specs: HashMap<String, String>,
+    taken: HashSet<String>,
+    queue: Vec<(String, String, HashMap<String, Type>)>,
+    out: BTreeMap<usize, Vec<FnDef>>,
+    err: Option<String>,
+}
+
+/// The trait-free program for `m`, with its check output, or `None` when `m` uses no traits.
+pub fn lower(m: &Module, out: &CheckOutput) -> Result<Option<(Module, CheckOutput)>, String> {
+    if !out.traits.active || out.has_errors() {
+        return Ok(None);
+    }
+    let mut m2 = elaborate(m, out)?;
+    let mut c2 = check(&m2);
+    for _ in 0..2 {
+        if !c2.traits.active || c2.has_errors() {
+            break;
+        }
+        m2 = elaborate(&m2, &c2)?;
+        c2 = check(&m2);
+    }
+    if let Some(d) = c2.diags.iter().find(|d| d.is_error()) {
+        let name = d.def.clone().unwrap_or_default();
+        return Err(format!("internal: the elaborated program does not check ({name}): {} {}", d.code, d.msg));
+    }
+    Ok(Some((m2, c2)))
+}
+
+fn free_params(t: &Type, out: &mut Vec<String>) {
+    match t {
+        Type::Param(p) => {
+            if !out.contains(p) {
+                out.push(p.clone());
+            }
+        }
+        Type::Con(_, a) | Type::Tuple(a) => a.iter().for_each(|x| free_params(x, out)),
+        Type::Fn(ps, r, _) => {
+            ps.iter().for_each(|x| free_params(x, out));
+            free_params(r, out);
+        }
+        Type::Var(_) => {}
+    }
+}
+
+fn ty_of(t: &Type) -> Ty {
+    let src = format!("fn t_(x: {t})\n= ()");
+    match parse(&src) {
+        Ok(m) => match &m.defs[0] {
+            Def::Fn(f) => f.params[0].ty.clone(),
+            _ => unreachable!(),
+        },
+        Err(_) => Ty::Named { name: "Unit".into(), args: vec![], span: Span::default() },
+    }
+}
+
+fn subst_ty(t: &mut Ty, map: &HashMap<String, Ty>) {
+    match t {
+        Ty::Named { name, args, .. } if args.is_empty() && map.contains_key(name.as_str()) => *t = map[name.as_str()].clone(),
+        Ty::Named { args, .. } => args.iter_mut().for_each(|a| subst_ty(a, map)),
+        Ty::Tuple(xs) => xs.iter_mut().for_each(|a| subst_ty(a, map)),
+        Ty::Fn { params, ret, effects } => {
+            params.iter_mut().for_each(|a| subst_ty(a, map));
+            subst_ty(ret, map);
+            effects.iter_mut().flat_map(|e| e.args.iter_mut()).for_each(|a| subst_ty(a, map));
+        }
+    }
+}
+
+fn subst_fn(f: &mut FnDef, map: &HashMap<String, Ty>) {
+    for p in &mut f.params {
+        subst_ty(&mut p.ty, map);
+    }
+    if let Some(r) = &mut f.ret {
+        subst_ty(r, map);
+    }
+    f.effects.iter_mut().flat_map(|e| e.args.iter_mut()).for_each(|a| subst_ty(a, map));
+    let mut body = std::mem::replace(&mut f.body, Expr::new(ExprKind::Unit, Span::default()));
+    visit::walk_expr_mut(&mut body, &mut |e| match &mut e.kind {
+        ExprKind::Method { targs, .. } => targs.iter_mut().for_each(|a| subst_ty(a, map)),
+        ExprKind::Block(stmts) => {
+            for s in stmts {
+                if let Stmt::Fn(g) = s {
+                    for p in &mut g.params {
+                        subst_ty(&mut p.ty, map);
+                    }
+                    if let Some(r) = &mut g.ret {
+                        subst_ty(r, map);
+                    }
+                    g.effects.iter_mut().flat_map(|e| e.args.iter_mut()).for_each(|a| subst_ty(a, map));
+                }
+            }
+        }
+        _ => {}
+    });
+    f.body = body;
+}
+
+fn sanitize(t: &Type) -> String {
+    let mut s = String::new();
+    for c in t.to_string().chars() {
+        if c.is_ascii_alphanumeric() {
+            s.push(c);
+        } else if !s.ends_with('_') {
+            s.push('_');
+        }
+    }
+    s.trim_matches('_').to_string()
+}
+
+fn name_expr(n: &str, span: Span) -> Expr {
+    Expr::new(ExprKind::Name(n.to_string()), span)
+}
+
+fn call(n: &str, args: Vec<Expr>, span: Span) -> ExprKind {
+    ExprKind::Call(Box::new(name_expr(n, span)), args)
+}
+
+impl Elab<'_> {
+    fn spec(&mut self, template: &str, map: HashMap<String, Type>) -> String {
+        let Some((_, f)) = self.templates.get(template) else { return template.to_string() };
+        let args: Vec<Type> = f.tparams.iter().filter_map(|p| map.get(&p.name).cloned()).collect();
+        let key = format!("{template}[{}]", args.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", "));
+        if let Some(n) = self.specs.get(&key) {
+            return n.clone();
+        }
+        let tail = args.iter().map(sanitize).collect::<Vec<_>>().join("__");
+        let base = if tail.is_empty() { format!("{template}__") } else { format!("{template}__{tail}") };
+        let mut name = base.clone();
+        let mut k = 2;
+        while self.taken.contains(&name) {
+            name = format!("{base}_{k}");
+            k += 1;
+        }
+        self.taken.insert(name.clone());
+        self.specs.insert(key, name.clone());
+        if self.specs.len() > MAX_SPECS {
+            self.err.get_or_insert_with(|| format!("E_TRAIT_RECURSION {template} is specialized more than {MAX_SPECS} times; a bounded generic may not call itself at a growing type"));
+        } else {
+            self.queue.push((name.clone(), template.to_string(), map));
+        }
+        name
+    }
+
+    fn target(&mut self, tr: &str, m: &str, st: &Type) -> Option<Target> {
+        let Type::Con(c, args) = st else {
+            return match st {
+                Type::Tuple(_) => Some(Target::Builtin),
+                _ => None,
+            };
+        };
+        let Some(imp) = self.t.impls.get(&(tr.to_string(), c.clone())) else { return Some(Target::Builtin) };
+        if imp.derived {
+            return Some(Target::Builtin);
+        }
+        let pmap: HashMap<String, Type> = imp.tparams.iter().cloned().zip(args.iter().cloned()).collect();
+        if let Some(unit) = imp.fns.get(m).cloned() {
+            if self.t.bounded.contains(&unit) {
+                return Some(Target::Fn(self.spec(&unit, pmap)));
+            }
+            return Some(Target::Fn(unit));
+        }
+        let unit = self.t.defaults.get(&(tr.to_string(), m.to_string()))?.clone();
+        let mut map = HashMap::from([("Self".to_string(), st.clone())]);
+        for (p, a) in self.t.trait_params.get(tr).into_iter().flatten().zip(&imp.targs) {
+            map.insert(p.clone(), subst_params(a, &pmap));
+        }
+        Some(Target::Fn(self.spec(&unit, map)))
+    }
+
+    fn method_of(tr: &str) -> &'static str {
+        BUILTIN_TRAITS.iter().find(|(n, _)| *n == tr).and_then(|(_, ms)| ms.first().copied()).unwrap_or("")
+    }
+
+    fn builtin_call(m: &str, recv: Expr, mut args: Vec<Expr>, span: Span) -> ExprKind {
+        let b = |x: Expr| Box::new(x);
+        let mut a0 = || if args.is_empty() { Expr::new(ExprKind::Unit, span) } else { args.remove(0) };
+        match m {
+            "eq" => ExprKind::Binary(BinOp::Eq, b(recv), b(a0())),
+            "cmp" => call("__cmp", vec![recv, a0()], span),
+            "show" => ExprKind::Field(b(recv), "str".into()),
+            "hash" => call("__hash", vec![Expr::new(ExprKind::Field(b(recv), "str".into()), span)], span),
+            "to_json" => ExprKind::Method { recv: b(name_expr("json", span)), name: "encode".into(), targs: vec![], args: vec![recv] },
+            "add" => ExprKind::Binary(BinOp::Add, b(recv), b(a0())),
+            "sub" => ExprKind::Binary(BinOp::Sub, b(recv), b(a0())),
+            "mul" => ExprKind::Binary(BinOp::Mul, b(recv), b(a0())),
+            "div" => ExprKind::Binary(BinOp::Div, b(recv), b(a0())),
+            "neg" => ExprKind::Unary(UnOp::Neg, b(recv)),
+            "index" => ExprKind::Index(b(recv), b(a0())),
+            _ => ExprKind::Unit,
+        }
+    }
+
+    fn rewrite(&mut self, e: &mut Expr, mono: &HashMap<String, Type>) {
+        visit::walk_expr_mut(e, &mut |x| self.node(x, mono));
+    }
+
+    fn node(&mut self, x: &mut Expr, mono: &HashMap<String, Type>) {
+        let key = expr_key(x);
+        let span = x.span;
+        if let Some(targs) = self.t.insts.get(&key).cloned() {
+            let name = match &x.kind {
+                ExprKind::Name(n) => Some(n.clone()),
+                ExprKind::Call(f, _) => match &f.kind {
+                    ExprKind::Name(n) => Some(n.clone()),
+                    _ => None,
+                },
+                ExprKind::Method { name, .. } | ExprKind::Field(_, name) => Some(name.clone()),
+                _ => None,
+            };
+            if let Some(n) = name
+                && let Some((_, f)) = self.templates.get(&n)
+            {
+                let map: HashMap<String, Type> = f.tparams.iter().map(|p| p.name.clone()).zip(targs.iter().map(|t| subst_params(t, mono))).collect();
+                let s = self.spec(&n, map);
+                match &mut x.kind {
+                    ExprKind::Name(n) => *n = s,
+                    ExprKind::Call(f, _) => f.kind = ExprKind::Name(s),
+                    ExprKind::Method { name, .. } | ExprKind::Field(_, name) => *name = s,
+                    _ => {}
+                }
+            }
+            return;
+        }
+        let Some((tr, st)) = self.t.sites.get(&key).cloned() else { return };
+        let st = subst_params(&st, mono);
+        let kind = std::mem::replace(&mut x.kind, ExprKind::Unit);
+        x.kind = match kind {
+            ExprKind::Method { recv, name, args, .. } => self.method_site(&tr, &name, *recv, args, &st, span),
+            ExprKind::Field(recv, name) => self.method_site(&tr, &name, *recv, vec![], &st, span),
+            ExprKind::Call(f, mut args) if !args.is_empty() => {
+                let name = match &f.kind {
+                    ExprKind::Name(n) => n.clone(),
+                    _ => String::new(),
+                };
+                let recv = args.remove(0);
+                self.method_site(&tr, &name, recv, args, &st, span)
+            }
+            ExprKind::Binary(op, l, r) => {
+                let m = Self::method_of(&tr);
+                match self.target(&tr, m, &st) {
+                    Some(Target::Fn(f)) => match op {
+                        BinOp::Eq => call(&f, vec![*l, *r], span),
+                        BinOp::Ne => ExprKind::Unary(UnOp::Not, Box::new(Expr::new(call(&f, vec![*l, *r], span), span))),
+                        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => ExprKind::Binary(op, Box::new(Expr::new(call(&f, vec![*l, *r], span), span)), Box::new(Expr::new(ExprKind::Int(0), span))),
+                        _ => call(&f, vec![*l, *r], span),
+                    },
+                    _ if tr == "Ord" && !traits::native_lt(&st) => ExprKind::Binary(op, Box::new(Expr::new(call("__cmp", vec![*l, *r], span), span)), Box::new(Expr::new(ExprKind::Int(0), span))),
+                    _ => ExprKind::Binary(op, l, r),
+                }
+            }
+            ExprKind::Unary(UnOp::Neg, a) => match self.target(&tr, "neg", &st) {
+                Some(Target::Fn(f)) => call(&f, vec![*a], span),
+                _ => ExprKind::Unary(UnOp::Neg, a),
+            },
+            ExprKind::Index(a, i) => match self.target(&tr, "index", &st) {
+                Some(Target::Fn(f)) => call(&f, vec![*a, *i], span),
+                _ => ExprKind::Index(a, i),
+            },
+            other => other,
+        };
+    }
+
+    fn method_site(&mut self, tr: &str, name: &str, recv: Expr, args: Vec<Expr>, st: &Type, span: Span) -> ExprKind {
+        match self.target(tr, name, st) {
+            Some(Target::Fn(f)) => {
+                let mut all = vec![recv];
+                all.extend(args);
+                call(&f, all, span)
+            }
+            Some(Target::Builtin) => Self::builtin_call(name.rsplit("__").next().unwrap_or(name), recv, args, span),
+            None => {
+                self.err.get_or_insert_with(|| format!("internal: no impl of {tr} for {st}"));
+                ExprKind::Unit
+            }
+        }
+    }
+
+    fn rewrite_fn(&mut self, f: &mut FnDef, mono: &HashMap<String, Type>) {
+        for p in &mut f.params {
+            if let Some(r) = &mut p.refine {
+                self.rewrite(r, mono);
+            }
+        }
+        for x in f.pres.iter_mut().chain(f.posts.iter_mut()).chain(f.examples.iter_mut()) {
+            self.rewrite(x, mono);
+        }
+        self.rewrite(&mut f.body, mono);
+    }
+
+    fn specialize(&mut self, name: &str, template: &str, map: &HashMap<String, Type>) -> Option<(usize, FnDef)> {
+        let (origin, f) = self.templates.get(template).cloned()?;
+        let mut g = f.clone();
+        g.name = name.to_string();
+        g.examples.clear();
+        g.public = false;
+        self.rewrite_fn(&mut g, map);
+        let mut free = Vec::new();
+        for t in map.values() {
+            free_params(t, &mut free);
+        }
+        free.sort();
+        let tymap: HashMap<String, Ty> = map.iter().map(|(p, t)| (p.clone(), ty_of(t))).collect();
+        subst_fn(&mut g, &tymap);
+        let kept: Vec<TParam> = f.tparams.iter().filter(|p| !map.contains_key(&p.name) && !free.contains(&p.name)).map(|p| TParam { bounds: vec![], ..p.clone() }).collect();
+        g.tparams = free.into_iter().map(|n| TParam { name: n, kind: None, refine: None, bounds: vec![] }).chain(kept).collect();
+        Some((origin, g))
+    }
+}
+
+fn elaborate(m: &Module, out: &CheckOutput) -> Result<Module, String> {
+    let t = &out.traits;
+    let own = m.own.unwrap_or(m.defs.len());
+    let index: HashMap<&str, usize> = m.defs.iter().enumerate().map(|(i, d)| (d.name(), i)).collect();
+    let mut e = Elab { t, templates: HashMap::new(), specs: HashMap::new(), taken: m.defs.iter().map(|d| d.name().to_string()).collect(), queue: vec![], out: BTreeMap::new(), err: None };
+    let mut plain_units: HashMap<usize, Vec<FnDef>> = HashMap::new();
+    for (i, d) in m.defs.iter().enumerate() {
+        if let Def::Fn(f) = d
+            && t.bounded.contains(&f.name)
+        {
+            e.templates.insert(f.name.clone(), (i, f.clone()));
+        }
+    }
+    for (origin, f) in &t.units {
+        let i = index.get(origin.as_str()).copied().unwrap_or(0);
+        e.taken.insert(f.name.clone());
+        if t.bounded.contains(&f.name) {
+            e.templates.insert(f.name.clone(), (i, f.clone()));
+        } else {
+            plain_units.entry(i).or_default().push(f.clone());
+        }
+    }
+    let none = HashMap::new();
+    let mut emitted: Vec<(usize, Def)> = Vec::new();
+    let mut ex_tests: Vec<(String, String)> = Vec::new();
+    for (i, d) in m.defs.iter().enumerate() {
+        match d {
+            Def::Fn(f) if t.bounded.contains(&f.name) => {
+                if i < own {
+                    for (k, x) in f.examples.iter().enumerate() {
+                        let mut body = x.clone();
+                        e.rewrite(&mut body, &none);
+                        let tn = format!("{}__ex{}", f.name, k + 1);
+                        ex_tests.push((tn.clone(), format!("{}.ex{}", f.name, k + 1)));
+                        emitted.push((i, Def::Test(TestDef { name: tn, body, span: f.span })));
+                    }
+                }
+            }
+            Def::Fn(f) => {
+                let mut g = f.clone();
+                e.rewrite_fn(&mut g, &none);
+                emitted.push((i, Def::Fn(g)));
+            }
+            Def::Test(x) => {
+                let mut x = x.clone();
+                e.rewrite(&mut x.body, &none);
+                emitted.push((i, Def::Test(x)));
+            }
+            Def::Static(s) => {
+                let mut s = s.clone();
+                e.rewrite(&mut s.init, &none);
+                emitted.push((i, Def::Static(s)));
+            }
+            Def::Type(ty) => {
+                let mut ty = ty.clone();
+                ty.derives.clear();
+                emitted.push((i, Def::Type(ty)));
+            }
+            Def::Trait(_) => {}
+            Def::Impl(_) => {
+                for mut f in plain_units.remove(&i).unwrap_or_default() {
+                    e.rewrite_fn(&mut f, &none);
+                    emitted.push((i, Def::Fn(f)));
+                }
+            }
+            other => emitted.push((i, other.clone())),
+        }
+    }
+    while let Some((name, template, map)) = e.queue.pop() {
+        if let Some((origin, g)) = e.specialize(&name, &template, &map) {
+            e.out.entry(origin).or_default().push(g);
+        }
+    }
+    if let Some(err) = e.err {
+        return Err(err);
+    }
+    let mut defs = Vec::new();
+    let mut own2 = 0;
+    let mut by_origin: BTreeMap<usize, Vec<Def>> = BTreeMap::new();
+    for (i, d) in emitted {
+        by_origin.entry(i).or_default().push(d);
+    }
+    for (i, fs) in std::mem::take(&mut e.out) {
+        by_origin.entry(i).or_default().extend(fs.into_iter().map(Def::Fn));
+    }
+    for (i, ds) in by_origin {
+        if i < own {
+            own2 += ds.len();
+        }
+        defs.extend(ds);
+    }
+    let text = printer::print_module(&Module { profile: m.profile.clone(), defs, own: None });
+    let mut m2 = parse(&text).map_err(|err| format!("internal: the elaborated program does not parse: {} at {}", err.msg, err.span.start))?;
+    for d in &mut m2.defs {
+        if let Def::Test(x) = d
+            && let Some((_, real)) = ex_tests.iter().find(|(tn, _)| *tn == x.name)
+        {
+            x.name = real.clone();
+        }
+    }
+    m2.own = Some(own2);
+    Ok(m2)
+}

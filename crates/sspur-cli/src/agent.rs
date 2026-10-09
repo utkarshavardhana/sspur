@@ -243,7 +243,7 @@ pub fn query_text(q: &str, out: &Json, src: &str, pattern: &str) -> String {
 const INLINE_TESTS: usize = 20;
 
 fn list_text(items: &[Json]) -> String {
-    let kinds = [("use", "uses"), ("type", "types"), ("effect", "effects"), ("store", "stores"), ("static", "statics"), ("svc", "svcs"), ("fn", "fns"), ("test", "tests")];
+    let kinds = [("use", "uses"), ("type", "types"), ("effect", "effects"), ("trait", "traits"), ("impl", "impls"), ("store", "stores"), ("static", "statics"), ("svc", "svcs"), ("fn", "fns"), ("test", "tests")];
     let only_tests = !items.is_empty() && items.iter().all(|d| d["kind"] == "test");
     let mut lines = Vec::new();
     for (k, plural) in kinds {
@@ -337,6 +337,8 @@ fn counts_line(l: &Loaded) -> String {
         Def::Svc(_) => "svc",
         Def::Fn(_) => "fn",
         Def::Test(_) => "test",
+        Def::Trait(_) => "trait",
+        Def::Impl(_) => "impl",
     };
     let parts: Vec<String> = kinds
         .iter()

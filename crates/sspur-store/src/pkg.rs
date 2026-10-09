@@ -654,6 +654,7 @@ pub fn link(src: &str, env: &Env) -> Result<Linked, Vec<Diag>> {
         vec![d]
     })?;
     let own = module.defs.iter().take_while(|d| (d.span().start as usize) < src.len()).count();
+    module.own = Some(own);
     let mut scope = env.scope();
     let mut errs = Vec::new();
     for d in &module.defs[..own] {

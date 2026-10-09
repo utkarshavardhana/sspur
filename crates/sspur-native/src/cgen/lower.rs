@@ -954,7 +954,7 @@ impl Lower<'_> {
             let Ty::Fn { params, ret, .. } = ty else { unreachable!() };
             let pname = format!("ev__{op}");
             g.params.push(Param { name: pname.clone(), ty: Ty::Fn { params, ret, effects: vec![Effect { name: row.clone(), args: vec![], span: sp() }] }, refine: None });
-            g.tparams.push(TParam { name: row.clone(), kind: None, refine: None });
+            g.tparams.push(TParam { name: row.clone(), kind: None, refine: None, bounds: vec![] });
             g.effects.push(Effect { name: row, args: vec![], span: sp() });
             sc.insert(op, Ev::Param(pname));
         }
@@ -1179,7 +1179,7 @@ pub(super) fn lower(m: &Module, check: &CheckOutput) -> Option<Lowered> {
         }
         extra.extend(defs);
         let defs = extra;
-        let lowered = Module { profile: m.profile.clone(), defs };
+        let lowered = Module { profile: m.profile.clone(), defs, own: m.own };
         let text = printer::print_module(&lowered);
         let Ok(reparsed) = parse(&text) else { return give_up(&text) };
         let (mut a, mut b) = (lowered.clone(), reparsed.clone());

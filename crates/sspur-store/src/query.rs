@@ -109,6 +109,8 @@ impl<'a> Ctx<'a> {
             Def::Svc(_) => "svc",
             Def::Static(_) => "static",
             Def::Use(_) => "use",
+            Def::Trait(_) => "trait",
+            Def::Impl(_) => "impl",
         }
     }
 
@@ -156,7 +158,7 @@ impl<'a> Ctx<'a> {
                     let items: Vec<Json> = self
                         .listed(target)?
                         .into_iter()
-                        .map(|d| json!({"name": d.name(), "kind": Self::kind(d), "hash": short(&self.loaded.hashes[d.name()]), "sig": match d { Def::Fn(f) => printer::print_sig(f), Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Svc(_) | Def::Static(_) | Def::Use(_) => printer::print_def(d), Def::Test(_) => String::new() }}))
+                        .map(|d| json!({"name": d.name(), "kind": Self::kind(d), "hash": short(&self.loaded.hashes[d.name()]), "sig": match d { Def::Fn(f) => printer::print_sig(f), Def::Type(_) | Def::Effect(_) | Def::Store(_) | Def::Svc(_) | Def::Static(_) | Def::Use(_) | Def::Trait(_) | Def::Impl(_) => printer::print_def(d), Def::Test(_) => String::new() }}))
                         .collect();
                     json!(items)
                 }
@@ -320,6 +322,8 @@ impl<'a> Ctx<'a> {
                     Def::Effect(_) => parts.push((c.clone(), "effect", printer::print_def(cd))),
                     Def::Store(_) => parts.push((c.clone(), "store", printer::print_def(cd))),
                     Def::Static(_) => parts.push((c.clone(), "static", printer::print_def(cd))),
+                    Def::Trait(_) => parts.push((c.clone(), "trait", printer::print_def(cd))),
+                    Def::Impl(_) => parts.push((c.clone(), "impl", printer::print_def(cd))),
                     Def::Fn(_) => parts.push((c.clone(), "sig", Self::sig_text(cd))),
                     Def::Test(_) | Def::Svc(_) | Def::Use(_) => {}
                 }

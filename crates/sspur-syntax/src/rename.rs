@@ -14,6 +14,8 @@ pub fn rename_defs(defs: &mut [Def], map: &HashMap<String, String>, user_methods
             Def::Type(t) => t.params.iter().map(|p| p.name.as_str()).collect(),
             Def::Fn(f) => f.tparams.iter().map(|p| p.name.as_str()).collect(),
             Def::Effect(e) => e.params.iter().map(|p| p.name.as_str()).collect(),
+            Def::Trait(t) => t.params.iter().map(|p| p.name.as_str()).collect(),
+            Def::Impl(i) => i.tparams.iter().map(|p| p.name.as_str()).collect(),
             _ => vec![],
         };
         if map.len() > 1 && tps.iter().any(|p| map.contains_key(*p)) {
@@ -81,43 +83,29 @@ impl Renamer<'_> {
                     }
                 }
             }
-            Def::Fn(f) => {
-                self.hit(&mut f.name);
-                let shadow = f.tparams.iter().any(|p| self.shadows(&p.name));
-                for p in &mut f.params {
-                    if !shadow {
-                        self.ty(&mut p.ty);
-                    }
-                    if let Some(r) = &mut p.refine {
-                        self.contract(r, &["_"]);
-                    }
+            Def::Fn(f) => self.fn_def(f, true, false),
+            Def::Trait(t) => {
+                self.hit(&mut t.name);
+                let shadow = t.params.iter().any(|p| self.shadows(&p.name));
+                for m in &mut t.methods {
+                    self.fn_def(&mut m.sig, true, shadow);
                 }
-                if let (Some(t), false) = (&mut f.ret, shadow) {
-                    self.ty(t);
-                }
-                for e in &mut f.effects {
-                    self.hit(&mut e.name);
-                }
+            }
+            Def::Impl(i) => {
+                let own = self.map.contains_key(&i.trait_name);
+                self.hit(&mut i.trait_name);
+                let shadow = i.tparams.iter().any(|p| self.shadows(&p.name));
                 if !shadow {
-                    for e in &mut f.effects {
-                        e.args.iter_mut().for_each(|t| self.ty(t));
+                    i.trait_args.iter_mut().for_each(|t| self.ty(t));
+                    self.ty(&mut i.target);
+                    for p in &mut i.tparams {
+                        p.bounds.iter_mut().for_each(|t| self.ty(t));
                     }
                 }
-                let params: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
-                let names: Vec<&str> = params.iter().map(String::as_str).collect();
-                for p in &mut f.pres {
-                    self.contract(p, &names);
+                for f in &mut i.fns {
+                    self.fn_def(f, own, shadow);
                 }
-                for p in &mut f.examples {
-                    self.contract(p, &[]);
-                }
-                let mut with_r = names.clone();
-                with_r.push("r");
-                for p in &mut f.posts {
-                    self.contract(p, &with_r);
-                }
-                let mut scope = vec![params.into_iter().collect()];
-                self.expr(&mut f.body, &mut scope);
+                i.refresh_key();
             }
             Def::Test(t) => {
                 self.hit(&mut t.name);
@@ -152,6 +140,52 @@ impl Renamer<'_> {
                 }
             }
         }
+    }
+
+    fn fn_def(&self, f: &mut FnDef, rename: bool, outer_shadow: bool) {
+        if rename {
+            self.hit(&mut f.name);
+        }
+        let shadow = outer_shadow || f.tparams.iter().any(|p| self.shadows(&p.name));
+        if !shadow {
+            for p in &mut f.tparams {
+                p.bounds.iter_mut().for_each(|t| self.ty(t));
+            }
+        }
+        for p in &mut f.params {
+            if !shadow {
+                self.ty(&mut p.ty);
+            }
+            if let Some(r) = &mut p.refine {
+                self.contract(r, &["_"]);
+            }
+        }
+        if let (Some(t), false) = (&mut f.ret, shadow) {
+            self.ty(t);
+        }
+        for e in &mut f.effects {
+            self.hit(&mut e.name);
+        }
+        if !shadow {
+            for e in &mut f.effects {
+                e.args.iter_mut().for_each(|t| self.ty(t));
+            }
+        }
+        let params: Vec<String> = f.params.iter().map(|p| p.name.clone()).collect();
+        let names: Vec<&str> = params.iter().map(String::as_str).collect();
+        for p in &mut f.pres {
+            self.contract(p, &names);
+        }
+        for p in &mut f.examples {
+            self.contract(p, &[]);
+        }
+        let mut with_r = names.clone();
+        with_r.push("r");
+        for p in &mut f.posts {
+            self.contract(p, &with_r);
+        }
+        let mut scope = vec![params.into_iter().collect()];
+        self.expr(&mut f.body, &mut scope);
     }
 
     fn fields(&self, fs: &mut [Field], shadow: bool) {

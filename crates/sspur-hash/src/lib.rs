@@ -59,6 +59,7 @@ struct Hasher<'a> {
     op_owner: HashMap<String, (String, usize)>,
     res: &'a Resolution<'a>,
     done: HashMap<String, [u8; 32]>,
+    trait_uses: HashMap<String, Vec<String>>,
 }
 
 #[derive(Default)]
@@ -113,7 +114,74 @@ impl<'a> Hasher<'a> {
                 }
             }
         }
-        Hasher { defs: m.defs.iter().map(|d| (d.name().to_string(), d)).collect(), ctor_owner, op_owner, res, done: HashMap::new() }
+        let mut trait_uses: HashMap<String, Vec<String>> = HashMap::new();
+        let mut method_trait: HashMap<String, String> = BUILTIN_TRAITS.iter().flat_map(|(t, ms)| ms.iter().map(|m| (m.to_string(), t.to_string()))).collect();
+        for d in &m.defs {
+            if let Def::Trait(t) = d {
+                for x in &t.methods {
+                    method_trait.insert(x.sig.name.clone(), t.name.clone());
+                    trait_uses.entry(x.sig.name.clone()).or_default().push(t.name.clone());
+                }
+            }
+        }
+        let by_trait: HashMap<String, Vec<String>> = method_trait.iter().fold(HashMap::new(), |mut acc, (m, t)| {
+            acc.entry(t.clone()).or_default().push(m.clone());
+            acc
+        });
+        for d in &m.defs {
+            if let Def::Impl(i) = d {
+                let local = i.trait_name.rsplit("__").next().unwrap_or(&i.trait_name);
+                for m in by_trait.get(&i.trait_name).or_else(|| by_trait.get(local)).into_iter().flatten() {
+                    trait_uses.entry(m.clone()).or_default().push(i.key.clone());
+                }
+                trait_uses.entry(format!("#{local}")).or_default().push(i.key.clone());
+            }
+        }
+        Hasher { defs: m.defs.iter().map(|d| (d.name().to_string(), d)).collect(), ctor_owner, op_owner, res, done: HashMap::new(), trait_uses }
+    }
+
+    /// Traits and impls a definition can reach through method calls and operators.
+    fn trait_deps(&self, d: &Def) -> Vec<String> {
+        if self.trait_uses.is_empty() {
+            return vec![];
+        }
+        let mut exprs: Vec<&Expr> = Vec::new();
+        match d {
+            Def::Fn(f) => {
+                exprs.extend(f.pres.iter().chain(f.posts.iter()).chain(f.examples.iter()));
+                exprs.push(&f.body);
+            }
+            Def::Test(t) => exprs.push(&t.body),
+            Def::Static(s) => exprs.push(&s.init),
+            Def::Trait(t) => exprs.extend(t.methods.iter().map(|m| &m.sig.body)),
+            Def::Impl(i) => exprs.extend(i.fns.iter().map(|f| &f.body)),
+            _ => {}
+        }
+        let mut out: HashSet<String> = HashSet::new();
+        let mut add = |k: &str| {
+            for n in self.trait_uses.get(k).into_iter().flatten() {
+                out.insert(n.clone());
+            }
+        };
+        for e in exprs {
+            visit::walk_expr(e, &mut |x| {
+                match &x.kind {
+                    ExprKind::Name(n) | ExprKind::Method { name: n, .. } | ExprKind::Field(_, n) => add(n),
+                    ExprKind::Binary(op, ..) => {
+                        if let Some(t) = op_trait(*op) {
+                            add(&format!("#{t}"));
+                        }
+                    }
+                    ExprKind::Unary(UnOp::Neg, _) => add("#Neg"),
+                    ExprKind::Index(..) => add("#Index"),
+                    _ => {}
+                }
+                true
+            });
+        }
+        let mut v: Vec<String> = out.into_iter().filter(|n| n != d.name()).collect();
+        v.sort();
+        v
     }
 
     fn deps(&self, d: &Def) -> Vec<String> {
@@ -169,6 +237,35 @@ impl<'a> Hasher<'a> {
                 }
             }
             Def::Use(_) => {}
+            Def::Trait(t) => {
+                for m in &t.methods {
+                    for p in &m.sig.params {
+                        tys.push(&p.ty);
+                    }
+                    tys.extend(m.sig.ret.iter());
+                    exprs.push(&m.sig.body);
+                }
+            }
+            Def::Impl(i) => {
+                add(&i.trait_name);
+                tys.push(&i.target);
+                tys.extend(i.trait_args.iter());
+                for f in &i.fns {
+                    for p in &f.params {
+                        tys.push(&p.ty);
+                    }
+                    tys.extend(f.ret.iter());
+                    exprs.extend(f.pres.iter().chain(f.posts.iter()));
+                    exprs.push(&f.body);
+                }
+            }
+        }
+        for d in [d] {
+            if let Def::Fn(f) = d {
+                for p in &f.tparams {
+                    tys.extend(p.bounds.iter());
+                }
+            }
         }
         while let Some(t) = tys.pop() {
             match t {
@@ -213,6 +310,7 @@ impl<'a> Hasher<'a> {
                 true
             });
         }
+        out.extend(self.trait_deps(d));
         let mut v: Vec<String> = out.into_iter().collect();
         v.sort();
         v
@@ -340,6 +438,9 @@ impl<'a> Hasher<'a> {
                 enc.tag(b'F');
                 enc.tparams = f.tparams.iter().map(|p| p.name.clone()).collect();
                 enc.uint(f.tparams.len() as u64);
+                if f.tparams.iter().any(|p| !p.bounds.is_empty()) {
+                    self.bounds(&mut enc, &f.tparams, group);
+                }
                 enc.uint(f.params.len() as u64);
                 for p in &f.params {
                     self.ty(&mut enc, &p.ty, group);
@@ -429,6 +530,39 @@ impl<'a> Hasher<'a> {
                     self.name(&mut enc, &e.handler, group);
                 }
             }
+            Def::Trait(t) => {
+                enc.tag(b'W');
+                enc.uint(t.params.len() as u64);
+                enc.uint(t.methods.len() as u64);
+                for m in &t.methods {
+                    enc.str(&m.sig.name);
+                    enc.tag(u8::from(m.default));
+                    let mut f = m.sig.clone();
+                    f.tparams.insert(0, TParam { name: "Self".into(), kind: None, refine: None, bounds: vec![] });
+                    f.tparams.splice(1..1, t.params.iter().cloned());
+                    enc.bytes(&self.encode(&Def::Fn(f), group));
+                }
+            }
+            Def::Impl(i) => {
+                enc.tag(b'I');
+                self.name(&mut enc, &i.trait_name, group);
+                enc.tparams = i.tparams.iter().map(|p| p.name.clone()).collect();
+                self.ty(&mut enc, &i.target, group);
+                enc.uint(i.trait_args.len() as u64);
+                for a in &i.trait_args {
+                    self.ty(&mut enc, a, group);
+                }
+                self.bounds(&mut enc, &i.tparams, group);
+                let mut fns: Vec<&FnDef> = i.fns.iter().collect();
+                fns.sort_by(|a, b| a.name.cmp(&b.name));
+                enc.uint(fns.len() as u64);
+                for f in fns {
+                    enc.str(&f.name);
+                    let mut g = f.clone();
+                    g.tparams.splice(0..0, i.tparams.iter().cloned().chain([TParam { name: "Self".into(), kind: None, refine: None, bounds: vec![] }]));
+                    enc.bytes(&self.encode(&Def::Fn(g), group));
+                }
+            }
             Def::Effect(e) => {
                 enc.tag(b'E');
                 enc.tparams = e.params.iter().map(|p| p.name.clone()).collect();
@@ -447,7 +581,26 @@ impl<'a> Hasher<'a> {
                 }
             }
         }
+        let extra = self.trait_deps(d);
+        if !extra.is_empty() {
+            enc.tag(b'J');
+            for n in &extra {
+                if !self.global_ref(&mut enc, n, group) {
+                    enc.str(n);
+                }
+            }
+        }
         enc.buf
+    }
+
+    fn bounds(&self, enc: &mut Enc, ps: &[TParam], group: &HashMap<String, usize>) {
+        enc.tag(b'B');
+        for p in ps {
+            enc.uint(p.bounds.len() as u64);
+            for b in &p.bounds {
+                self.ty(enc, b, group);
+            }
+        }
     }
 
     fn fields(&self, enc: &mut Enc, fs: &[Field], group: &HashMap<String, usize>) {

@@ -216,7 +216,7 @@ impl Parser {
                 _ => return self.err("E_PARSE_TRAILING", format!("unexpected {} after definition", self.describe())),
             }
         }
-        Ok(Module { profile, defs })
+        Ok(Module { profile, defs, own: None })
     }
 
     fn def(&mut self) -> PResult<Def> {
@@ -228,7 +228,9 @@ impl Parser {
                 Def::Type(t) => (t.public, t.span) = (true, start.to(t.span)),
                 Def::Fn(f) => (f.public, f.span) = (true, start.to(f.span)),
                 Def::Effect(e) => (e.public, e.span) = (true, start.to(e.span)),
-                _ => return Err(SyntaxError::new("E_PARSE_PUB", "only fn, type and effect definitions can be pub".into(), start)),
+                Def::Trait(t) => (t.public, t.span) = (true, start.to(t.span)),
+                Def::Impl(i) => (i.public, i.span) = (true, start.to(i.span)),
+                _ => return Err(SyntaxError::new("E_PARSE_PUB", "only fn, type, effect, trait and impl definitions can be pub".into(), start)),
             }
             return Ok(d);
         }
@@ -275,6 +277,8 @@ impl Parser {
             Tok::Ident(w) if w == "effect" => self.effect_def().map(Def::Effect),
             Tok::Ident(w) if w == "store" => self.store_def().map(Def::Store),
             Tok::Ident(w) if w == "svc" => self.svc_def().map(Def::Svc),
+            Tok::Ident(w) if w == "trait" && matches!(self.peek_at(1), Tok::Ident(_)) => self.trait_def().map(Def::Trait),
+            Tok::Ident(w) if w == "impl" && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Sym("[")) => self.impl_def().map(Def::Impl),
             Tok::Ident(k) if matches!(k.as_str(), "trait" | "impl" | "queue") => {
                 let k = k.clone();
                 self.err("E_UNSUPPORTED", format!("'{k}' definitions are not supported by this compiler version yet"))
@@ -305,6 +309,75 @@ impl Parser {
             }
         }
         Ok(Def::Use(UseDef::new(pkg, names, start.to(self.prev_span()))))
+    }
+
+    fn member_fns(&mut self, what: &str, default_ok: bool) -> PResult<Vec<(FnDef, bool)>> {
+        let mut out = Vec::new();
+        while let Some(c) = self.newline_then(|t| matches!(t, Tok::Kw("fn"))) {
+            if c == 0 {
+                break;
+            }
+            self.line_indent = c;
+            self.bump();
+            let start = self.span();
+            let mut f = self.fn_header(start)?;
+            let body = self.is_sym("=") || self.newline_then(|t| matches!(t, Tok::Sym("="))).is_some();
+            if body {
+                if self.newline_then(|t| matches!(t, Tok::Sym("="))).is_some() {
+                    let Tok::Newline(c) = *self.peek() else { unreachable!() };
+                    self.line_indent = c;
+                    self.bump();
+                }
+                self.expect_sym("=")?;
+                f.body = self.block_or_seq()?;
+                f.span = start.to(self.prev_span());
+            } else if !default_ok {
+                return self.err("E_PARSE_IMPL", format!("{what} method '{}' needs a body: 'fn {}(...) -> T = expr'", f.name, f.name));
+            }
+            self.line_indent = c;
+            out.push((f, body));
+        }
+        if let Some(c) = self.newline_then(|_| true)
+            && c > 0
+            && !matches!(self.peek_at(1), Tok::Eof | Tok::Newline(_))
+        {
+            self.bump();
+            return self.err("E_PARSE_IMPL", format!("expected an indented 'fn' line in the {what}, found {}", self.describe()));
+        }
+        self.line_indent = 0;
+        Ok(out)
+    }
+
+    fn trait_def(&mut self) -> PResult<TraitDef> {
+        let start = self.bump().span;
+        let name = self.expect_ident()?;
+        let params = self.tparams()?;
+        let methods = self.member_fns("trait", true)?.into_iter().map(|(sig, default)| TraitMethod { sig, default }).collect();
+        Ok(TraitDef { name, params, methods, public: false, span: start.to(self.prev_span()) })
+    }
+
+    fn impl_def(&mut self) -> PResult<ImplDef> {
+        let start = self.bump().span;
+        let tparams = self.tparams()?;
+        let trait_name = self.expect_ident()?;
+        let mut trait_args = Vec::new();
+        if self.eat_sym("[") {
+            while !self.is_sym("]") {
+                trait_args.push(self.ty()?);
+                if !self.eat_sym(",") {
+                    break;
+                }
+            }
+            self.expect_sym("]")?;
+        }
+        if !self.eat_kw("for") {
+            return self.err("E_PARSE_IMPL", format!("expected 'for' after 'impl {trait_name}': write 'impl {trait_name} for Type'"));
+        }
+        let target = self.ty()?;
+        let fns = self.member_fns("impl", false)?.into_iter().map(|(f, _)| f).collect();
+        let mut i = ImplDef { key: String::new(), tparams, trait_name, trait_args, target, fns, public: false, span: start.to(self.prev_span()) };
+        i.refresh_key();
+        Ok(i)
     }
 
     fn store_def(&mut self) -> PResult<StoreDef> {
@@ -404,13 +477,23 @@ impl Parser {
             let name = self.expect_ident()?;
             let mut kind = None;
             let mut refine = None;
+            let mut bounds = Vec::new();
             if self.eat_sym(":") {
-                kind = Some(self.ty()?);
-                if self.eat_kw("where") {
-                    refine = Some(self.refine_expr()?);
+                let first = self.ty()?;
+                let is_kind = matches!(&first, Ty::Named { name, args, .. } if args.is_empty() && matches!(name.as_str(), "Int" | "I8" | "I16" | "I32" | "U8" | "U16" | "U32" | "U64" | "Bool"));
+                if is_kind && !self.is_sym("+") {
+                    kind = Some(first);
+                    if self.eat_kw("where") {
+                        refine = Some(self.refine_expr()?);
+                    }
+                } else {
+                    bounds.push(first);
+                    while self.eat_sym("+") {
+                        bounds.push(self.ty()?);
+                    }
                 }
             }
-            out.push(TParam { name, kind, refine });
+            out.push(TParam { name, kind, refine, bounds });
             if !self.eat_sym(",") {
                 break;
             }

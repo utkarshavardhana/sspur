@@ -61,7 +61,7 @@ impl Checker {
         }
     }
 
-    fn json_bad(&self, t: &Type, decode: bool, seen: &mut Vec<String>) -> Option<String> {
+    pub(crate) fn json_bad(&self, t: &Type, decode: bool, seen: &mut Vec<String>) -> Option<String> {
         match t {
             Type::Fn(..) => Some("functions are not data".into()),
             Type::Param(p) => Some(format!("type parameter {p} is not concrete")),

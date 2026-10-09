@@ -238,6 +238,18 @@ pub fn strip_spans(m: &mut Module) {
                 strip_expr(&mut s.init);
             }
             Def::Use(u) => u.span = z,
+            Def::Trait(t) => {
+                t.span = z;
+                t.params.iter_mut().for_each(strip_tparam);
+                t.methods.iter_mut().for_each(|m| strip_fn(&mut m.sig));
+            }
+            Def::Impl(i) => {
+                i.span = z;
+                i.tparams.iter_mut().for_each(strip_tparam);
+                i.trait_args.iter_mut().for_each(strip_ty);
+                strip_ty(&mut i.target);
+                i.fns.iter_mut().for_each(strip_fn);
+            }
         }
     }
 }

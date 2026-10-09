@@ -4,6 +4,8 @@ pub mod own;
 mod deploy;
 mod json;
 mod statics;
+mod traits;
+pub mod elab;
 pub mod kernel;
 pub mod types;
 
@@ -13,6 +15,7 @@ use sspur_syntax::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 pub use deploy::{db_op, HTTP_METHODS};
 pub use types::{Row, Type};
+pub use traits::{ImplOut, TraitOut};
 pub use builtins::{BARE_NAMES, STD_GLOBAL_NAMES};
 
 #[derive(Clone, Debug, Serialize)]
@@ -54,6 +57,7 @@ pub struct CheckOutput {
     pub json_types: HashMap<(u32, u32), Type>,
     pub kernels: BTreeMap<String, kernel::Kernel>,
     pub body_diags: BTreeMap<String, Vec<Diag>>,
+    pub traits: TraitOut,
 }
 
 pub type ExprKey = (u32, u32, u8);
@@ -111,6 +115,8 @@ struct Scheme {
     atoms: BTreeSet<String>,
     fails: Vec<Type>,
     ueffs: Vec<(String, Vec<Type>)>,
+    bounds: Vec<traits::Bound>,
+    origin: String,
 }
 
 #[derive(Clone, Debug)]
@@ -196,6 +202,19 @@ struct Checker {
     refined_names: HashSet<String>,
     kernel_sigs: HashMap<String, Vec<kernel::KParam>>,
     kernels: BTreeMap<String, kernel::Kernel>,
+    traits: HashMap<String, traits::TraitInfo>,
+    method_trait: HashMap<String, String>,
+    impls: HashMap<(String, String), traits::ImplInfo>,
+    bounds: Vec<traits::Bound>,
+    self_ty: Option<Type>,
+    site: ExprKey,
+    tout: traits::TraitOut,
+    pending_sites: Vec<(ExprKey, String, Type, Span)>,
+    pending_insts: Vec<(ExprKey, String, Vec<Type>, Vec<String>, Vec<traits::Bound>, Span)>,
+    record_insts: bool,
+    own_site: bool,
+    res_types: HashSet<String>,
+    impl_self: HashMap<String, Type>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -296,6 +315,19 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
         refined_names: HashSet::new(),
         kernel_sigs: HashMap::new(),
         kernels: BTreeMap::new(),
+        traits: HashMap::new(),
+        method_trait: HashMap::new(),
+        impls: HashMap::new(),
+        bounds: vec![],
+        self_ty: None,
+        site: (0, 0, 0),
+        tout: traits::TraitOut::default(),
+        pending_sites: vec![],
+        pending_insts: vec![],
+        record_insts: true,
+        own_site: true,
+        res_types: HashSet::new(),
+        impl_self: HashMap::new(),
     };
     c.load_builtins();
     if c.sys {
@@ -330,14 +362,24 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
     c.collect_refined(m);
     let mut sigs = BTreeMap::new();
     let mut body_diags = BTreeMap::new();
-    for d in &m.defs {
+    for (idx, d) in m.defs.iter().enumerate() {
         let before = c.diags.len();
+        c.own_site = m.own.is_none_or(|o| idx < o);
         match d {
             Def::Fn(f) => {
                 if !skip.contains(&f.name) {
                     c.check_fn(f);
                 }
                 sigs.insert(f.name.clone(), printer::print_sig(f));
+            }
+            Def::Trait(_) | Def::Impl(_) => {
+                let units: Vec<FnDef> = c.tout.units.iter().filter(|(o, _)| o == d.name()).map(|(_, f)| f.clone()).collect();
+                let self_ty = c.impl_self.get(d.name()).cloned();
+                for f in &units {
+                    c.self_ty = self_ty.clone();
+                    c.check_fn(f);
+                    c.self_ty = None;
+                }
             }
             Def::Test(t) if skip.contains(&t.name) => {}
             Def::Test(t) => c.check_test(t),
@@ -348,6 +390,7 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
         if matches!(d, Def::Fn(_) | Def::Test(_)) && !skip.contains(d.name()) {
             body_diags.insert(d.name().to_string(), c.diags[before..].to_vec());
         }
+        c.finish_traits_def();
         for (k, t) in std::mem::take(&mut c.pending_types) {
             let r = c.resolve(&t);
             c.expr_types.insert(k, r);
@@ -417,7 +460,9 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
         let found = bare::check(m, &tables);
         c.diags.extend(found);
     }
-    CheckOutput { diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info, stores: c.stores, json_types, kernels: c.kernels, body_diags }
+    let mut traits_out = std::mem::take(&mut c.tout);
+    traits_out.active = !traits_out.sites.is_empty() || !traits_out.insts.is_empty() || !traits_out.units.is_empty() || !traits_out.impls.is_empty() || !traits_out.bounded.is_empty() || m.defs.iter().any(|d| matches!(d, Def::Trait(_) | Def::Impl(_)));
+    CheckOutput { traits: traits_out, diags: c.diags, record_types: c.record_types, user_methods: c.user_methods, sigs, expr_types: c.expr_types, fn_types, records, sums, newtypes, local_fn_types: c.local_fn_types, gen_loops: c.gen_loops, clause_effects: c.clause_effects, own: own.info, stores: c.stores, json_types, kernels: c.kernels, body_diags }
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -570,8 +615,9 @@ impl Checker {
             self.methods.insert((recv.to_string(), name), s);
         }
         let t = Type::Param("T".into());
-        let s = Scheme { tparams: vec!["T".into()], rparams: vec![], params: vec![t.clone()], ret: Type::unit(), atoms: BTreeSet::new(), fails: vec![], ueffs: vec![("yield".into(), vec![t])] };
+        let s = Scheme { tparams: vec!["T".into()], rparams: vec![], params: vec![t.clone()], ret: Type::unit(), atoms: BTreeSet::new(), fails: vec![], ueffs: vec![("yield".into(), vec![t])], bounds: vec![], origin: String::new() };
         self.globals.insert("yield".into(), s);
+        self.load_builtin_traits();
         for (eff, params) in [("yield", vec!["T".to_string()]), ("log", vec![])] {
             self.effects.insert(eff.into(), EffInfo { params, ops: vec![eff.into()] });
             self.op_effect.insert(eff.into(), eff.into());
@@ -599,6 +645,7 @@ impl Checker {
             }
         }
         let saved = std::mem::replace(&mut self.tparams, tparams.clone());
+        let bounds = if f.tparams.iter().any(|p| !p.bounds.is_empty()) { self.conv_bounds(&f.tparams, f.sig_span) } else { vec![] };
         let params = f.params.iter().map(|p| self.conv_ty(&p.ty)).collect();
         let ret = f.ret.as_ref().map_or(Type::unit(), |t| self.conv_ty(t));
         let mut atoms = BTreeSet::new();
@@ -628,7 +675,7 @@ impl Checker {
             }
         }
         self.tparams = saved;
-        Scheme { tparams, rparams, params, ret, atoms, fails, ueffs }
+        Scheme { tparams, rparams, params, ret, atoms, fails, ueffs, bounds, origin: f.name.clone() }
     }
 
     fn conv_ty(&mut self, t: &Ty) -> Type {
@@ -675,6 +722,13 @@ impl Checker {
                 let conv: Vec<Type> = args.iter().map(|x| self.conv_ty_depth(x, depth)).collect();
                 if self.tparams.contains(name) {
                     return Type::Param(name.clone());
+                }
+                if name == "Self" && args.is_empty() && !self.types.contains_key(name) {
+                    if let Some(t) = &self.self_ty {
+                        return t.clone();
+                    }
+                    self.push_diag("E_SELF", "error", *span, "'Self' is only valid in a trait or an impl".into(), Some("name the type".into()), vec![]);
+                    return self.fresh();
                 }
                 if matches!(name.as_str(), "&" | "&mut" | "own") {
                     if !self.sys {
@@ -803,6 +857,12 @@ impl Checker {
             }
         }
         self.cur_def = None;
+        for d in &m.defs {
+            if let Def::Trait(t) = d {
+                self.collect_trait(t, false, &fn_names);
+            }
+        }
+        self.collect_impls(m);
         self.collect_stores(m);
         for d in &m.defs {
             if let Def::Fn(f) = d {
@@ -853,7 +913,7 @@ impl Checker {
             } else {
                 (BTreeSet::new(), vec![(e.name.clone(), params.iter().map(|p| Type::Param(p.clone())).collect())])
             };
-            self.globals.insert(op.name.clone(), Scheme { tparams: params.clone(), rparams: vec![], params: ps, ret, atoms, fails: vec![], ueffs });
+            self.globals.insert(op.name.clone(), Scheme { tparams: params.clone(), rparams: vec![], params: ps, ret, atoms, fails: vec![], ueffs, bounds: vec![], origin: String::new() });
             self.op_effect.insert(op.name.clone(), e.name.clone());
             ops.push(op.name.clone());
         }
@@ -933,9 +993,15 @@ impl Checker {
         let scheme = self.fns[&f.name].clone();
         self.tparams = scheme.tparams.clone();
         self.cur_rparams = scheme.rparams.clone();
+        let saved_bounds = std::mem::replace(&mut self.bounds, scheme.bounds.clone());
+        if !scheme.bounds.is_empty() {
+            self.tout.bounded.insert(f.name.clone());
+        }
         self.check_fn_body(f, &scheme);
         self.check_chans();
         self.report_holes();
+        self.finish_traits_def();
+        self.bounds = saved_bounds;
         self.tparams.clear();
         self.cur_def = None;
     }
@@ -1360,6 +1426,11 @@ impl Checker {
 
     fn instantiate(&mut self, s: &Scheme) -> Inst {
         let map: HashMap<String, Type> = s.tparams.iter().map(|p| (p.clone(), self.fresh())).collect();
+        if self.record_insts && !s.bounds.is_empty() {
+            let targs = s.tparams.iter().map(|p| map[p].clone()).collect();
+            let span = Span { start: self.site.0, end: self.site.1 };
+            self.pending_insts.push((self.site, s.origin.clone(), targs, s.tparams.clone(), s.bounds.clone(), span));
+        }
         let rmap: HashMap<String, u32> = s.rparams.iter().map(|p| (p.clone(), self.fresh_row())).collect();
         let params: Vec<Type> = s.params.iter().map(|t| subst_rows(&subst_params(t, &map), &rmap)).collect();
         let ret = subst_rows(&subst_params(&s.ret, &map), &rmap);
@@ -1442,6 +1513,9 @@ impl Checker {
     }
 
     fn method(&mut self, recv: &Expr, rt: Type, name: &str, args: &[Expr], span: Span) -> Type {
+        if let Some(t) = self.trait_method_call(recv, &rt, name, args, span, false) {
+            return t;
+        }
         if let Some(s) = self.fns.get(name).cloned()
             && self.recv_fits(&s, &rt) {
                 self.user_methods.insert((span.start, span.end));
@@ -1490,6 +1564,21 @@ impl Checker {
             return Type::list(Type::con(host));
         }
         let found = self.methods.get(&(con.clone(), name.to_string())).or_else(|| self.methods.get(&("*".to_string(), name.to_string()))).cloned();
+        if found.is_none()
+            && let Some(t) = self.trait_method_call(recv, &rt, name, args, span, true) {
+                return t;
+            }
+        if found.is_none()
+            && let Some(tr) = self.method_trait.get(name).cloned()
+            && !self.types.get(&con).is_some_and(|t| matches!(&t.kind, TypeKind::Record(fs) if fs.iter().any(|(f, _)| f == name)))
+        {
+            let hint = self.missing_hint(&rr, &tr);
+            self.push_diag("E_TRAIT_MISSING", "error", span, format!("'{name}' is a method of trait {tr}, and {rr} does not implement {tr}"), hint, vec![]);
+            for a in args {
+                self.infer(a, None);
+            }
+            return self.fresh();
+        }
         if found.is_none()
             && !self.types.get(&con).is_some_and(|t| matches!(&t.kind, TypeKind::Record(fs) if fs.iter().any(|(f, _)| f == name)))
             && let Some(t) = self.foreign_method(recv, &rt, &con, name, args, span) {
@@ -1723,7 +1812,9 @@ impl Checker {
 
     fn recv_fits(&mut self, s: &Scheme, rt: &Type) -> bool {
         let snapshot = (self.subst.clone(), self.rsubst.clone());
+        let saved = std::mem::replace(&mut self.record_insts, false);
         let (params, ..) = self.instantiate(s);
+        self.record_insts = saved;
         let ok = params.first().is_some_and(|p| self.unify(p, rt));
         (self.subst, self.rsubst) = snapshot;
         ok
@@ -1736,7 +1827,9 @@ impl Checker {
     }
 
     fn infer(&mut self, e: &Expr, exp: Option<&Type>) -> Type {
+        let saved = std::mem::replace(&mut self.site, expr_key(e));
         let t = self.infer_kind(e, exp);
+        self.site = saved;
         self.pending_types.push((expr_key(e), t.clone()));
         t
     }
@@ -1878,6 +1971,10 @@ impl Checker {
                         && let Some(s) = self.fns.get(n).or_else(|| self.globals.get(n)).cloned() {
                             return self.call_scheme(&s, n, None, args, e.span);
                         }
+                    if self.lookup(n).is_none() && !args.is_empty() && self.method_trait.contains_key(n) {
+                        let rt = self.infer(&args[0], None);
+                        return self.method(&args[0], rt, n, &args[1..], e.span);
+                    }
                     if self.lookup(n).is_none() && !self.ctors.contains_key(n) && !self.types.contains_key(n) && args.len() == 1 {
                         let canon = match n.as_str() {
                             "len" | "length" | "size" | "count" => Some("len"),
@@ -1911,6 +2008,25 @@ impl Checker {
             }
             ExprKind::Index(a, i) => {
                 let at = self.infer(a, None);
+                let ar = self.resolve(&at);
+                if self.trait_op("Index", &ar, e.span, 0) {
+                    let targs = self.trait_args_of(&ar, "Index").unwrap_or_default();
+                    let (k, v) = match targs.as_slice() {
+                        [k, v] => (k.clone(), v.clone()),
+                        _ => (self.fresh(), self.fresh()),
+                    };
+                    let it = self.infer(i, Some(&k));
+                    self.expect(&k, &it, i.span);
+                    return v;
+                }
+                if let Type::Con(n, _) = &ar
+                    && self.types.contains_key(n) && !n.starts_with('#')
+                {
+                    let hint = self.op_hint(&ar, "Index");
+                    self.push_diag("E_OPERATOR", "error", e.span, format!("{ar} can't be indexed"), hint, vec![]);
+                    self.infer(i, None);
+                    return self.fresh();
+                }
                 if let Type::Con(n, args) = self.resolve(&at)
                     && n == "Array"
                 {
@@ -1936,8 +2052,12 @@ impl Checker {
             ExprKind::Unary(UnOp::Neg, x) => {
                 let t = self.infer(x, None);
                 let rt = self.resolve(&t);
+                if self.trait_op("Neg", &rt, e.span, 0) {
+                    return t;
+                }
                 if !rt.is_numeric() && !matches!(rt, Type::Var(_)) {
-                    self.err("E_OPERATOR", e.span, format!("cannot negate {rt}"));
+                    let hint = self.op_hint(&rt, "Neg");
+                    self.push_diag("E_OPERATOR", "error", e.span, format!("cannot negate {rt}"), hint, vec![]);
                 }
                 t
             }
@@ -2285,6 +2405,7 @@ impl Checker {
             "print" | "println" | "puts" | "console" => Some("write 'log(s)' and declare '! log'".to_string()),
             "throw" => Some("write 'raise Ctor{..}' and declare '! fail[E]'".to_string()),
             "self" | "this" => Some("no 'self': a method is a fn whose first parameter is the receiver".to_string()),
+            _ if self.method_trait.contains_key(n) => Some(format!("'{n}' is a method of trait {}: call it as x.{n}(..), or pass x => x.{n}", self.method_trait[n])),
             _ if self.methods.keys().any(|(_, m)| m == n) => Some(format!("'{n}' is a method: write 'x.{n}' for '{n}(x)', and 'x.{n}(a)' for '{n}(x, a)'")),
             _ => None,
         };
@@ -2337,11 +2458,16 @@ impl Checker {
         self.expect(&lt, &rt, r.span);
         let t = self.resolve(&lt);
         let known = !matches!(t, Type::Var(_));
+        if let Some(tr) = op_trait(op)
+            && self.trait_op(tr, &t, span, 6) {
+                return if matches!(op, Add | Sub | Mul | Div) { t } else { Type::bool() };
+            }
         match op {
             Add | Sub | Mul | Div | Rem | Pow => {
                 let ok = t.is_numeric() || (op == Add && (t == Type::str() || matches!(&t, Type::Con(n, _) if n == "List")));
                 if known && !ok {
-                    self.err("E_OPERATOR", span, format!("operator '{}' is not defined for {t}", op.symbol()));
+                    let hint = op_trait(op).and_then(|tr| self.op_hint(&t, tr));
+                    self.push_diag("E_OPERATOR", "error", span, format!("operator '{}' is not defined for {t}", op.symbol()), hint, vec![]);
                 }
                 t
             }
@@ -2351,7 +2477,8 @@ impl Checker {
             }
             Lt | Le | Gt | Ge => {
                 if known && !t.is_numeric() && t != Type::str() && !matches!(&t, Type::Con(n, _) if matches!(n.as_str(), "#Time" | "#Duration" | "#BigInt" | "#Dec" | "#Ratio")) {
-                    self.err("E_OPERATOR", span, format!("operator '{}' is not defined for {t}", op.symbol()));
+                    let hint = self.op_hint(&t, "Ord");
+                    self.push_diag("E_OPERATOR", "error", span, format!("operator '{}' is not defined for {t}", op.symbol()), hint, vec![]);
                 }
                 Type::bool()
             }

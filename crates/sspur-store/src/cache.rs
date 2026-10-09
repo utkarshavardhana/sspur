@@ -138,7 +138,13 @@ pub fn load_src_cached(src: String) -> Result<Loaded, Vec<Diag>> {
 /// The cached check of an already parsed module. With `linked`, the first that many definitions
 /// were rewritten by the package linker, so their key also covers the names they now refer to.
 pub fn check_cached(src: String, module: Module, linked: Option<usize>) -> Loaded {
-    if disabled() || !matches!(module.profile.as_deref(), None | Some("app")) {
+    let traits = module.defs.iter().any(|d| match d {
+        Def::Trait(_) | Def::Impl(_) => true,
+        Def::Type(t) => !t.derives.is_empty(),
+        Def::Fn(f) => f.tparams.iter().any(|p| !p.bounds.is_empty()),
+        _ => false,
+    });
+    if traits || disabled() || !matches!(module.profile.as_deref(), None | Some("app")) {
         return crate::check_full(src, module);
     }
     let ranges = def_ranges(&module, &src);

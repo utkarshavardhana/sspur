@@ -3,7 +3,7 @@ use crate::{trap, Ctrl, Interp, R};
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-const GLOBALS: &[&str] = &["log", "some", "ok", "err", "empty_map", "min", "max", "secret", "pii", "untrusted", "guess", "atomic", "chan"];
+const GLOBALS: &[&str] = &["log", "some", "ok", "err", "empty_map", "min", "max", "secret", "pii", "untrusted", "guess", "atomic", "chan", "__cmp", "__hash"];
 
 pub fn is_global(n: &str) -> bool {
     GLOBALS.contains(&n) || sspur_check::STD_GLOBAL_NAMES.contains(&n)
@@ -63,6 +63,8 @@ impl Interp {
                 let (x, y) = (a.remove(0), a.remove(0));
                 if y > x { y } else { x }
             }
+            "__cmp" => Value::Int(a[0].cmp(&a[1]) as i64),
+            "__hash" => Value::Int(s(&a[0])?.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100000001b3)) as i64),
             _ if self.ops.contains(n) => return self.perform(n, a),
             _ => return self.std_global(n, a),
         })

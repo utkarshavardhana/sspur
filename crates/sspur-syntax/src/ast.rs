@@ -18,6 +18,8 @@ impl Span {
 pub struct Module {
     pub profile: Option<String>,
     pub defs: Vec<Def>,
+    /// `defs[..own]` are the package's own definitions, the rest come from dependencies.
+    pub own: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -30,6 +32,50 @@ pub enum Def {
     Svc(SvcDef),
     Static(StaticDef),
     Use(UseDef),
+    Trait(TraitDef),
+    Impl(ImplDef),
+}
+
+/// `trait Name[P]` with indented method signatures; a method with `= body` has a default.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraitDef {
+    pub name: String,
+    pub params: Vec<TParam>,
+    pub methods: Vec<TraitMethod>,
+    pub public: bool,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TraitMethod {
+    pub sig: FnDef,
+    pub default: bool,
+}
+
+/// `impl[T: B] Trait[A] for Type[T]` with indented method definitions; named `impl Trait for Type`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImplDef {
+    pub key: String,
+    pub tparams: Vec<TParam>,
+    pub trait_name: String,
+    pub trait_args: Vec<Ty>,
+    pub target: Ty,
+    pub fns: Vec<FnDef>,
+    pub public: bool,
+    pub span: Span,
+}
+
+impl ImplDef {
+    pub fn target_name(&self) -> &str {
+        match &self.target {
+            Ty::Named { name, .. } => name,
+            _ => "",
+        }
+    }
+
+    pub fn refresh_key(&mut self) {
+        self.key = format!("impl {} for {}", self.trait_name, self.target_name());
+    }
 }
 
 /// `use pkg` or `use pkg.{a, b}`; named `use pkg` in the codebase.
@@ -58,6 +104,8 @@ impl Def {
             Def::Svc(s) => &s.name,
             Def::Static(s) => &s.name,
             Def::Use(u) => &u.key,
+            Def::Trait(t) => &t.name,
+            Def::Impl(i) => &i.key,
         }
     }
 
@@ -66,6 +114,8 @@ impl Def {
             Def::Type(t) => t.public,
             Def::Fn(f) => f.public,
             Def::Effect(e) => e.public,
+            Def::Trait(t) => t.public,
+            Def::Impl(i) => i.public,
             _ => false,
         }
     }
@@ -80,6 +130,8 @@ impl Def {
             Def::Svc(s) => s.span,
             Def::Static(s) => s.span,
             Def::Use(u) => u.span,
+            Def::Trait(t) => t.span,
+            Def::Impl(i) => i.span,
         }
     }
 }
@@ -89,6 +141,7 @@ pub struct TParam {
     pub name: String,
     pub kind: Option<Ty>,
     pub refine: Option<Expr>,
+    pub bounds: Vec<Ty>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -401,4 +454,35 @@ impl Expr {
     pub fn new(kind: ExprKind, span: Span) -> Self {
         Expr { kind, span }
     }
+}
+
+/// Built-in traits and their methods; every method's first parameter is `Self`.
+pub const BUILTIN_TRAITS: &[(&str, &[&str])] = &[
+    ("Eq", &["eq"]),
+    ("Ord", &["cmp"]),
+    ("Show", &["show"]),
+    ("Hash", &["hash"]),
+    ("Json", &["to_json"]),
+    ("Add", &["add"]),
+    ("Sub", &["sub"]),
+    ("Mul", &["mul"]),
+    ("Div", &["div"]),
+    ("Neg", &["neg"]),
+    ("Index", &["index"]),
+    ("Copy", &[]),
+];
+
+/// The traits `derive` can generate.
+pub const DERIVABLE: &[&str] = &["Eq", "Ord", "Show", "Hash", "Json"];
+
+pub fn op_trait(op: BinOp) -> Option<&'static str> {
+    Some(match op {
+        BinOp::Add => "Add",
+        BinOp::Sub => "Sub",
+        BinOp::Mul => "Mul",
+        BinOp::Div => "Div",
+        BinOp::Eq | BinOp::Ne => "Eq",
+        BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => "Ord",
+        _ => return None,
+    })
 }

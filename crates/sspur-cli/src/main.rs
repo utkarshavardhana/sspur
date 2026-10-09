@@ -406,6 +406,15 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
     if loaded.check.has_errors() {
         return ExitCode::FAILURE;
     }
+    let loaded = if cmd == "hash" {
+        loaded
+    } else {
+        let own = loaded.own;
+        match loaded.executable() {
+            Ok(l) => Loaded { own: if cmd == "check" { own } else { l.own }, ..l },
+            Err(d) => return fail_diags(&text, &label, &d, json),
+        }
+    };
     if matches!(cmd, "run" | "test" | "build" | "native") && (args.has("--pgo") || args.val("--lto").is_some()) && !args.has("--target") {
         match host_build_opts(cmd, &label, &text, args) {
             Ok(o) => sspur_native::cgen::flags::set(o),

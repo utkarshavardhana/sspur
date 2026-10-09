@@ -1,0 +1,41 @@
+fn tax_rate(region: Str) -> Int
+= match region
+| "EU" => 21
+| "US" => 7
+| "UK" => 20
+| _ => 0
+
+test tax_rate_eu = tax_rate("EU") == 21
+
+fn money(c: Int) -> Str
+= if c % 100 < 10 then "{c / 100}.0{c % 100}" else "{c / 100}.{c % 100}"
+
+test money_leading_zero = money(1005) == "10.05" && money(7) == "0.07" && money(123400) == "1234.00"
+
+fn ship_fee(weight: Int, express: Bool) -> Int
+= if weight <= 0 then 0 else if express then 2 * (299 + weight * 15) else 299 + weight * 15
+
+test ship_fee_express = ship_fee(2, true) == 658 && ship_fee(2, false) == 329
+
+fn parcel_shipping(x: Parcel) -> Int
+= ship_fee(x.qty, false)
+
+fn rma_shipping(x: Rma) -> Int
+= ship_fee(x.qty, false)
+
+fn order_shipping(x: Order) -> Int
+= ship_fee(x.qty, false)
+
+fn order_express_shipping(x: Order) -> Int
+= ship_fee(x.qty, true)
+
+test order_express_shipping_ok = order_express_shipping(order_new(1, "a", 2, 1, "US")) == 658
+
+fn warehouse_restock_all(ws: List[Warehouse], n: Int) -> List[Warehouse]
+= ws.map(w => if w.active then warehouse_restock(w, n) else w)
+
+test warehouse_restock_all_ok = do
+  a = Warehouse{id: 1, name: "a", qty: 1, price: 1, region: "US", active: true}
+  b = Warehouse{id: 2, name: "b", qty: 5, price: 1, region: "US", active: false}
+  r = warehouse_restock_all([a, b], 3)
+  r.map(_.qty) == [4, 5]

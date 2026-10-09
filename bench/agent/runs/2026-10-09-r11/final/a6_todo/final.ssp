@@ -1,0 +1,92 @@
+type Priority = Low | Med | High
+
+type Task = {id: Int where _ > 0, title: Str, done: Bool, pri: Priority}
+
+type TaskErr = NotFound{id: Int} | AlreadyDone{id: Int}
+
+fn add_task(ts: List[Task], title: Str, pri: Priority) -> List[Task]
+= ts.push(Task{id: next_id(ts), title: title, done: false, pri: pri})
+
+fn box(t: Task) -> Str
+= if t.done then "[x]" else "[ ]"
+
+fn by_priority(ts: List[Task]) -> List[Task]
+= pending(ts).sort_by(t => rank(t.pri) * 1000000 + t.id)
+
+fn clear_done(ts: List[Task]) -> List[Task]
+= pending(ts)
+
+fn complete(ts: List[Task], id: Int) -> List[Task] ! fail[TaskErr]
+= do
+  t = ts.find(_.id == id).ok_or(NotFound{id: id})
+  if t.done then raise AlreadyDone{id: id}
+  ts.map(x => if x.id == id then x with done := true else x)
+
+fn demo() -> List[Task]
+= add_task(add_task(add_task(add_task([], "buy milk", Low), "write report", High), "call bob", Med), "fix sink", High)
+
+fn label(p: Priority) -> Str
+= match p
+| Low => "low"
+| Med => "med"
+| High => "high"
+
+fn main() -> Unit ! log
+= log(catch render_all(complete(demo(), 1))
+| NotFound{id} => "not found"
+| AlreadyDone{id} => "already done")
+
+fn next_id(ts: List[Task]) -> Int
+= ts.map(_.id).max.or(0) + 1
+
+fn pending(ts: List[Task]) -> List[Task]
+= ts.filter(t => not t.done)
+
+fn rank(p: Priority) -> Int
+= match p
+| High => 0
+| Med => 1
+| Low => 2
+
+fn render(t: Task) -> Str
+= "{box(t)} #{t.id} ({label(t.pri)}) {t.title}"
+
+fn render_all(ts: List[Task]) -> Str
+= ts.map(render).join("\n")
+
+fn retitle(ts: List[Task], id: Int, title: Str) -> List[Task] ! fail[TaskErr]
+= do
+  t = ts.find(_.id == id).ok_or(NotFound{id: id})
+  ts.map(x => if x.id == id then x with title := title else x)
+
+test by_pri = by_priority(demo()).map(_.id) == [2, 4, 3, 1]
+
+test by_pri_skips_done = catch by_priority(complete(demo(), 2)).map(_.id) == [4, 3, 1]
+| _ => false
+
+test clear = catch clear_done(complete(complete(demo(), 1), 3)).map(_.id) == [2, 4]
+| _ => false
+
+test complete_missing = catch complete(demo(), 9).len == 0
+| NotFound{id} => id == 9
+| _ => false
+
+test complete_one = catch pending(complete(demo(), 2)).map(_.id) == [1, 3, 4]
+| _ => false
+
+test complete_twice = catch complete(complete(demo(), 1), 1).len == 0
+| AlreadyDone{id} => id == 1
+| _ => false
+
+test ids = demo().map(_.id) == [1, 2, 3, 4]
+
+test render_high = render(Task{id: 2, title: "write report", done: false, pri: High}) == "[ ] #2 (high) write report"
+
+test render_one = render(Task{id: 5, title: "nap", done: true, pri: Low}) == "[x] #5 (low) nap"
+
+test retitle_missing = catch retitle(demo(), 7, "x").len == 0
+| NotFound{id} => id == 7
+| _ => false
+
+test retitle_ok = catch retitle(demo(), 3, "call al").map(_.title) == ["buy milk", "write report", "call al", "fix sink"]
+| _ => false

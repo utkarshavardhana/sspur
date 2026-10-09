@@ -1,0 +1,103 @@
+type ConfigErr = MissingKey{path: Str}
+
+type J = JNull | JBool{b: Bool} | JNum{n: Int} | JStr{s: Str} | JArr{items: List[J]} | JObj{fields: List[(Str, J)]}
+
+fn apply_kv(acc: List[(Str, J)], kv: (Str, J)) -> List[(Str, J)]
+= if kv.1 == JNull then acc.filter(f => f.0 != kv.0) else if acc.any(f => f.0 == kv.0) then acc.map(f => if f.0 == kv.0 then (f.0, merge(f.1, kv.1)) else f) else acc + [(kv.0, merge(JNull, kv.1))]
+
+fn arr_at(items: List[J], k: Str) -> Opt[J]
+= match k.to_int
+| some(i) => if i >= 0 then items.drop(i).first else none
+| none => none
+
+fn base_fields(t: J) -> List[(Str, J)]
+= match t
+| JObj{fields} => fields
+| _ => []
+
+fn defaults() -> J
+= JObj{fields: [("name", JStr{s: "app"}), ("port", JNum{n: 8080}), ("db", JObj{fields: [("host", JStr{s: "localhost"}), ("pool", JNum{n: 5})]}), ("tags", JArr{items: [JStr{s: "a"}]})]}
+
+fn esc(s: Str) -> Str
+= s.replace("\\", "\\\\").replace("\"", "\\\"")
+
+fn get_field(j: J, key: Str) -> Opt[J]
+= match j
+| JObj{fields} => fields.find(_.0 == key).map(_.1)
+| JArr{items} => arr_at(items, key)
+| _ => none
+
+fn get_path(j: J, path: Str) -> Opt[J]
+= do
+  var cur = some(j)
+  for k in path.split(".")
+    cur := match cur
+    | some(v) => get_field(v, k)
+    | none => none
+  cur
+
+fn main() -> Unit ! log
+= log(render(merge(defaults(), JObj{fields: [("port", JNum{n: 9090})]})))
+
+fn merge(target: J, patch: J) -> J
+= match patch
+| JObj{fields} => JObj{fields: fields.fold(base_fields(target), (acc, kv) => apply_kv(acc, kv))}
+| _ => patch
+
+fn merge_all(base: J, patches: List[J]) -> J
+= patches.fold(base, (acc, p) => merge(acc, p))
+
+fn obj(fs: List[(Str, J)]) -> J
+= JObj{fields: fs}
+
+fn render(j: J) -> Str
+= match j
+| JNull => "null"
+| JBool{b} => if b then "true" else "false"
+| JNum{n} => n.str
+| JStr{s} => "\"" + esc(s) + "\""
+| JArr{items} => "[" + items.map(render).join(",") + "]"
+| JObj{fields} => "\{" + fields.map(f => "\"" + esc(f.0) + "\":" + render(f.1)).join(",") + "}"
+
+fn require(j: J, paths: List[Str]) -> Unit ! fail[ConfigErr]
+= do
+  for p in paths
+    if get_path(j, p).is_none then raise MissingKey{path: p}
+  ()
+
+fn require_passes(j: J, paths: List[Str]) -> Bool ! fail[ConfigErr]
+= do
+  require(j, paths)
+  true
+
+test array_paths = get_path(obj([("servers", JArr{items: [obj([("host", JStr{s: "a"})]), obj([("host", JStr{s: "b"})])]})]), "servers.1.host") == some(JStr{s: "b"}) and get_path(obj([("s", JArr{items: [JNull]})]), "s.1") == none and get_path(obj([("s", JArr{items: [JNull]})]), "s.-1") == none and get_path(obj([("s", JArr{items: [JNull]})]), "s.x") == none
+
+test escaping = render(obj([("k\"\\", JStr{s: "a\"b\\c"})])) == "\{\"k\\\"\\\\\":\"a\\\"b\\\\c\"}"
+
+test key_order = render(merge(obj([("a", JNum{n: 1}), ("b", JNum{n: 2})]), obj([("z", JNum{n: 0}), ("a", JNum{n: 9}), ("y", JNum{n: 8})]))) == "\{\"a\":9,\"b\":2,\"z\":0,\"y\":8}"
+
+test merge_all_order = render(merge_all(obj([("a", JNum{n: 1})]), [obj([("a", JNum{n: 2}), ("b", JNum{n: 1})]), obj([("a", JNull)]), obj([("a", JNum{n: 3})])])) == "\{\"b\":1,\"a\":3}"
+
+test merges_top_level = get_path(merge(defaults(), JObj{fields: [("name", JStr{s: "web"})]}), "name") == some(JStr{s: "web"})
+
+test path = get_path(defaults(), "db.pool") == some(JNum{n: 5}) and get_path(defaults(), "db.user") == none
+
+test renders = render(JObj{fields: [("a", JArr{items: [JNum{n: 1}, JBool{b: true}, JNull]})]}) == "\{\"a\":[1,true,null]}"
+
+test require_missing = catch do
+  _ = require(defaults(), ["name", "db.user", "nope"])
+  false
+| MissingKey{path} => path == "db.user"
+
+test require_ok = catch require_passes(defaults(), ["name", "db.pool"])
+| MissingKey{path} => false
+
+test rfc_arrays_replaced = render(merge(obj([("a", JArr{items: [JNum{n: 1}, JNum{n: 2}]})]), obj([("a", JArr{items: [JNum{n: 3}]})]))) == "\{\"a\":[3]}"
+
+test rfc_basic = render(merge(obj([("a", JNum{n: 1}), ("b", JNum{n: 2})]), obj([("a", JNull), ("c", JNum{n: 3})]))) == "\{\"b\":2,\"c\":3}"
+
+test rfc_nested = render(merge(obj([("a", obj([("x", JNum{n: 1}), ("y", JNum{n: 2})]))]), obj([("a", obj([("y", JNull), ("z", JNum{n: 3})]))]))) == "\{\"a\":\{\"x\":1,\"z\":3}}"
+
+test rfc_nonobj_target = render(merge(JNum{n: 1}, obj([("a", JNum{n: 1})]))) == "\{\"a\":1}" and merge(obj([("a", JNum{n: 1})]), JNum{n: 5}) == JNum{n: 5}
+
+test rfc_null_in_new_obj = render(merge(obj([]), obj([("a", obj([("b", JNull), ("c", JNum{n: 1})]))]))) == "\{\"a\":\{\"c\":1}}"

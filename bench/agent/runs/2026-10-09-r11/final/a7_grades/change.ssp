@@ -1,0 +1,34 @@
+fn average(s: Student) -> Int
+= if s.scores.len == 0 then 0 else s.scores.sum / s.scores.len
+
+fn letter(avg: Int) -> Str
+= if avg >= 90 then "A" else if avg >= 80 then "B" else if avg >= 70 then "C" else if avg >= 60 then "D" else "F"
+
+fn ranking(ss: List[Student]) -> List[Str]
+= ss.sort_by(s => (-average(s), s.name)).map(_.name)
+
+fn drop_lowest(s: Student) -> Student
+= if s.scores.len < 2 then s else do
+  lo = s.scores.sort.first.or(0)
+  i = s.scores.index_of(lo).or(0)
+  s with scores := s.scores.enumerate.filter(p => p.0 != i).map(p => p.1)
+
+fn curve(ss: List[Student], pts: Int where _ >= 0) -> List[Student]
+= ss.map(s => s with scores := s.scores.map(x => if x + pts > 100 then 100 else x + pts))
+
+fn honor_roll(ss: List[Student]) -> List[Str]
+= ss.filter(s => grade(drop_lowest(s)) == "A").map(_.name).sort
+
+test avg_empty = average(Student{name: "e", scores: []}) == 0
+
+test letter_edges = letter(90) == "A" && letter(80) == "B" && letter(70) == "C" && letter(60) == "D" && letter(59) == "F"
+
+test rank_tie = ranking([Student{name: "b", scores: [80]}, Student{name: "a", scores: [80]}, Student{name: "c", scores: [90]}]) == ["c", "a", "b"]
+
+test drop_basic = drop_lowest(Student{name: "x", scores: [5, 3, 9, 3]}).scores == [5, 9, 3]
+
+test drop_single = drop_lowest(Student{name: "x", scores: [5]}).scores == [5]
+
+test curve_cap = curve([Student{name: "x", scores: [50, 98]}], 5).map(_.scores) == [[55, 100]]
+
+test honor = honor_roll([Student{name: "z", scores: [95, 95, 10]}, Student{name: "a", scores: [90, 90]}, Student{name: "m", scores: [50, 60]}]) == ["a", "z"]

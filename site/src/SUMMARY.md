@@ -8,6 +8,7 @@
 - [SSPUR for AI agents](agents.md)
   - [MCP setup](docs/mcp.md)
   - [Agent reference](docs/agent-spec.md)
+    - [Agent reference, more](docs/agent-spec-more.md)
 
 # Reference
 

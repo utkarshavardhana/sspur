@@ -2,7 +2,7 @@
 
 The standard library is built in: there is nothing to import, and a definition of your own with the same name takes precedence over a builtin. Every function behaves identically in the interpreter and in native code, which the test suite and the differential fuzzer check. Anything that touches the outside world is behind an effect, so it shows up in signatures.
 
-The method-by-method list is in the [Builtins section of the language reference](docs/07-reference-v0.md#builtins). The compact version that agents read is in the [agent reference](docs/agent-spec.md#builtins). [ADR 0018](docs/adr/0018-std-library.md) records every design choice, from the deque that is just `List` to the regex engine that cannot backtrack, and the [systems layer](docs/05-systems-layer.md) compares the coverage with the C++ standard library area by area.
+The method-by-method list is in the [Builtins section of the language reference](docs/07-reference-v0.md#builtins). The compact version that agents read is in the [agent reference (`spec --more`)](docs/agent-spec-more.md#builtins). [ADR 0018](docs/adr/0018-std-library.md) records every design choice, from the deque that is just `List` to the regex engine that cannot backtrack, and the [systems layer](docs/05-systems-layer.md) compares the coverage with the C++ standard library area by area.
 
 ## Overview
 

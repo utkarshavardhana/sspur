@@ -19,7 +19,7 @@ fn fresh(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn failing_tests_show_the_values_in_both_tiers() {
-    let d = fresh("explain");
+    let d = fresh("values");
     let src = "type E = Bad{n: Int}\n\nfn g(x: Int) -> Int ! fail[E]\n= if x > 3 then raise Bad{n: x} else x\n\nfn c(lo: Int, hi: Int, s: Str) -> Int\n  pre lo <= hi\n= hi - lo\n\ntest t_eq = two() + 5 == 8\ntest t_and = two() == 2 and [two()].contains(3)\ntest t_catch = catch g(5) == 5\n  | Bad{n} => n == 4\ntest t_raised = catch g(9) == 9\n  | _ => false\ntest t_pre = c(3, 0, \"a\") == 0\ntest t_do = do\n  x = \"a{two()}\"\n  x == \"a3\"\n";
     let want = "FAIL  t_and: [2].contains(3) is false\nFAIL  t_catch: raised Bad{n: 5}: left 5, right 4\nFAIL  t_do: left \"a2\", right \"a3\"\nFAIL  t_eq: left 7, right 8\nFAIL  t_pre: contract violated: pre lo <= hi in c (lo = 3, hi = 0)\nFAIL  t_raised: raised Bad{n: 9}\n1 passed, 6 failed";
     for tier in ["--interp", "--strict-native"] {

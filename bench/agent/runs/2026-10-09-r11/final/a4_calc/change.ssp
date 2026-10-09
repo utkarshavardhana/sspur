@@ -1,0 +1,69 @@
+type CalcErr = Unbound{name: Str} | DivByZero
+
+type Expr = Num{v: Int} | Var{name: Str} | Add{a: Expr, b: Expr} | Mul{a: Expr, b: Expr} | Sub{a: Expr, b: Expr} | Div{a: Expr, b: Expr}
+
+fn eval(e: Expr, env: List[(Str, Int)]) -> Int ! fail[CalcErr]
+= match e
+| Num{v} => v
+| Var{name} => lookup(env, name).ok_or(Unbound{name: name})
+| Add{a, b} => eval(a, env) + eval(b, env)
+| Mul{a, b} => eval(a, env) * eval(b, env)
+| Sub{a, b} => eval(a, env) - eval(b, env)
+| Div{a, b} => safe_div(eval(a, env), eval(b, env))
+
+fn safe_div(x: Int, y: Int) -> Int ! fail[CalcErr]
+= do
+  if y == 0 then raise DivByZero
+  x / y
+
+fn run(e: Expr, env: List[(Str, Int)]) -> Str
+= catch "{show(e)} = {eval(e, env)}"
+| Unbound{name} => "{show(e)} = error: unbound {name}"
+| DivByZero => "{show(e)} = error: division by zero"
+
+fn show(e: Expr) -> Str
+= match e
+| Num{v} => v.str
+| Var{name} => name
+| Add{a, b} => "({show(a)} + {show(b)})"
+| Mul{a, b} => "{show(a)} * {show(b)}"
+| Sub{a, b} => "({show(a)} - {show(b)})"
+| Div{a, b} => "{show(a)} / {show(b)}"
+
+fn simplify(e: Expr) -> Expr
+= match e
+| Add{a: Num{v: 0}, b} => simplify(b)
+| Add{a, b: Num{v: 0}} => simplify(a)
+| Mul{a: Num{v: 1}, b} => simplify(b)
+| Mul{a, b: Num{v: 1}} => simplify(a)
+| Sub{a, b: Num{v: 0}} => simplify(a)
+| Div{a, b: Num{v: 1}} => simplify(a)
+| Add{a, b} => Add{a: simplify(a), b: simplify(b)}
+| Mul{a, b} => Mul{a: simplify(a), b: simplify(b)}
+| Sub{a, b} => Sub{a: simplify(a), b: simplify(b)}
+| Div{a, b} => Div{a: simplify(a), b: simplify(b)}
+| _ => e
+
+fn var_names(e: Expr) -> List[Str]
+= match e
+| Num{v} => []
+| Var{name} => [name]
+| Add{a, b} => merge_names(var_names(a), var_names(b))
+| Mul{a, b} => merge_names(var_names(a), var_names(b))
+| Sub{a, b} => merge_names(var_names(a), var_names(b))
+| Div{a, b} => merge_names(var_names(a), var_names(b))
+
+fn merge_names(xs: List[Str], ys: List[Str]) -> List[Str]
+= ys.fold(xs, (acc, y) => if acc.contains(y) then acc else acc.push(y))
+
+test sub_div_eval = eval(Sub{a: Num{v: 9}, b: Div{a: Num{v: 7}, b: Num{v: 2}}}, []) == 6
+
+test run_div_zero = run(Div{a: Num{v: 1}, b: Sub{a: Var{name: "x"}, b: Num{v: 3}}}, [("x", 3)]) == "1 / (x - 3) = error: division by zero"
+
+test run_sub = run(Sub{a: Num{v: 5}, b: Num{v: 2}}, []) == "(5 - 2) = 3"
+
+test simplify_sub_div = show(simplify(Sub{a: Div{a: Var{name: "x"}, b: Num{v: 1}}, b: Num{v: 0}})) == "x"
+
+test simplify_children = show(simplify(Div{a: Sub{a: Var{name: "x"}, b: Num{v: 0}}, b: Add{a: Num{v: 0}, b: Var{name: "y"}}})) == "x / y"
+
+test var_names_order = var_names(Add{a: Var{name: "b"}, b: Mul{a: Var{name: "a"}, b: Sub{a: Var{name: "b"}, b: Div{a: Var{name: "c"}, b: Num{v: 1}}}}}) == ["b", "a", "c"]

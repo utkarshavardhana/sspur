@@ -1,0 +1,70 @@
+type CfgErr = Missing{key: Str} | NotInt{key: Str, value: Str} | NotBool{key: Str, value: Str}
+
+fn lookup(cfg: List[Entry], key: Str) -> Opt[Str]
+= cfg.filter(_.key == key).last.map(_.value)
+
+fn parse_line(line: Str) -> Opt[Entry]
+= do
+  t = line.trim
+  parts = t.split("=")
+  key = parts[0].trim
+  value = parts.drop(1).join("=").trim
+  if t.starts_with("#") then none else if parts.len < 2 then none else if key.len == 0 then none else some(Entry{key: key, value: value})
+
+fn all_digits(s: Str) -> Bool
+= s.len > 0 && s.chars.all(c => "0123456789".contains(c))
+
+fn is_int_text(s: Str) -> Bool
+= all_digits(if s.starts_with("-") then s.drop(1) else s)
+
+fn int_of(key: Str, v: Str) -> Int ! fail[CfgErr]
+= do
+  if !is_int_text(v) then raise NotInt{key: key, value: v}
+  v.to_int.ok_or(NotInt{key: key, value: v})
+
+fn get_int(cfg: List[Entry], key: Str) -> Int ! fail[CfgErr]
+= int_of(key, get_str(cfg, key))
+
+fn bool_of(key: Str, v: Str) -> Bool ! fail[CfgErr]
+= do
+  l = v.lower
+  if ["true", "yes", "1"].contains(l) then true
+  else if ["false", "no", "0"].contains(l) then false
+  else raise NotBool{key: key, value: v}
+
+fn get_bool(cfg: List[Entry], key: Str, default: Bool) -> Bool ! fail[CfgErr]
+= do
+  o = lookup(cfg, key)
+  if o.is_some then bool_of(key, o.get) else default
+
+test trim_all = parse(" a = b ; c=d ").map(_.key) == ["a", "c"] && lookup(parse(" a = b "), "a") == some("b")
+
+test skip_bad = parse("novalue; =x;a=1; ;#c=2").len == 1
+
+test first_eq = lookup(parse("url=a=b"), "url") == some("a=b")
+
+test comments = parse("#a=1;  # b=2;c=3").map(_.key) == ["c"]
+
+test last_wins = lookup(parse("a=1;a=2"), "a") == some("2") && keys(parse("a=1;b=2;a=3")) == ["a", "b"]
+
+test int_ok = get_int(parse("p=8080;n=-5"), "p") == 8080 && get_int(parse("p=8080;n=-5"), "n") == -5
+
+test int_missing = catch get_int(parse("a=1"), "z") == 0
+| Missing{key} => key == "z"
+| _ => false
+
+test int_bad = catch get_int(parse("a=x1;b=-;c=1.5"), "a") == 0
+| NotInt{key, value} => key == "a" && value == "x1"
+| _ => false
+
+test int_dash = catch get_int(parse("b=-"), "b") == 0
+| NotInt{key, value} => value == "-"
+| _ => false
+
+test bool_ok = get_bool(parse("a=TRUE;b=No;c=1;d=0;e=Yes"), "a", false) && !get_bool(parse("b=No"), "b", true) && get_bool(parse("c=1"), "c", false) && !get_bool(parse("d=0"), "d", true) && get_bool(parse("e=Yes"), "e", false)
+
+test bool_default = get_bool(parse("a=1"), "z", true) && !get_bool(parse("a=1"), "z", false)
+
+test bool_bad = catch get_bool(parse("a=maybe"), "a", true)
+| NotBool{key, value} => key == "a" && value == "maybe"
+| _ => false

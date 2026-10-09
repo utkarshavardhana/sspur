@@ -5,5 +5,6 @@
  "sspur/a4_calc": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a3193c6f2c52e98da.jsonl",
  "sspur/a5_orders": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-aba806bd5b4bd4e0c.jsonl",
  "sspur/a6_todo": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-ab314c99bf67f27b3.jsonl",
- "sspur/a7_grades": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a6c0283efcfa042ed.jsonl"
+ "sspur/a7_grades": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a6c0283efcfa042ed.jsonl",
+ "sspur/a8_config": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-ad66d768b341e8cc8.jsonl"
 }

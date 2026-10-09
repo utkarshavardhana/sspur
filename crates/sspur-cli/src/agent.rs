@@ -77,7 +77,10 @@ fn tx_text_for(r: &TxResult, named: Option<&BTreeSet<String>>) -> String {
     let touched: BTreeSet<String> = shown.iter().map(|c| c.path.clone()).collect();
     let mut lines = vec![if shown.is_empty() { "ok, no changes".to_string() } else { format!("ok {}", shown.iter().map(|c| change_text(c)).collect::<Vec<_>>().join(" ")) }];
     if !r.notes.is_empty() {
-        lines.push(format!("stored as: {}", r.notes.join(", ")));
+        const SHOWN_NOTES: usize = 3;
+        let more = r.notes.len().saturating_sub(SHOWN_NOTES);
+        let tail = if more > 0 { format!(", and {more} more") } else { String::new() };
+        lines.push(format!("stored as: {}{tail}", r.notes[..r.notes.len().min(SHOWN_NOTES)].join(", ")));
     }
     lines.extend(diag_lines(src, &r.diags, Some(&touched)));
     lines.join("\n")

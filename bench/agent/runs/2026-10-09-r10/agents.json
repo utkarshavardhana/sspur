@@ -14,5 +14,6 @@
  "sspur/b5_deps": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-ad350570b0a40ad8f.jsonl",
  "sspur/b6_adventure": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a9df6253909994232.jsonl",
  "sspur/b7_ledger": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a2c8516701541e189.jsonl",
- "sspur/b8_merge": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a7ccdb6005b2c2395.jsonl"
+ "sspur/b8_merge": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a7ccdb6005b2c2395.jsonl",
+ "sspur/s1_shop": "/Users/utkrsh/.claude/projects/-Users-utkrsh/63ed1ca4-fdb8-431d-88ec-be0e8b925dde/subagents/agent-a6688e5ff46b00874.jsonl"
 }

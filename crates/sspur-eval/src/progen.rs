@@ -662,8 +662,10 @@ impl Gen {
                 self.line(ind, "else do");
                 self.block(cx, ind + 1, 1, None, loop_depth + 1);
             }
-        } else if k < 74 {
+        } else if k < 71 {
             self.multi(cx, ind);
+        } else if k < 74 {
+            self.block_lambda(cx, ind);
         } else if k < 79 {
             let ints: Vec<Var> = cx.vars.iter().filter(|v| v.ty == T::Int && (v.mutable || self.r.chance(50))).cloned().collect();
             if !ints.is_empty() {
@@ -702,6 +704,69 @@ impl Gen {
             self.line(ind, &format!("var {name} = {e}"));
             self.bind(cx, name, T::Int, true);
         }
+    }
+
+    /// A statement whose lambda argument has a `do` block body.
+    fn block_lambda(&mut self, cx: &mut Cx, ind: usize) {
+        let name = self.fresh("bl");
+        let (x, y) = (self.fresh("x"), self.fresh("y"));
+        let vars: Vec<Var> = cx.vars.iter().filter(|v| v.ty != T::Res && !cx.moved.contains(&v.name)).cloned().collect();
+        let mut inner = Cx { vars, ask_ok: cx.ask_ok, lambda: true, no_risky: cx.no_risky, ..Default::default() };
+        let int = |name: &String| Var { name: name.clone(), ty: T::Int, mutable: false, assignable: false, index_of: None, eff: vec![] };
+        let kind = self.r.below(5);
+        let (head, ty) = match kind {
+            0 => {
+                let k = self.r.range(0, 400);
+                (format!("{name} = (0..{k}).map({x} => do"), T::Int)
+            }
+            1 => {
+                let (l, a) = (self.list(cx, 1), self.int_atom(cx));
+                let acc = self.fresh("a");
+                inner.vars.push(int(&acc));
+                (format!("{name} = {l}.fold({a}, ({acc}, {x}) => do"), T::Int)
+            }
+            _ => {
+                let l = self.list(cx, 1);
+                (format!("{name} = {l}.map({x} => do"), T::List)
+            }
+        };
+        self.line(ind, &head);
+        inner.vars.push(int(&x));
+        let b = ind + 1;
+        if kind == 0 {
+            let (m, c) = (self.r.range(1, 9), self.r.range(2, 40));
+            self.line(b, &format!("{y} = ({x} * {m}) % {c}"));
+            let t = self.r.range(0, 9);
+            let f = self.r.range(0, 4);
+            self.line(b, &format!("if {y} > {t} then {y} - {t} else 0).filter(_ > {f}).sum"));
+            self.bind(cx, name, ty, false);
+            return;
+        }
+        let e = self.int(&mut inner, 2);
+        self.line(b, &format!("{y} = {e}"));
+        inner.vars.push(int(&y));
+        let acc: Vec<String> = cx.vars.iter().filter(|v| v.assignable && v.ty == T::Int).map(|v| v.name.clone()).collect();
+        if !acc.is_empty() && self.r.chance(40) {
+            let v = acc[self.r.below(acc.len() as u64) as usize].clone();
+            self.line(b, &format!("{v} := ({v} + {y}) % 1000003"));
+        }
+        if self.r.chance(20) {
+            self.line(b, &format!("log(\"bl {{{y}}}\")"));
+            inner.eff.insert("log".into());
+        }
+        let close = if self.r.chance(25) { "\n".to_string() + &"  ".repeat(ind) + ")" } else { ")".to_string() };
+        if kind == 4 {
+            let (e1, e2) = (self.int(&mut inner, 1), self.int(&mut inner, 1));
+            let k = self.r.range(2, 5);
+            self.line(b, &format!("match {y} % {k}"));
+            self.line(b, &format!("| 0 => {e1}"));
+            self.line(b, &format!("| _ => {e2}{close}"));
+        } else {
+            let e = self.int(&mut inner, 2);
+            self.line(b, &format!("{e}{close}"));
+        }
+        cx.eff.extend(inner.eff);
+        self.bind(cx, name, ty, false);
     }
 
     fn ensure_acc(&mut self, cx: &mut Cx, ind: usize) {

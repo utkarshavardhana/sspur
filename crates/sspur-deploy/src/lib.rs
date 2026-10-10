@@ -78,6 +78,7 @@ pub struct Service {
     pub handlers: Vec<Handler>,
     pub backfills: Vec<Handler>,
     pub program: CProgram,
+    pub host_src: Option<String>,
     pub layouts: Layouts,
     pub source: String,
     pub hash: String,
@@ -179,6 +180,7 @@ pub fn analyze(src: &str) -> Result<Service, String> {
     let source = if extra.is_empty() { src.to_string() } else { format!("{}\n\n{extra}\n", src.trim_end()) };
     let (m2, check2) = load(&source).map_err(|e| format!("generated validators do not check (compiler bug):\n{e}"))?;
     let program = sspur_native::cgen::c_program(&m2, &check2)?;
+    let host_src = if sspur_native::cgen::win::on() { Some(sspur_native::cgen::c_program_host(&m2, &check2)?.src) } else { None };
     let stores = stores_of(&m, &check, &fn_defs)?;
     let migfns: Vec<&String> = stores.iter().flat_map(|s| s.migs.iter().chain(&s.backs)).map(|g| &g.fun).collect();
     for h in &handlers {
@@ -202,7 +204,7 @@ pub fn analyze(src: &str) -> Result<Service, String> {
         })
         .collect();
     let hash = blake3::hash(source.as_bytes()).to_hex()[..16].to_string();
-    Ok(Service { name: svc.name.clone(), stores, routes, handlers, backfills, layouts: Layouts::from_check(&check2), program, source, hash })
+    Ok(Service { name: svc.name.clone(), stores, routes, handlers, backfills, layouts: Layouts::from_check(&check2), program, host_src, source, hash })
 }
 
 fn stores_of(m: &Module, check: &CheckOutput, fns: &HashMap<&str, &FnDef>) -> Result<Vec<Store>, String> {
@@ -293,10 +295,15 @@ pub fn write_plan(p: &Plan, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Builds the service's bootstrap for this machine, for `sspur deploy local`.
+pub fn build_local(svc: &Service) -> Result<PathBuf, String> {
+    build_host(&crt::generate_host(svc)?, &cache_dir())
+}
+
 pub fn build_host(c_src: &str, dir: &Path) -> Result<PathBuf, String> {
     let key = blake3::hash(c_src.as_bytes()).to_hex()[..24].to_string();
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    let bin = dir.join(format!("bootstrap-{key}"));
+    let bin = dir.join(format!("bootstrap-{key}{}", std::env::consts::EXE_SUFFIX));
     if bin.exists() {
         return Ok(bin);
     }
@@ -304,9 +311,11 @@ pub fn build_host(c_src: &str, dir: &Path) -> Result<PathBuf, String> {
     let uniq = format!("{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     let c = dir.join(format!("bootstrap-{key}-{uniq}.c"));
     std::fs::write(&c, c_src).map_err(|e| e.to_string())?;
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".into());
+    let cc = if cfg!(windows) { sspur_native::cgen::flags::cc() } else { std::env::var("CC").unwrap_or_else(|_| "cc".into()) };
     let tmp = dir.join(format!("bootstrap-{key}-{uniq}.tmp"));
-    let out = std::process::Command::new(&cc).args(["-O2", "-w", "-o"]).arg(&tmp).arg(&c).args(["-lcurl", "-lpthread", "-lm"]).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    let libs: Vec<String> = if cfg!(windows) { std::iter::once("-lws2_32".to_string()).chain(sspur_native::cgen::flags::sys_libs()).collect() } else { ["-lcurl", "-lpthread", "-lm"].map(String::from).to_vec() };
+    let out = std::process::Command::new(&cc).args(["-O2", "-w", "-o"]).arg(&tmp).arg(&c).args(libs).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    sspur_native::cgen::flags::drop_link_leftovers(&tmp);
     let _ = std::fs::remove_file(&c);
     if !out.status.success() {
         return Err(format!("{cc} failed:\n{}", String::from_utf8_lossy(&out.stderr).lines().take(20).collect::<Vec<_>>().join("\n")));
@@ -316,7 +325,7 @@ pub fn build_host(c_src: &str, dir: &Path) -> Result<PathBuf, String> {
 }
 
 pub fn cache_dir() -> PathBuf {
-    std::env::var_os("SSPUR_CACHE").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/sspur"))).unwrap_or_else(std::env::temp_dir).join("deploy")
+    sspur_syntax::cache_root().unwrap_or_else(std::env::temp_dir).join("deploy")
 }
 
 pub fn pascal(s: &str) -> String {

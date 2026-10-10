@@ -19,8 +19,8 @@ fn tmp(tag: &str) -> PathBuf {
 
 fn build(s: &str) -> (Service, PathBuf) {
     let svc = analyze(s).unwrap_or_else(|e| panic!("{e}"));
-    let p = plan(&svc).unwrap();
-    let bin = build_host(&p.files["bootstrap.c"], &tmp("bin")).unwrap();
+    plan(&svc).unwrap();
+    let bin = build_host(&sspur_deploy::crt::generate_host(&svc).unwrap(), &tmp("bin")).unwrap();
     (svc, bin)
 }
 

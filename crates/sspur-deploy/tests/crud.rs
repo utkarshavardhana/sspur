@@ -123,8 +123,8 @@ fn template_passes_cfn_lint_if_installed() {
 #[test]
 fn crud_over_http_under_derived_iam() {
     let svc = analyze(&example()).unwrap();
-    let p = plan(&svc).unwrap();
-    let bin = build_host(&p.files["bootstrap.c"], &tmp("bin")).unwrap();
+    plan(&svc).unwrap();
+    let bin = build_host(&sspur_deploy::crt::generate_host(&svc).unwrap(), &tmp("bin")).unwrap();
     let logs = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let l2 = logs.clone();
     let local = start(&svc, &bin, 0, Arc::new(move |s: &str| l2.lock().unwrap().push(s.to_string()))).unwrap();
@@ -191,8 +191,8 @@ fn local_emulator_enforces_the_policy() {
     let mut svc = analyze(&example()).unwrap();
     let h = svc.handlers.iter_mut().find(|h| h.name == "create").unwrap();
     h.db.retain(|(_, op)| op != "put");
-    let p = plan(&svc).unwrap();
-    let bin = build_host(&p.files["bootstrap.c"], &tmp("bin2")).unwrap();
+    plan(&svc).unwrap();
+    let bin = build_host(&sspur_deploy::crt::generate_host(&svc).unwrap(), &tmp("bin2")).unwrap();
     let local = start(&svc, &bin, 0, Arc::new(|_: &str| {})).unwrap();
     let (s, _) = request(local.port, "POST", "/items", Some(r#"{"id":"a","name":"a","qty":1,"tags":[]}"#)).unwrap();
     assert_eq!(s, 500);

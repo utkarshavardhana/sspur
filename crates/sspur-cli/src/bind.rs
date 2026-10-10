@@ -6,6 +6,8 @@ const RESERVED: &[&str] = &["log", "some", "ok", "err", "none", "min", "max", "s
 
 fn base(t: &str) -> Option<&'static str> {
     Some(match t {
+        "long" | "long int" | "signed long" | "signed long int" if cfg!(windows) => "I32",
+        "unsigned long" | "unsigned long int" if cfg!(windows) => "U32",
         "char" | "signed char" | "int8_t" => "I8",
         "unsigned char" | "uint8_t" => "U8",
         "short" | "short int" | "signed short" | "signed short int" | "int16_t" => "I16",
@@ -105,7 +107,7 @@ fn param_name(name: &str, i: usize) -> String {
 }
 
 pub fn bind(header: &str, lib: Option<&str>) -> Result<String, String> {
-    let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
+    let cc = sspur_native::cgen::flags::cc();
     let out = std::process::Command::new(&cc).args(["-Xclang", "-ast-dump=json", "-fsyntax-only", "-x", "c"]).arg(header).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
         return Err(format!("{cc} could not parse {header}: {}", String::from_utf8_lossy(&out.stderr).lines().take(4).collect::<Vec<_>>().join(" | ")));

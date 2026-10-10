@@ -36,7 +36,7 @@ fn built(svc: &sspur_deploy::Service, file: &str) -> Result<(sspur_deploy::Plan,
         eprintln!("{file}: {e}");
         ExitCode::FAILURE
     })?;
-    let bin = sspur_deploy::build_host(&plan.files["bootstrap.c"], &sspur_deploy::cache_dir()).map_err(|e| {
+    let bin = sspur_deploy::build_local(svc).map_err(|e| {
         eprintln!("{e}");
         ExitCode::FAILURE
     })?;
@@ -84,12 +84,12 @@ fn run_inner(pos: &[String], flags: &[String]) -> Result<ExitCode, ExitCode> {
                 eprintln!("{e}");
                 return Ok(ExitCode::FAILURE);
             }
-            let host = match sspur_deploy::build_host(&plan.files["bootstrap.c"], &sspur_deploy::cache_dir()) {
+            let host = match sspur_deploy::build_local(&svc) {
                 Ok(bin) => {
-                    let dst = dir.join("local/bootstrap");
+                    let dst = dir.join(format!("local/bootstrap{}", std::env::consts::EXE_SUFFIX));
                     let _ = std::fs::create_dir_all(dir.join("local"));
                     match std::fs::copy(&bin, &dst) {
-                        Ok(_) => format!("local/bootstrap ({} build)", std::env::consts::OS),
+                        Ok(_) => format!("local/bootstrap{} ({} build)", std::env::consts::EXE_SUFFIX, std::env::consts::OS),
                         Err(e) => format!("host build not copied: {e}"),
                     }
                 }

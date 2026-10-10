@@ -429,7 +429,7 @@ fn program_cmd(cmd: &str, args: &Args) -> ExitCode {
                     if let Some(e) = &c.fallback {
                         native_failed(args, &format!("per-definition native build failed {e}"), "using the whole-program build");
                     }
-                    println!("built {} native functions ({}; cached under ~/.cache/sspur/native)", c.functions.len(), describe_opts(&sspur_native::cgen::flags::current()));
+                    println!("built {} native functions ({}; cached under {})", c.functions.len(), describe_opts(&sspur_native::cgen::flags::current()), if cfg!(windows) { r"%LOCALAPPDATA%\sspur\native" } else { "~/.cache/sspur/native" });
                     ExitCode::SUCCESS
                 }
                 Err(e) => {
@@ -646,7 +646,7 @@ fn build_bare(l: &Loaded, label: &str, args: &Args) -> ExitCode {
 fn export_c(l: &Loaded, label: &str, args: &Args) -> ExitCode {
     let stem = std::path::Path::new(label).file_stem().map_or("out".into(), |s| s.to_string_lossy().into_owned());
     let out = args.val("-o").cloned().unwrap_or_else(|| format!("lib{stem}"));
-    let out = out.trim_end_matches(".a").trim_end_matches(".so").trim_end_matches(".dylib").to_string();
+    let out = out.trim_end_matches(".a").trim_end_matches(".so").trim_end_matches(".dylib").trim_end_matches(".lib").trim_end_matches(".dll").to_string();
     let base = std::path::Path::new(&out).file_name().map_or(String::new(), |s| s.to_string_lossy().into_owned());
     let prefix: String = args.val("--prefix").cloned().unwrap_or_else(|| base.strip_prefix("lib").unwrap_or(&base).to_string()).chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
     let prefix = if prefix.is_empty() || prefix.starts_with(|c: char| c.is_ascii_digit()) { format!("s{prefix}") } else { prefix };
@@ -658,22 +658,24 @@ fn export_c(l: &Loaded, label: &str, args: &Args) -> ExitCode {
         }
     };
     let shared = args.has("--shared");
-    let lib = if shared { format!("{out}.{}", std::env::consts::DLL_EXTENSION) } else { format!("{out}.a") };
+    let static_ext = if cfg!(windows) { "lib" } else { "a" };
+    let lib = if shared { format!("{out}.{}", std::env::consts::DLL_EXTENSION) } else { format!("{out}.{static_ext}") };
     let header = format!("{out}.h");
     let csrc = format!("{out}.sspur.c");
-    let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
+    let cc = sspur_native::cgen::flags::cc();
+    let pic = sspur_native::cgen::flags::pic();
     let run = |c: &mut std::process::Command| -> Result<(), String> {
         let o = c.output().map_err(|e| format!("cannot run {cc}: {e}"))?;
         if o.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&o.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")) }
     };
     let built = std::fs::write(&csrc, &ex.source).map_err(|e| e.to_string()).and_then(|_| {
         if shared {
-            run(std::process::Command::new(&cc).args(["-O2", "-shared", "-fPIC", "-w", "-o", &lib, &csrc]).args(&ex.links))
+            run(std::process::Command::new(&cc).args(["-O2", "-shared", "-w"]).args(pic).args(["-o", &lib, &csrc]).args(&ex.links).args(sspur_native::cgen::flags::sys_libs()))
         } else {
             let obj = format!("{out}.o");
-            let r = run(std::process::Command::new(&cc).args(["-O2", "-c", "-fPIC", "-w", "-o", &obj, &csrc])).and_then(|_| {
+            let r = run(std::process::Command::new(&cc).args(["-O2", "-c", "-w"]).args(pic).args(["-o", &obj, &csrc])).and_then(|_| {
                 let _ = std::fs::remove_file(&lib);
-                run(std::process::Command::new("ar").args(["rcs", &lib, &obj]))
+                run(std::process::Command::new(archiver()).args(["rcs", &lib, &obj]))
             });
             let _ = std::fs::remove_file(&obj);
             r
@@ -693,15 +695,27 @@ fn export_c(l: &Loaded, label: &str, args: &Args) -> ExitCode {
         println!("skip    {f}  ({why})");
     }
     let dir = std::path::Path::new(&out).parent().map(|p| p.display().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(|| ".".into());
-    let mut flags = vec![format!("-L{dir}"), format!("-l{}", base.strip_prefix("lib").unwrap_or(&base))];
-    let sys: &[&str] = if cfg!(target_os = "linux") { &["-lm", "-lpthread"] } else { &[] };
-    for a in ex.links.iter().map(String::as_str).chain(sys.iter().copied()) {
+    let mut flags = if cfg!(windows) { vec![format!("{out}.lib")] } else { vec![format!("-L{dir}"), format!("-l{}", base.strip_prefix("lib").unwrap_or(&base))] };
+    let sys: Vec<String> = if cfg!(target_os = "linux") { vec!["-lm".into(), "-lpthread".into()] } else if cfg!(windows) { sspur_native::cgen::flags::sys_libs() } else { vec![] };
+    for a in ex.links.iter().chain(&sys).map(String::as_str) {
         if !flags.iter().any(|f| f == a) {
             flags.push(a.to_string());
         }
     }
     println!("wrote {lib} and {header}; link with {}", flags.join(" "));
     ExitCode::SUCCESS
+}
+
+fn archiver() -> String {
+    if let Ok(a) = std::env::var("AR") {
+        return a;
+    }
+    if !cfg!(windows) {
+        return "ar".into();
+    }
+    let cc = std::path::PathBuf::from(sspur_native::cgen::flags::cc());
+    let near = cc.parent().map(|d| d.join("llvm-ar.exe")).filter(|p| p.is_file());
+    near.or_else(|| sspur_native::cgen::flags::on_path("llvm-ar")).map_or_else(|| "llvm-ar".into(), |p| p.display().to_string())
 }
 
 fn explain_opt(l: &Loaded, all: bool) -> ExitCode {
@@ -897,6 +911,7 @@ fn host_build_opts(cmd_name: &str, label: &str, text: &str, args: &Args) -> Resu
 fn build_llvm(l: &Loaded, label: &str, args: &Args) -> ExitCode {
     let stem = std::path::Path::new(label).file_stem().map_or("prog".into(), |s| s.to_string_lossy().into_owned());
     let out = std::path::PathBuf::from(args.val("-o").cloned().unwrap_or(stem));
+    let out = if cfg!(windows) && out.extension().is_none() { out.with_extension(std::env::consts::EXE_EXTENSION) } else { out };
     let opt = if args.has("--O3") { "-O3" } else { "-O2" };
     match sspur_native::llvm::emit(&l.module, &l.check).and_then(|ir| sspur_native::llvm::build(&ir, &out, opt).map(|d| (ir, d))) {
         Ok((ir, dir)) => {

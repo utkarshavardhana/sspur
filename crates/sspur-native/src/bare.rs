@@ -620,12 +620,16 @@ fn candidates(env: &str, names: &[&str]) -> Vec<PathBuf> {
 }
 
 pub fn toolchain(arch: &str) -> Result<Toolchain, String> {
+    let host = PathBuf::from(crate::cgen::flags::cc());
+    let near = |n: &str| host.parent().filter(|d| !d.as_os_str().is_empty()).map(|d| d.join(format!("{n}{}", std::env::consts::EXE_SUFFIX)));
     let cc = candidates("SSPUR_BARE_CC", &["clang", "/opt/homebrew/opt/llvm/bin/clang", "/usr/local/opt/llvm/bin/clang", "/usr/bin/clang"])
         .into_iter()
+        .chain(cfg!(windows).then(|| host.clone()))
         .find(|c| runs(c, &["-print-targets"]).is_some_and(|t| t.lines().any(|l| l.trim_start().starts_with(if arch == "thumbv7em" { "thumb" } else { arch }))))
         .ok_or_else(|| format!("toolchain not found: no clang with the {arch} backend (install LLVM, e.g. 'brew install llvm', or set SSPUR_BARE_CC)"))?;
     let ld = candidates("SSPUR_LLD", &["ld.lld", "/opt/homebrew/opt/lld/bin/ld.lld", "/opt/homebrew/opt/llvm/bin/ld.lld", "/usr/local/opt/lld/bin/ld.lld", "/usr/local/opt/llvm/bin/ld.lld"])
         .into_iter()
+        .chain(near("ld.lld").filter(|_| cfg!(windows)))
         .find(|c| runs(c, &["--version"]).is_some())
         .ok_or("toolchain not found: no ld.lld (install it, e.g. 'brew install lld', or set SSPUR_LLD)")?;
     Ok(Toolchain { cc, ld })
@@ -692,12 +696,14 @@ mod tests {
 
     #[test]
     fn soft_double_matches_hardware_bit_for_bit() {
-        if Command::new("clang").arg("--version").output().is_err() {
+        let cc = crate::cgen::flags::cc();
+        if Command::new(&cc).arg("--version").output().is_err() {
             return;
         }
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/bare_softfp_test.c");
-        let exe = std::env::temp_dir().join(format!("sspur_softfp_{}", std::process::id()));
-        let o = Command::new("clang").args(["-O2", "-ffp-contract=off", "-o"]).arg(&exe).arg(&src).arg("-lm").output().unwrap();
+        let exe = std::env::temp_dir().join(format!("sspur_softfp_{}{}", std::process::id(), std::env::consts::EXE_SUFFIX));
+        let lm: &[&str] = if cfg!(windows) { &[] } else { &["-lm"] };
+        let o = Command::new(&cc).args(["-O2", "-ffp-contract=off", "-o"]).arg(&exe).arg(&src).args(lm).args(crate::cgen::flags::sys_libs()).output().unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         let r = Command::new(&exe).output().unwrap();
         let _ = std::fs::remove_file(&exe);

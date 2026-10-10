@@ -50,10 +50,7 @@ fn binary() -> Option<String> {
 impl Solver {
     pub fn new() -> Self {
         let timeout_ms = std::env::var("SSPUR_SMT_TIMEOUT").ok().and_then(|v| v.parse().ok()).unwrap_or(500);
-        let cache = std::env::var_os("SSPUR_CACHE")
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/sspur")))
-            .map(|b| b.join("smt"));
+        let cache = sspur_syntax::cache_root().map(|b| b.join("smt"));
         Solver { proc: None, spawns: 0, disabled: binary().is_none(), timeout_ms, cache }
     }
 

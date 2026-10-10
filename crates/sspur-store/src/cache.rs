@@ -37,7 +37,7 @@ fn mem() -> &'static Mutex<HashMap<String, Entry>> {
 }
 
 pub fn cache_root() -> PathBuf {
-    std::env::var_os("SSPUR_CACHE").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/sspur"))).unwrap_or_else(std::env::temp_dir)
+    sspur_syntax::cache_root().unwrap_or_else(std::env::temp_dir)
 }
 
 fn disabled() -> bool {

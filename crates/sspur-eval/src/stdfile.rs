@@ -2,18 +2,8 @@
 use crate::stdlib::os_reason;
 use crate::value::Value;
 use crate::{trap, Ctrl, Interp, R};
-use std::ffi::c_void;
-use std::os::fd::{FromRawFd, IntoRawFd};
-use std::os::unix::fs::MetadataExt;
+use crate::sys::{errno, fd_close as close, fd_pread as pread, fd_read as read, fd_seek as lseek, fd_write as write, identity};
 use std::rc::Rc;
-
-unsafe extern "C" {
-    fn read(fd: i32, buf: *mut c_void, n: usize) -> isize;
-    fn pread(fd: i32, buf: *mut c_void, n: usize, off: i64) -> isize;
-    fn write(fd: i32, buf: *const c_void, n: usize) -> isize;
-    fn lseek(fd: i32, off: i64, whence: i32) -> i64;
-    fn close(fd: i32) -> i32;
-}
 
 const EINTR: i32 = 4;
 const EBADF: i32 = 9;
@@ -43,11 +33,7 @@ fn reason(path: &str, e: i32) -> String {
     if e == EBADF {
         return format!("{path}: not open for this operation");
     }
-    format!("{path}: {}", os_reason(&std::io::Error::from_raw_os_error(e)))
-}
-
-fn errno() -> i32 {
-    std::io::Error::last_os_error().raw_os_error().unwrap_or(0)
+    format!("{path}: {}", crate::sys::errno_reason(e))
 }
 
 fn ok(v: Value) -> Value {
@@ -61,11 +47,6 @@ fn err(m: String) -> Value {
 fn file_of(v: &Value) -> R<F> {
     let Value::Record(_, fs) = v else { return trap(format!("expected File, got {v}")) };
     Ok(F { fd: int(&fs[0].1)? as i32, path: s(&fs[1].1)?.to_string(), dev: int(&fs[2].1)?, ino: int(&fs[3].1)? })
-}
-
-fn identity(fd: i32) -> Option<(i64, i64)> {
-    let f = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
-    f.metadata().ok().map(|m| (m.dev() as i64, m.ino() as i64))
 }
 
 fn live(f: &F) -> Result<(), String> {
@@ -91,9 +72,9 @@ pub fn open(path: &str, mode: &str) -> R<Result<Value, String>> {
     }
     let file = match o.open(path) {
         Ok(f) => f,
-        Err(e) => return Ok(Err(reason(path, e.raw_os_error().unwrap_or(0)))),
+        Err(e) => return Ok(Err(format!("{path}: {}", os_reason(&e)))),
     };
-    let fd = file.into_raw_fd();
+    let fd = crate::sys::into_fd(file);
     let (dev, ino) = identity(fd).unwrap_or((0, 0));
     Ok(Ok(Value::Record(
         "#File".into(),
@@ -284,8 +265,7 @@ impl Interp {
                 if p < 0 { Err(reason(&f.path, errno())) } else { Ok(Value::Int(p)) }
             }
             "size" => {
-                let fl = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(f.fd) });
-                fl.metadata().map(|m| Value::Int(m.len() as i64)).map_err(|e| reason(&f.path, e.raw_os_error().unwrap_or(0)))
+                crate::sys::fd_len(f.fd).map(|n| Value::Int(n as i64)).map_err(|e| format!("{}: {}", f.path, os_reason(&e)))
             }
             "close" => close_fd(&f).map(|_| Value::Unit),
             _ => return trap(format!("no method '{name}' on File")),

@@ -6,10 +6,14 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+#[cfg(not(windows))]
 const MAX_INT_ARGS: usize = 6;
+#[cfg(not(windows))]
 const MAX_FLOAT_ARGS: usize = 8;
 
+#[cfg(not(windows))]
 type IntRet = unsafe extern "C" fn(i64, i64, i64, i64, i64, i64, f64, f64, f64, f64, f64, f64, f64, f64) -> i64;
+#[cfg(not(windows))]
 type FloatRet = unsafe extern "C" fn(i64, i64, i64, i64, i64, i64, f64, f64, f64, f64, f64, f64, f64, f64) -> f64;
 
 type SymCache = HashMap<(Option<String>, String), Result<usize, String>>;
@@ -33,9 +37,93 @@ fn resolve(lib: Option<&str>, sym: &str) -> Result<usize, String> {
     Ok(p)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn resolve(lib: Option<&str>, sym: &str) -> Result<usize, String> {
+    use libloading::os::windows::Library;
+    let names = match lib.filter(|l| *l != "c") {
+        None => vec!["ucrtbase.dll".to_string(), "msvcrt.dll".to_string(), "kernel32.dll".to_string()],
+        Some(l) => sspur_syntax::ffi::lib_candidates(l),
+    };
+    let mut loaded = false;
+    for n in &names {
+        let Ok(l) = (unsafe { Library::new(n) }) else { continue };
+        loaded = true;
+        if let Ok(p) = unsafe { l.get::<*const ()>(sym.as_bytes()) } {
+            let a = *p as usize;
+            std::mem::forget(l);
+            return Ok(a);
+        }
+    }
+    match lib {
+        Some(l) if !loaded => Err(format!("ffi: cannot load library {l}")),
+        _ => Err(format!("ffi: symbol {sym} not found")),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn resolve(_: Option<&str>, _: &str) -> Result<usize, String> {
-    Err("ffi: the interpreter supports extern calls on unix only".into())
+    Err("ffi: the interpreter supports extern calls on unix and windows only".into())
+}
+
+#[cfg(windows)]
+const MAX_WIN_ARGS: usize = 12;
+
+#[cfg(windows)]
+trait Bits {
+    fn of(b: u64) -> Self;
+}
+
+#[cfg(windows)]
+impl Bits for i64 {
+    fn of(b: u64) -> i64 {
+        b as i64
+    }
+}
+
+#[cfg(windows)]
+impl Bits for f64 {
+    fn of(b: u64) -> f64 {
+        f64::from_bits(b)
+    }
+}
+
+/// Win64 passes the first four arguments in RCX/RDX/R8/R9 or XMM0-3 by position and the rest in 8-byte stack slots.
+#[cfg(windows)]
+unsafe fn call_win64(addr: usize, args: &[(bool, u64)], float_ret: bool) -> (i64, f64) {
+    let mut s = [0u64; MAX_WIN_ARGS];
+    for (i, a) in args.iter().enumerate() {
+        s[i] = a.1;
+    }
+    let fl = |i: usize| args.get(i).is_some_and(|a| a.0);
+    macro_rules! go {
+        ($a:ty, $b:ty, $c:ty, $d:ty) => {{
+            if float_ret {
+                let g = unsafe { std::mem::transmute::<usize, unsafe extern "C" fn($a, $b, $c, $d, u64, u64, u64, u64, u64, u64, u64, u64) -> f64>(addr) };
+                (0, unsafe { g(<$a>::of(s[0]), <$b>::of(s[1]), <$c>::of(s[2]), <$d>::of(s[3]), s[4], s[5], s[6], s[7], s[8], s[9], s[10], s[11]) })
+            } else {
+                let g = unsafe { std::mem::transmute::<usize, unsafe extern "C" fn($a, $b, $c, $d, u64, u64, u64, u64, u64, u64, u64, u64) -> i64>(addr) };
+                (unsafe { g(<$a>::of(s[0]), <$b>::of(s[1]), <$c>::of(s[2]), <$d>::of(s[3]), s[4], s[5], s[6], s[7], s[8], s[9], s[10], s[11]) }, 0.0)
+            }
+        }};
+    }
+    match (fl(0), fl(1), fl(2), fl(3)) {
+        (false, false, false, false) => go!(i64, i64, i64, i64),
+        (false, false, false, true) => go!(i64, i64, i64, f64),
+        (false, false, true, false) => go!(i64, i64, f64, i64),
+        (false, false, true, true) => go!(i64, i64, f64, f64),
+        (false, true, false, false) => go!(i64, f64, i64, i64),
+        (false, true, false, true) => go!(i64, f64, i64, f64),
+        (false, true, true, false) => go!(i64, f64, f64, i64),
+        (false, true, true, true) => go!(i64, f64, f64, f64),
+        (true, false, false, false) => go!(f64, i64, i64, i64),
+        (true, false, false, true) => go!(f64, i64, i64, f64),
+        (true, false, true, false) => go!(f64, i64, f64, i64),
+        (true, false, true, true) => go!(f64, i64, f64, f64),
+        (true, true, false, false) => go!(f64, f64, i64, i64),
+        (true, true, false, true) => go!(f64, f64, i64, f64),
+        (true, true, true, false) => go!(f64, f64, f64, i64),
+        (true, true, true, true) => go!(f64, f64, f64, f64),
+    }
 }
 
 fn int_arg(f: &str, p: &str, s: CScalar, v: i64) -> R<i64> {
@@ -87,8 +175,11 @@ pub fn call(f: &FnDef, args: &[Value]) -> R {
     let mut ints: Vec<i64> = Vec::new();
     let mut floats: Vec<f64> = Vec::new();
     let mut keep: Vec<Vec<u8>> = Vec::new();
+    #[cfg(windows)]
+    let mut pos: Vec<(bool, u64)> = Vec::new();
     for ((p, t), v) in f.params.iter().zip(&ptys).zip(args) {
         let p = p.name.as_str();
+        let (ni, nf) = (ints.len(), floats.len());
         match (t, v) {
             (FfiTy::Scalar(CScalar::F64), Value::Float(x)) => floats.push(*x),
             (FfiTy::Scalar(CScalar::F32), Value::Float(x)) => floats.push(f64::from_bits(u64::from((*x as f32).to_bits()))),
@@ -113,15 +204,27 @@ pub fn call(f: &FnDef, args: &[Value]) -> R {
             }
             _ => return trap(format!("ffi: argument {p} of {name} has an unexpected value")),
         }
+        #[cfg(windows)]
+        pos.push(if floats.len() > nf { (true, floats[nf].to_bits()) } else { (false, ints[ni] as u64) });
+        #[cfg(not(windows))]
+        let _ = (ni, nf);
     }
+    #[cfg(windows)]
+    if pos.len() > MAX_WIN_ARGS {
+        return trap(format!("ffi: {name} has too many arguments for the interpreter ({MAX_WIN_ARGS}); call it from native code"));
+    }
+    let float_ret = matches!(rty, FfiTy::Scalar(s) if s.is_float());
+    #[cfg(windows)]
+    let (ri, rf) = unsafe { call_win64(addr, &pos, float_ret) };
+    #[cfg(not(windows))]
     if ints.len() > MAX_INT_ARGS || floats.len() > MAX_FLOAT_ARGS {
         return trap(format!("ffi: {name} has too many arguments for the interpreter ({MAX_INT_ARGS} integer and {MAX_FLOAT_ARGS} float); call it from native code"));
     }
-    ints.resize(MAX_INT_ARGS, 0);
-    floats.resize(MAX_FLOAT_ARGS, 0.0);
-    let (i, x) = (&ints, &floats);
-    let float_ret = matches!(rty, FfiTy::Scalar(s) if s.is_float());
+    #[cfg(not(windows))]
     let (ri, rf) = unsafe {
+        ints.resize(MAX_INT_ARGS, 0);
+        floats.resize(MAX_FLOAT_ARGS, 0.0);
+        let (i, x) = (&ints, &floats);
         if float_ret {
             let g = std::mem::transmute::<usize, FloatRet>(addr);
             (0, g(i[0], i[1], i[2], i[3], i[4], i[5], x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]))

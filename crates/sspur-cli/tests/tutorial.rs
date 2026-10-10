@@ -166,9 +166,11 @@ fn have_tool(tool: &str) -> bool {
         _ => None,
     };
     let brew = ["/opt/homebrew/opt/lld/bin", "/opt/homebrew/opt/llvm/bin", "/usr/local/opt/lld/bin", "/usr/local/opt/llvm/bin", "/opt/homebrew/bin", "/usr/local/bin"];
+    let llvm = std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("LLVM").join("bin"));
+    let has = |d: &Path| d.join(tool).is_file() || d.join(format!("{tool}{}", std::env::consts::EXE_SUFFIX)).is_file();
     env.is_some_and(|p| Path::new(&p).exists())
-        || std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(tool).exists()))
-        || brew.iter().any(|d| Path::new(d).join(tool).exists())
+        || std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| has(&d)))
+        || brew.iter().map(PathBuf::from).chain(llvm).any(|d| has(&d))
 }
 
 fn run_transcript(file: &Path) {

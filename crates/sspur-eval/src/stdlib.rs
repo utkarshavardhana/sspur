@@ -78,9 +78,27 @@ fn rng_normal(s: &mut u64, mean: f64, sd: f64) -> f64 {
 
 #[cfg(target_os = "macos")]
 const ENOTEMPTY: i32 = 66;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 const ENOTEMPTY: i32 = 39;
 
+#[cfg(windows)]
+pub fn os_reason(e: &std::io::Error) -> String {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::NotFound => "not found".into(),
+        K::PermissionDenied => "permission denied".into(),
+        K::IsADirectory => "is a directory".into(),
+        K::NotADirectory => "not a directory".into(),
+        K::AlreadyExists => "already exists".into(),
+        K::DirectoryNotEmpty => "directory not empty".into(),
+        _ => match e.raw_os_error() {
+            Some(n) => format!("os error {n}"),
+            None => "invalid UTF-8".into(),
+        },
+    }
+}
+
+#[cfg(not(windows))]
 pub fn os_reason(e: &std::io::Error) -> String {
     match e.raw_os_error() {
         Some(2) => "not found".into(),
@@ -108,9 +126,64 @@ fn fs_msg(path: &str, m: &str) -> Value {
     Value::Res(Err(Rc::new(Value::str(&format!("{path}: {m}")))))
 }
 
+#[cfg(unix)]
+fn same_file(meta: &std::fs::Metadata, to: &str) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(to).is_ok_and(|m| m.dev() == meta.dev() && m.ino() == meta.ino())
+}
+
+#[cfg(windows)]
+fn same_file(_: &std::fs::Metadata, from_to: (&str, &str)) -> bool {
+    matches!((std::fs::canonicalize(from_to.0), std::fs::canonicalize(from_to.1)), (Ok(a), Ok(b)) if a == b)
+}
+
+#[cfg(unix)]
+fn file_mode_of(m: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    m.mode() & 0o7777
+}
+
+#[cfg(windows)]
+fn file_mode_of(m: &std::fs::Metadata) -> u32 {
+    match (m.is_dir(), m.permissions().readonly()) {
+        (true, true) => 0o555,
+        (true, false) => 0o755,
+        (false, true) => 0o444,
+        (false, false) => 0o644,
+    }
+}
+
+#[cfg(unix)]
+fn permissions(mode: u32) -> std::fs::Permissions {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::Permissions::from_mode(mode)
+}
+
+#[cfg(windows)]
+fn set_mode(p: &str, mode: u32) -> std::io::Result<()> {
+    let mut perm = std::fs::metadata(p)?.permissions();
+    perm.set_readonly(mode & 0o200 == 0);
+    std::fs::set_permissions(p, perm)
+}
+
+#[cfg(unix)]
+fn set_mode(p: &str, mode: u32) -> std::io::Result<()> {
+    std::fs::set_permissions(p, permissions(mode))
+}
+
+#[cfg(unix)]
+fn modified_ms(m: &std::fs::Metadata) -> i64 {
+    use std::os::unix::fs::MetadataExt;
+    m.mtime() * 1000 + m.mtime_nsec() / 1_000_000
+}
+
+#[cfg(windows)]
+fn modified_ms(m: &std::fs::Metadata) -> i64 {
+    m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as i64)
+}
+
 fn copy_file(from: &str, to: &str) -> Value {
     use std::io::{Read, Write};
-    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
     let err = |p: &str, e: std::io::Error| fs_msg(p, &os_reason(&e));
     if from.contains('\0') {
         return fs_msg(from, "invalid path");
@@ -129,11 +202,19 @@ fn copy_file(from: &str, to: &str) -> Value {
     if meta.is_dir() {
         return fs_msg(from, "is a directory");
     }
-    if std::fs::metadata(to).is_ok_and(|m| m.dev() == meta.dev() && m.ino() == meta.ino()) {
+    #[cfg(unix)]
+    let same = same_file(&meta, to);
+    #[cfg(windows)]
+    let same = same_file(&meta, (from, to));
+    if same {
         return fs_msg(from, "same file");
     }
-    let mode = meta.mode() & 0o7777;
-    let mut dst = match std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(mode).open(to) {
+    let mode = file_mode_of(&meta);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, mode);
+    let mut dst = match opts.open(to) {
         Ok(f) => f,
         Err(e) => return err(to, e),
     };
@@ -151,30 +232,18 @@ fn copy_file(from: &str, to: &str) -> Value {
             return err(to, e);
         }
     }
-    if let Err(e) = dst.set_permissions(std::fs::Permissions::from_mode(mode)) {
+    #[cfg(unix)]
+    if let Err(e) = dst.set_permissions(permissions(mode)) {
         return err(to, e);
     }
+    #[cfg(windows)]
+    drop((dst, mode));
     Value::Res(Ok(Rc::new(Value::Unit)))
 }
 
-unsafe extern "C" {
-    fn read(fd: i32, buf: *mut std::ffi::c_void, n: usize) -> isize;
-    fn clock_gettime(clk: i32, tp: *mut [i64; 2]) -> i32;
-}
-
-#[cfg(target_os = "macos")]
-const CLOCK_MONOTONIC: i32 = 6;
-#[cfg(not(target_os = "macos"))]
-const CLOCK_MONOTONIC: i32 = 1;
-
-pub fn mono_ns() -> i64 {
-    let mut t = [0i64; 2];
-    unsafe { clock_gettime(CLOCK_MONOTONIC, &mut t) };
-    t[0].saturating_mul(1_000_000_000).saturating_add(t[1])
-}
+pub use crate::sys::mono_ns;
 
 fn run_cmd(prog: &str, args: &[String], input: String) -> Result<Value, String> {
-    use std::os::unix::process::ExitStatusExt;
     use std::process::{Command, Stdio};
     if prog.contains('\0') {
         return Err("invalid path".into());
@@ -190,7 +259,10 @@ fn run_cmd(prog: &str, args: &[String], input: String) -> Result<Value, String> 
     });
     let out = child.wait_with_output().map_err(|e| os_reason(&e))?;
     let _ = writer.join();
-    let code = out.status.code().map_or_else(|| 128 + i64::from(out.status.signal().unwrap_or(0)), i64::from);
+    #[cfg(unix)]
+    let code = out.status.code().map_or_else(|| 128 + i64::from(std::os::unix::process::ExitStatusExt::signal(&out.status).unwrap_or(0)), i64::from);
+    #[cfg(windows)]
+    let code = out.status.code().map_or(-1, i64::from);
     let text = |b: Vec<u8>| String::from_utf8(b).map_err(|_| "invalid UTF-8".to_string());
     let (so, se) = (text(out.stdout)?, text(out.stderr)?);
     Ok(Value::Tuple(Rc::new(vec![Value::Int(code), Value::str(&so), Value::str(&se)])))
@@ -206,7 +278,7 @@ fn mkdir_all(p: &str) -> Result<Value, std::io::Error> {
             continue;
         }
         if let Err(e) = std::fs::create_dir(&p[..i])
-            && !(e.raw_os_error() == Some(17) && std::fs::metadata(&p[..i]).is_ok_and(|m| m.is_dir())) {
+            && !(e.kind() == std::io::ErrorKind::AlreadyExists && std::fs::metadata(&p[..i]).is_ok_and(|m| m.is_dir())) {
                 return Err(e);
             }
     }
@@ -216,12 +288,7 @@ fn mkdir_all(p: &str) -> Result<Value, std::io::Error> {
 fn read_line_raw() -> R<Option<String>> {
     let mut line = Vec::new();
     let mut got = false;
-    loop {
-        let mut b = 0u8;
-        let n = unsafe { read(0, (&raw mut b).cast(), 1) };
-        if n <= 0 {
-            break;
-        }
+    while let Some(b) = crate::sys::read_byte(0) {
         got = true;
         if b == b'\n' {
             break;
@@ -500,12 +567,16 @@ impl Interp {
                 if t.contains('\0') {
                     return Ok(fs_msg(l, "invalid path"));
                 }
-                io_res(l, std::os::unix::fs::symlink(t, l).map(|_| Value::Unit))
+                #[cfg(unix)]
+                let r = std::os::unix::fs::symlink(t, l);
+                #[cfg(windows)]
+                let r = if std::fs::metadata(t).is_ok_and(|m| m.is_dir()) { std::os::windows::fs::symlink_dir(t, l) } else { std::os::windows::fs::symlink_file(t, l) };
+                io_res(l, r.map(|_| Value::Unit))
             }
             "read_link" => {
                 let p = s(&a[0])?;
                 match std::fs::read_link(p) {
-                    Err(e) if e.raw_os_error() == Some(22) && !p.contains('\0') => fs_msg(p, "not a symlink"),
+                    Err(e) if e.raw_os_error() == Some(if cfg!(windows) { 4390 } else { 22 }) && !p.contains('\0') => fs_msg(p, "not a symlink"),
                     Ok(t) => match t.into_os_string().into_string() {
                         Ok(t) => Value::Res(Ok(Rc::new(Value::str(&t)))),
                         Err(_) => fs_msg(p, "invalid UTF-8"),
@@ -518,17 +589,15 @@ impl Interp {
                 Value::Bool(!p.contains('\0') && std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()))
             }
             "file_mode" => {
-                use std::os::unix::fs::MetadataExt;
                 let p = s(&a[0])?;
-                io_res(p, std::fs::metadata(p).map(|m| Value::Int(i64::from(m.mode() & 0o7777))))
+                io_res(p, std::fs::metadata(p).map(|m| Value::Int(i64::from(file_mode_of(&m)))))
             }
             "set_mode" => {
-                use std::os::unix::fs::PermissionsExt;
                 let (p, m) = (s(&a[0])?, int(&a[1])?);
                 if !(0..=0o7777).contains(&m) && !p.contains('\0') {
                     return Ok(fs_msg(p, "mode out of range"));
                 }
-                io_res(p, std::fs::set_permissions(p, std::fs::Permissions::from_mode(m as u32)).map(|_| Value::Unit))
+                io_res(p, set_mode(p, m as u32).map(|_| Value::Unit))
             }
             "exists" | "is_dir" => {
                 let p = s(&a[0])?;
@@ -536,9 +605,8 @@ impl Interp {
                 Value::Bool(m.is_some_and(|m| n == "exists" || m.is_dir()))
             }
             "file_size" | "modified_ms" => {
-                use std::os::unix::fs::MetadataExt;
                 let p = s(&a[0])?;
-                io_res(p, std::fs::metadata(p).map(|m| Value::Int(if n == "file_size" { m.size() as i64 } else { m.mtime() * 1000 + m.mtime_nsec() / 1_000_000 })))
+                io_res(p, std::fs::metadata(p).map(|m| Value::Int(if n == "file_size" { m.len() as i64 } else { modified_ms(&m) })))
             }
             "run_cmd" => {
                 let prog = s(&a[0])?;

@@ -21,7 +21,7 @@ fn deploy_plan_writes_artifacts() {
     let r = Command::new(env!("CARGO_BIN_EXE_sspur")).args(["deploy", "plan"]).arg(example()).arg("--out").arg(&out).output().unwrap();
     let stdout = String::from_utf8_lossy(&r.stdout);
     assert!(r.status.success(), "{stdout}{}", String::from_utf8_lossy(&r.stderr));
-    for f in ["template.json", "plan.json", "bootstrap.c", "build.sh", "deploy.sh", "service.ssp", "iam/create.json", "iam/read.json", "iam/update.json", "iam/remove.json", "iam/list.json", "local/bootstrap"] {
+    for f in ["template.json", "plan.json", "bootstrap.c", "build.sh", "deploy.sh", "service.ssp", "iam/create.json", "iam/read.json", "iam/update.json", "iam/remove.json", "iam/list.json", &format!("local/bootstrap{}", std::env::consts::EXE_SUFFIX)] {
         assert!(out.join(f).exists(), "missing {f}");
     }
     assert!(stdout.contains("GET /items/{id}") && stdout.contains("dynamodb:GetItem[Items]"), "{stdout}");

@@ -152,10 +152,15 @@ pub fn sspur_view(f: &FnDef) -> FnDef {
 }
 
 pub fn lib_candidates(lib: &str) -> Vec<String> {
-    if lib.contains('/') || lib.contains(".so") || lib.ends_with(".dylib") {
+    if lib.contains('/') || lib.contains(".so") || lib.ends_with(".dylib") || (cfg!(windows) && (lib.contains('\\') || lib.ends_with(".dll") || lib.ends_with(".lib"))) {
         return vec![lib.to_string()];
     }
-    if cfg!(target_os = "macos") {
+    if cfg!(windows) {
+        match lib {
+            "c" | "m" => vec!["ucrtbase.dll".into(), "msvcrt.dll".into()],
+            _ => vec![format!("{lib}.dll"), format!("lib{lib}.dll")],
+        }
+    } else if cfg!(target_os = "macos") {
         vec![format!("lib{lib}.dylib"), format!("/usr/lib/lib{lib}.dylib")]
     } else {
         vec![format!("lib{lib}.so.6"), format!("lib{lib}.so")]
@@ -163,7 +168,7 @@ pub fn lib_candidates(lib: &str) -> Vec<String> {
 }
 
 pub fn link_args(lib: &str) -> Vec<String> {
-    if lib == "c" {
+    if lib == "c" || (cfg!(windows) && lib == "m") {
         vec![]
     } else if lib_candidates(lib).len() == 1 {
         vec![lib.to_string()]

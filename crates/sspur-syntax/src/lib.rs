@@ -29,6 +29,19 @@ impl SyntaxError {
 
 /// The name a value shows at run time: a package-qualified name (`text__words`, `Text__Token`)
 /// drops its package prefix, so a library behaves the same when it is a dependency.
+/// The per-user cache: `$SSPUR_CACHE`, else `%LOCALAPPDATA%\sspur` on Windows and `~/.cache/sspur` elsewhere.
+pub fn cache_root() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    if let Some(c) = std::env::var_os("SSPUR_CACHE") {
+        return Some(PathBuf::from(c));
+    }
+    if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("sspur"))
+    } else {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/sspur"))
+    }
+}
+
 pub fn display_name(n: &str) -> &str {
     if let Some(i) = n.find("__") {
         let p = n.as_bytes();

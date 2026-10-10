@@ -150,7 +150,7 @@ pub fn profdata_tool() -> Result<Vec<String>, String> {
     }
     if let Some(c) = on_path(&cc()) {
         let real = std::fs::canonicalize(&c).unwrap_or(c);
-        if let Some(t) = real.parent().map(|d| d.join("llvm-profdata")).filter(|t| t.exists()) {
+        if let Some(t) = real.parent().map(|d| d.join(format!("llvm-profdata{}", std::env::consts::EXE_SUFFIX))).filter(|t| t.exists()) {
             return Ok(vec![t.display().to_string()]);
         }
         if cfg!(target_os = "macos") && real.starts_with("/usr/bin") {

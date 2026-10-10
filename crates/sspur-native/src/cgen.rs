@@ -910,12 +910,21 @@ pub struct CProgram {
 }
 
 pub fn c_program(m: &Module, check: &CheckOutput) -> Result<CProgram, String> {
+    c_program_with(m, check, false)
+}
+
+/// The program as the host compiler expects it; differs from `c_program` only on Windows.
+pub fn c_program_host(m: &Module, check: &CheckOutput) -> Result<CProgram, String> {
+    c_program_with(m, check, true)
+}
+
+fn c_program_with(m: &Module, check: &CheckOutput, host: bool) -> Result<CProgram, String> {
     let lowered = lower::lower(m, check);
     let (m, check) = match &lowered {
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (src, plan) = generate(m, check, None, None, false, false)?;
+    let (src, plan) = generate(m, check, None, None, false, host)?;
     let fns = plan.fns.into_iter().map(|(n, (p, r, _))| (n, (p, r))).collect();
     Ok(CProgram { src, fns, skipped: plan.skipped, err_types: plan.err_types.into_iter().map(|(_, t)| t).collect(), refines: plan.refines.into_iter().map(|(_, r)| r).collect() })
 }
@@ -1239,7 +1248,7 @@ fn precheck(f: &FnDef, bare: bool) -> G<()> {
 }
 
 fn cache_dir() -> PathBuf {
-    let base = std::env::var_os("SSPUR_CACHE").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache/sspur"))).unwrap_or_else(std::env::temp_dir);
+    let base = sspur_syntax::cache_root().unwrap_or_else(std::env::temp_dir);
     base.join("native")
 }
 

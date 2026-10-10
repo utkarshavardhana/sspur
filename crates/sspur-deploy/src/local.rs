@@ -507,8 +507,10 @@ impl Inner {
                 Some(store) => cmd.env("SSPUR_BACKFILL", store),
                 None => cmd.env("SSPUR_HANDLER", &h.name),
             };
-            if let Some(v) = std::env::var_os("LD_LIBRARY_PATH") {
-                cmd.env("LD_LIBRARY_PATH", v);
+            for k in ["LD_LIBRARY_PATH", "SystemRoot", "windir"] {
+                if let Some(v) = std::env::var_os(k) {
+                    cmd.env(k, v);
+                }
             }
             for s in h.stores() {
                 cmd.env(format!("SSPUR_TABLE_{s}"), table_name(&svc.name, &s));
@@ -634,8 +636,7 @@ impl Inner {
     fn swap_file(&self, file: &str, weight: u32) -> Result<Value, String> {
         let src = std::fs::read_to_string(file).map_err(|e| format!("cannot read {file}: {e}"))?;
         let svc = crate::analyze(&src).map_err(|e| format!("{file}: {e}"))?;
-        let plan = crate::plan(&svc)?;
-        let bin = crate::build_host(&plan.files["bootstrap.c"], &crate::cache_dir())?;
+        let bin = crate::build_local(&svc)?;
         self.swap(&svc, &bin, weight)
     }
 

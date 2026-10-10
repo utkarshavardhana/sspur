@@ -52,7 +52,7 @@ pub struct Profile {
 }
 
 pub fn profile_path(m: &Module) -> Option<std::path::PathBuf> {
-    let base = std::env::var_os("SSPUR_CACHE").map(std::path::PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache/sspur")))?;
+    let base = sspur_syntax::cache_root()?;
     let key = blake3::hash(printer::print_module(m).as_bytes()).to_hex();
     Some(base.join("profile").join(format!("{}.json", &key[..32])))
 }

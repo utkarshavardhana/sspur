@@ -120,14 +120,21 @@ fn export_c_round_trips_through_a_c_program() {
     let ex = root().join("examples/ffi");
     let (out, err, ok) = sspur(&d, &["export-c", ex.join("geo.ssp").to_str().unwrap(), "-o", "libgeo"]);
     assert!(ok, "{out}{err}");
-    assert!(out.contains("export  geo_label\n") && out.contains("link with -L. -lgeo -lm"), "{out}");
-    assert!(d.join("libgeo.a").exists() && d.join("libgeo.h").exists());
-    let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
-    let o = Command::new(&cc).args(["-Wall", "-Werror", "-I."]).arg(ex.join("main.c")).args(["-L.", "-lgeo", "-lm", "-lpthread", "-o", "geo"]).current_dir(&d).output().unwrap();
+    let (lib, hint) = if cfg!(windows) { ("libgeo.lib", "link with libgeo.lib") } else { ("libgeo.a", "link with -L. -lgeo -lm") };
+    assert!(out.contains("export  geo_label\n") && out.contains(hint), "{out}");
+    assert!(d.join(lib).exists() && d.join("libgeo.h").exists());
+    let cc = sspur_native::cgen::flags::cc();
+    let link: Vec<String> = if cfg!(windows) {
+        ["-D_CRT_SECURE_NO_WARNINGS".to_string(), "libgeo.lib".into()].into_iter().chain(sspur_native::cgen::flags::sys_libs()).collect()
+    } else {
+        ["-L.", "-lgeo", "-lm", "-lpthread"].map(String::from).to_vec()
+    };
+    let exe = format!("geo{}", std::env::consts::EXE_SUFFIX);
+    let o = Command::new(&cc).args(["-Wall", "-Werror", "-I."]).arg(ex.join("main.c")).args(&link).args(["-o", &exe]).current_dir(&d).output().unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    let o = Command::new(d.join("geo")).env("HOME", "/tmp").output().unwrap();
+    let o = Command::new(d.join(&exe)).env("HOME", "/tmp").output().unwrap();
     assert_eq!(
-        String::from_utf8_lossy(&o.stdout),
+        String::from_utf8_lossy(&o.stdout).replace("\r\n", "\n"),
         "dist = 5
 cube_side = 3
 cube_side failed (100): unhandled error: BadInput{what: \"negative volume -8.0\"}

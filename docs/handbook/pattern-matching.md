@@ -20,6 +20,36 @@ Matching on a tuple checks several values at once, and literals match themselves
 {{#include ../snippets/handbook/matching.ssp:values}}
 ```
 
+## Or-patterns
+
+`p1 | p2` matches when either alternative does, so cases that share an arm are written once. Alternatives nest anywhere a pattern goes, `some(0 | 1)` or `(Red | Blue, _)`:
+
+```sspur
+{{#include ../snippets/handbook/matching.ssp:or}}
+```
+
+Every alternative has to bind the same names with the same types: `| Circle{r} | Rect{w} => r` is `E_PATTERN_OR_BINDS`, because `r` would be unbound when a `Rect` matched.
+
+## Lists
+
+`[]`, `[x]` and `[x, y]` match lists of exactly that length. `..` matches any number of elements, and `..rest` binds them as a list, at the start, the end or in the middle: `[x, ..rest]`, `[..init, last]`, `[first, .., last]`. The elements are patterns themselves, so literals, tuples and constructors work inside:
+
+```sspur
+{{#include ../snippets/handbook/matching.ssp:lists}}
+```
+
+`[]` and `[x, ..rest]` together cover every list. In native code `rest` is a view of the same list, so walking a list this way copies nothing.
+
+## One case: `if e is p`
+
+When only one case matters, `if e is p then a else b` tests it without a full `match`. The names the pattern binds are in scope in the `then` branch, and `and` after the pattern adds a condition that can use them:
+
+```sspur
+{{#include ../snippets/handbook/matching.ssp:is}}
+```
+
+`else` can be left out when the `then` branch is `Unit`, and tests chain with `else if e2 is q then`. Code written as `if let some(p) = e then` is stored as `if e is some(p) then`.
+
 ## Exhaustiveness
 
 A `match` has to cover every case. If it doesn't, the program doesn't compile, and the error names the missing case:
@@ -32,7 +62,7 @@ A `match` has to cover every case. If it doesn't, the program doesn't compile, a
 {{#include ../snippets/handbook/matching.out:missing}}
 ```
 
-This is why adding a variant to a sum type is safe: the checker lists every `match` that needs a new arm.
+This is why adding a variant to a sum type is safe: the checker lists every `match` that needs a new arm. The check looks inside nested patterns and lists too, so the missing case can be `some(none)` or `[_]`, and an arm that the arms above already cover gets the warning `W_ARM_UNREACHABLE`.
 
 One thing to watch: an arm's value runs to the end of the arm, so a `match` nested inside an arm would take every arm below it. Put the inner `match` in a helper function.
 

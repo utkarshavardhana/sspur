@@ -64,6 +64,8 @@ The whole everyday language on one page. Every line below is from one file that 
 | `len(xs)`, `xs.length` | `xs.len` |
 | `None`, `null`, `Some(x)` | `none`, `some(x)` |
 | `c ? a : b` | `if c then a else b` |
+| `if let some(x) = o` | `if o is some(x) then` |
+| `[x, ...rest]`, `[x, *rest]` | `[x, ..rest]` |
 | `x += 1` | `x := x + 1` on a `var` |
 | `{` in a string | `\{` |
 | `f(g(_))` for `x => f(g(x))` | write the lambda; `_` binds to the innermost call |

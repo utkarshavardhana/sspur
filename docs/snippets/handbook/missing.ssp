@@ -10,3 +10,9 @@ type Zone = Local | Remote
 rule fee(kg: Int, zone: Zone) -> Int
   | kg <= 5, Local => 5
   | kg > 5, _ => 12
+
+fn second(xs: List[Int]) -> Int
+= match xs
+  | [_, x, ..] => x
+  | [] => 0
+  | [_, _] => -1

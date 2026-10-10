@@ -23,6 +23,19 @@ fn clamp_pct(x: Int) -> Int
 
 fn first_tag[T](xs: List[T], f: T -> Bool) -> Opt[T]
 = xs.find(f)
+
+fn sides(s: Shape) -> Int
+= match s
+  | Circle | Dot => 0
+  | Rect => 4
+
+fn add_all(xs: List[Int]) -> Int
+= match xs
+  | [] => 0
+  | [x, ..rest] => x + add_all(rest)
+
+fn width_or(s: Shape, d: F64) -> F64
+= if s is Rect{w} and w > 0.0 then w else d
 // ANCHOR_END: fns
 
 // ANCHOR: blocks
@@ -83,4 +96,4 @@ test values = do
   [1, 2, 3].map(_ * 2) == [2, 4, 6] and moved.qty == 3 and a == 1 and b.len == 3 and "n={a}" == "n=1" and some(2).or(0) == 2 and empty_map().put("k", 1).get("k") == some(1)
 // ANCHOR_END: values
 
-test rest = area(Rect{w: 2.0, h: 2.0}) == 4.0 and first_tag([1, 2], _ > 1) == some(2) and stats([5, 20]) == (25, 1) and labels([2, 8]) == ["small 2", "big 8"] and qty_or_zero([], "x") == 0 and answered() == 42 and greet_all([Item{id: Id("b"), qty: 1, tags: []}]) == ["hi b"]
+test rest = area(Rect{w: 2.0, h: 2.0}) == 4.0 and sides(Dot) == 0 and add_all([1, 2]) == 3 and width_or(Rect{w: 2.0, h: 1.0}, 1.0) == 2.0 and first_tag([1, 2], _ > 1) == some(2) and stats([5, 20]) == (25, 1) and labels([2, 8]) == ["small 2", "big 8"] and qty_or_zero([], "x") == 0 and answered() == 42 and greet_all([Item{id: Id("b"), qty: 1, tags: []}]) == ["hi b"]

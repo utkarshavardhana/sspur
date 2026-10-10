@@ -4,6 +4,13 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+- Or-patterns (ADR 0029): `| Circle{r} | Ring{r} => r`, nested anywhere (`some(0 | 1)`, `(Red | Blue, _)`); every alternative binds the same names with the same types, or it is `E_PATTERN_OR_BINDS` with a hint naming the name or the two types. Rule cells accept them too.
+- List patterns: `[]`, `[x]`, `[x, y]`, `[x, ..rest]`, `[..init, last]`, `[first, .., last]`, `[_, ..]`, with patterns as elements (`[ok(x), ..]`, `[(a, b), ..rest]`, `["GET", path]`). `rest` is a `List`; in native code it is a view of the matched list, so binding it allocates nothing. `[x, ...rest]` and `[x, *rest]` are stored as `[x, ..rest]`.
+- `if e is p then a else b` tests one pattern, with an optional guard (`if o is some(v) and v > 0 then`), an optional `else` when the branch is `Unit`, and `else if e2 is q` chains. `if let p = e then` is accepted and stored as `if e is p then` (note `if let p = e -> if e is p`). `E_PARSE_IS` reports `if a and b is p`, with a hint.
+- Exhaustiveness checking looks inside nested patterns, or-patterns and lists (lengths `[]` plus `[x, ..rest]` cover every list), and lists the missing cases as patterns (`some(none)`, `[_, _, ..]`, `(false, false)`). The new warning `W_ARM_UNREACHABLE` reports a `match` or `catch` arm, or an or-pattern alternative, that the arms above already cover, and an `if e is p` whose pattern always matches.
+- All of it runs in the interpreter and in native code (strict native compiles every function), is printed canonically and hashed; the program generator emits list patterns, or-patterns and `if e is p` for differential fuzzing.
+
 ## [0.4.1] - 2026-10-10
 
 ### Added

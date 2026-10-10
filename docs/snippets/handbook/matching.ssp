@@ -25,6 +25,45 @@ fn parse_port(s: Str) -> Str
   | none => "not a number"
 // ANCHOR_END: values
 
+// ANCHOR: or
+fn corners(s: Shape) -> Int
+= match s
+  | Circle | Dot => 0
+  | Rect => 4
+
+fn weekend(day: Str) -> Bool
+= match day.lower
+  | "sat" | "sun" => true
+  | _ => false
+// ANCHOR_END: or
+
+// ANCHOR: lists
+fn total(xs: List[Int]) -> Int
+= match xs
+  | [] => 0
+  | [x, ..rest] => x + total(rest)
+
+fn describe(xs: List[Str]) -> Str
+= match xs
+  | [] => "nothing"
+  | [one] => one
+  | [first, .., last] => "{first} to {last}"
+
+fn route(parts: List[Str]) -> Str
+= match parts
+  | ["users", id] => "user {id}"
+  | ["users", id, "posts", ..rest] => "{rest.len} posts of {id}"
+  | [_, ..] | [] => "not found"
+// ANCHOR_END: lists
+
+// ANCHOR: is
+fn port_or(s: Str, d: Int) -> Int
+= if s.to_int is some(p) and p > 0 then p else d
+
+fn radius(s: Shape) -> F64
+= if s is Circle{r} then r else 0.0
+// ANCHOR_END: is
+
 // ANCHOR: rule
 type Zone = Local | Remote
 
@@ -39,3 +78,6 @@ test labels = label(Circle{r: 20.0}) == "big circle" and label(Rect{w: 2.0, h: 2
 test fizzbuzz = (1..16).map(fizz).take(5) == ["1", "2", "Fizz", "4", "Buzz"] and fizz(15) == "FizzBuzz"
 test ports = parse_port("8080") == "port 8080" and parse_port("0") == "0 is out of range" and parse_port("x") == "not a number"
 test fees = fee(1, Remote, true) == 0 and fee(3, Local, false) == 5 and fee(9, Local, true) == 8
+test or_patterns = corners(Dot) == 0 and corners(Rect{w: 1.0, h: 2.0}) == 4 and weekend("Sun") and not weekend("mon")
+test lists = total([1, 2, 3]) == 6 and describe(["a", "b", "c"]) == "a to c" and describe(["x"]) == "x" and route(["users", "7"]) == "user 7" and route(["users", "7", "posts", "1", "2"]) == "2 posts of 7" and route([]) == "not found"
+test is_tests = port_or("8080", 80) == 8080 and port_or("-1", 80) == 80 and radius(Circle{r: 2.0}) == 2.0 and radius(Dot) == 0.0

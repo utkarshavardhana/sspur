@@ -105,6 +105,7 @@
   - [ADR 0026: Packages and dependencies](adr/0026-packages.md)
   - [ADR 0027: Traits, bounds, operator traits and derive](adr/0027-traits.md)
   - [ADR 0028: Block lambdas and trait methods as values](adr/0028-block-lambdas.md)
+  - [ADR 0029: Or-patterns, list patterns and if e is p](adr/0029-richer-patterns.md)
 - [Native performance versus C++](design/native-benchmarks.md)
 - [Agent benchmarks](design/agent-benchmarks.md)
 

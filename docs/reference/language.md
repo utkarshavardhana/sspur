@@ -128,6 +128,7 @@ test t = Circle{r: 1.0}.describe == "shape: 3.14" and Vec2{x: 1, y: 2} + Vec2{x:
 - Literals: `42`, `-3`, `0xff`, `1_000`, `3.14`, `true`, `"text {expr} more"`, `[1, 2]`, `(a, b)`, `()`, `none`, `some(x)`, `ok(x)`, `err(e)`. Interpolation: `{expr}` inside a string inserts the value. `\{` is a literal brace, and so is any `{...}` whose content is empty or is not a valid expression. For example, `"{a}"` interpolates `a`, while `"{}"` and `"([{"` are literal text.
 - Operators, from lowest to highest precedence: `or`, `and`, `not`, `== != < <= > >=`, `..`, `+ -`, `* / %`, `**`, unary `-`. `+` also concatenates `Str` and `List`. Integer overflow and division by zero trap.
 - `if c then a else b`. `else` may be omitted only when `a` is `Unit`. Use `then do` or `else do` followed by an indented block for multiple statements.
+- `if e is p then a else b` matches one pattern: the names `p` binds are in scope in `a`, and `and cond` after the pattern is a guard that can use them: `if o is some(v) and v > 0 then v else 0`. `else` may be omitted when `a` is `Unit`, and it chains: `else if e2 is q then`. `is` takes the whole expression before it, so write `if (a and b) is true` (`E_PARSE_IS` otherwise). `if let p = e then` is accepted and stored as `if e is p then`.
 - Records: `Point{x: 1, y: 2}` or `{x: 1, y: 2}` (the type is inferred from context or the field set). Shorthand `{x, y}` uses variables named `x` and `y`. Variants with fields: `Rect{w: 1.0, h: 2.0}`. Variants without fields: `Dot`.
 - Field access `p.x`, tuple access `t.0`, list index `xs[i]` (traps when out of bounds).
 - Deep updates of immutable data: `u with age := u.age + 1, address.city := "Pune", tags[0] := "x"`. This returns a new value and re-checks refinements.
@@ -139,7 +140,9 @@ test t = Circle{r: 1.0}.describe == "shape: 3.14" and Vec2{x: 1, y: 2} + Vec2{x:
   | Rect{w: width, h} => width * h
   | _ => 0.0
   ```
-  Patterns: `_`, a name, literals, tuples `(a, 0)`, `Ctor`, `Ctor{field, field: pat}`, `some(p)`, `none`, `ok(p)`, `err(p)`. A non-exhaustive match is a compile error.
+  Patterns: `_`, a name, literals, tuples `(a, 0)`, `Ctor`, `Ctor{field, field: pat}`, `some(p)`, `none`, `ok(p)`, `err(p)`, lists and or-patterns. A non-exhaustive match is a compile error (`E_NONEXHAUSTIVE` lists the missing cases as patterns, nested ones too: `some(none)`, `[_, _, ..]`), and an arm the arms above already cover is the warning `W_ARM_UNREACHABLE`.
+- Or-patterns: `| Circle{r} | Ring{r} => r` takes either alternative, and nests: `some(0 | 1)`, `(Red | Blue, _)`. Every alternative binds the same names with the same types (`E_PATTERN_OR_BINDS`).
+- List patterns: `[]`, `[x]`, `[x, y]`, `[x, ..rest]`, `[..init, last]`, `[first, .., last]`, `[_, ..]`. Elements are patterns (`[ok(x), ..]`, `[(a, b), ..rest]`, `["GET", path]`), and there is at most one `..`, which matches any number of elements and, when named, binds them as a `List` (a view of the list in native code, no copy). `[]` and `[x, ..rest]` together are exhaustive. `[x, ...rest]` and `[x, *rest]` are accepted and stored as `[x, ..rest]`.
 - `return e` exits the function early (not allowed inside lambdas, except as a lambda's last line, where it means `e`).
 - `par(a, b, ...)` runs each argument as a concurrent task and returns the tuple of results (see Concurrency).
 - `?` or `?name` is a typed hole. The compiler reports its expected type and the in-scope values that fit.

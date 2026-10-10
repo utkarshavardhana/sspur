@@ -1,9 +1,13 @@
 $ sspur test matching.ssp
-4 passed, 0 failed
+7 passed, 0 failed
 // ANCHOR: missing
 $ sspur check missing.ssp
 missing.ssp:4:3 E_NONEXHAUSTIVE match does not cover: Dot
   hint: add | Dot => ?
 missing.ssp:11:3 E_RULE_GAP no row matches: kg = 4, zone = Remote; kg = 5, zone = Remote
   hint: add a row such as | _, _ => ?
+missing.ssp:15:3 E_NONEXHAUSTIVE match does not cover: [_]
+  hint: add | [_] => ?
+missing.ssp:18:15 warning W_ARM_UNREACHABLE arm 3 '| [_, _]' can never match: the arms above cover it
+  hint: remove it, or move it above the arm that covers it
 // ANCHOR_END: missing

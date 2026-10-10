@@ -25,8 +25,9 @@ This page lists every code the compiler can emit, grouped by area. The test suit
 | `E_PARSE_HANDLER` | A `handle` arm that isn't an operation | `\| op(x) => ...` or `\| return(r) => ...` |
 | `E_PARSE_IMPL` | An impl method without a body | `fn m(x: Self) -> T = expr` |
 | `E_PARSE_INDENT` | Indentation that doesn't match any open block | Use 2 spaces per level |
+| `E_PARSE_IS` | `if a and b is p`: `is` would test the whole condition before it | Test the pattern first, `if e is p and cond then`, or parenthesize the value, `if (a and b) is true then` |
 | `E_PARSE_KERNEL` | A `kernel fn` without `@grid` | Add `@grid(threads, group)` after the signature |
-| `E_PARSE_PATTERN` | A pattern was expected | Use `_`, a name, a literal, a tuple or a constructor |
+| `E_PARSE_PATTERN` | A pattern was expected, or a list pattern has two `..` | Use `_`, a name, a literal, a tuple, a list or a constructor; keep one `..` per list pattern |
 | `E_PARSE_PUB` | `pub` on something that can't be exported | Only `fn`, `type`, `effect`, `trait` and `impl` can be `pub` |
 | `E_PARSE_RULE` | A `rule` with no rows | Add `\| cells => result` rows |
 | `E_PARSE_SVC` | A `svc` with no endpoints | Add indented `ep` lines |
@@ -90,7 +91,8 @@ This page lists every code the compiler can emit, grouped by area. The test suit
 |---|---|---|
 | `E_NONEXHAUSTIVE` | A `match` or `catch` that misses some cases | Add the arms the message lists, or `\| _ =>` |
 | `E_PATTERN_ARITY` | A pattern with the wrong number of arguments | Match the operation's or constructor's parameters |
-| `E_PATTERN_TYPE` | A handler arm that binds an argument with something other than a name, `_` or tuple | Bind it to a name and match inside the arm |
+| `E_PATTERN_OR_BINDS` | The alternatives of an or-pattern bind different names, or one name at different types | Bind the same names in every alternative (`_` for the unneeded ones), or split the arm |
+| `E_PATTERN_TYPE` | A handler arm that binds an argument with something other than a name, `_` or tuple, or a list pattern on a value that isn't a `List` | Bind it to a name and match inside the arm; match lists with `[x, ..rest]` |
 | `E_RULE_ARITY` | A `rule` row with the wrong number of cells | One cell per parameter |
 | `E_RULE_GAP` | Some inputs match no row of a `rule` | Add a row for the example inputs shown |
 | `E_RULE_SHADOWED` | A `rule` row that can never fire | Remove it, or move it above the rows that cover it |
@@ -277,6 +279,7 @@ This page lists every code the compiler can emit, grouped by area. The test suit
 | Code | Meaning | Fix |
 |---|---|---|
 | `W_EFFECT_UNUSED` | A declared effect the body never performs | Remove it from the signature |
+| `W_ARM_UNREACHABLE` | A `match` or `catch` arm, or one alternative of an or-pattern, that the arms above already cover; or an `if e is p` whose pattern always matches | Remove it or move it up; for `if e is p`, bind with `p = e` |
 | `W_CATCH_UNUSED` | A `catch` around code that never raises that error | Remove the `catch` |
 | `W_HANDLE_UNUSED` | A `handle` around code that never performs that effect | Remove the `handle` |
 | `W_UNSAFE_UNUSED` | An `unsafe` clause with no unsafe operation | Remove the clause |

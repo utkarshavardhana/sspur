@@ -99,6 +99,18 @@ mod imp {
         fn _errno() -> *mut i32;
         fn _open_osfhandle(h: isize, flags: i32) -> i32;
         fn _get_osfhandle(fd: i32) -> isize;
+        fn _set_invalid_parameter_handler(h: Option<IpHandler>) -> Option<IpHandler>;
+    }
+
+    type IpHandler = unsafe extern "C" fn(*const u16, *const u16, *const u16, u32, usize);
+    unsafe extern "C" fn ignore_ip(_: *const u16, _: *const u16, _: *const u16, _: u32, _: usize) {}
+
+    // The CRT aborts on a bad fd by default; POSIX returns EBADF, so make it do that.
+    fn crt_quiet() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| unsafe {
+            _set_invalid_parameter_handler(Some(ignore_ip));
+        });
     }
 
     pub fn mono_ns() -> i64 {
@@ -111,9 +123,11 @@ mod imp {
     }
 
     pub unsafe fn fd_read(fd: i32, buf: *mut c_void, n: usize) -> isize {
+        crt_quiet();
         unsafe { _read(fd, buf, n.min(i32::MAX as usize) as u32) as isize }
     }
     pub unsafe fn fd_pread(fd: i32, buf: *mut c_void, n: usize, off: i64) -> isize {
+        crt_quiet();
         unsafe {
             let cur = _lseeki64(fd, 0, 1);
             if cur < 0 || _lseeki64(fd, off, 0) < 0 {
@@ -127,12 +141,15 @@ mod imp {
         }
     }
     pub unsafe fn fd_write(fd: i32, buf: *const c_void, n: usize) -> isize {
+        crt_quiet();
         unsafe { _write(fd, buf, n.min(i32::MAX as usize) as u32) as isize }
     }
     pub unsafe fn fd_seek(fd: i32, off: i64, whence: i32) -> i64 {
+        crt_quiet();
         unsafe { _lseeki64(fd, off, whence) }
     }
     pub unsafe fn fd_close(fd: i32) -> i32 {
+        crt_quiet();
         unsafe { _close(fd) }
     }
 

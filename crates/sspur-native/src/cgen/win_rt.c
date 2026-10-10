@@ -5,6 +5,9 @@
 #include <fcntl.h>
 #include <wchar.h>
 #define SS_W_API __declspec(dllimport)
+#include <stdlib.h>
+static void ss_w_ignore_ip(const wchar_t* e, const wchar_t* f, const wchar_t* fl, unsigned ln, uintptr_t r) { (void)e; (void)f; (void)fl; (void)ln; (void)r; }
+__attribute__((constructor)) static void ss_w_crt_quiet(void) { _set_invalid_parameter_handler(ss_w_ignore_ip); }
 SS_W_API void __stdcall AcquireSRWLockExclusive(void** l);
 SS_W_API void __stdcall ReleaseSRWLockExclusive(void** l);
 SS_W_API int __stdcall SleepConditionVariableSRW(void** c, void** l, unsigned long ms, unsigned long flags);

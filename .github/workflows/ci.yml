@@ -84,6 +84,87 @@ jobs:
           SSPUR_STRICT_NATIVE: "1"
         run: python3 tools/corpus_diff.py
 
+  windows:
+    name: Windows x86_64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUST_BACKTRACE: "1"
+      Z3_VERSION: 4.13.4
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install tools (LLVM, z3)
+        run: |
+          llvm="C:/Program Files/LLVM/bin"
+          if [ ! -x "$llvm/clang.exe" ]; then choco install llvm -y --no-progress; fi
+          echo "$llvm" >> "$GITHUB_PATH"
+          z3="z3-${Z3_VERSION}-x64-win"
+          if curl -fsSL -o "$RUNNER_TEMP/z3.zip" "https://github.com/Z3Prover/z3/releases/download/z3-${Z3_VERSION}/${z3}.zip"; then
+            unzip -q "$RUNNER_TEMP/z3.zip" -d "$RUNNER_TEMP"
+            echo "$RUNNER_TEMP/$z3/bin" >> "$GITHUB_PATH"
+          else
+            echo "::warning::z3 download failed; z3-backed tests will skip"
+          fi
+          echo "SSPUR_CACHE=$RUNNER_TEMP/sspur-cache" >> "$GITHUB_ENV"
+          python -m pip install --quiet tzdata
+          echo "TZDIR=$(python -c 'import os, tzdata; print(os.path.join(os.path.dirname(tzdata.__file__), "zoneinfo"))')" >> "$GITHUB_ENV"
+
+      - name: Toolchain versions
+        run: |
+          rustc --version
+          clang --version
+          clang -print-resource-dir
+          find "$(clang -print-resource-dir)/lib" -name "clang_rt.builtins*" || echo "no clang_rt.builtins found"
+          z3 --version || echo "z3 not installed"
+          ld.lld --version || echo "ld.lld not found"
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Version
+        run: ./target/release/sspur.exe --version
+
+      - name: Native smoke test
+        run: |
+          ./target/release/sspur.exe test --strict-native tests/programs/core.ssp
+          ./target/release/sspur.exe test --strict-native tests/programs/concurrency.ssp
+          ./target/release/sspur.exe test --strict-native tests/programs/std_system.ssp
+
+      - name: Clippy
+        run: cargo clippy --release --all-targets -- -D warnings
+
+      - name: Test
+        env:
+          SSPUR_STRICT_NATIVE: "1"
+        run: cargo test --release --no-fail-fast
+
+      - name: Corpus differential check
+        env:
+          SSPUR_BIN: ${{ github.workspace }}/target/release/sspur.exe
+          SSPUR_STRICT_NATIVE: "1"
+          PYTHONUTF8: "1"
+        run: python tools/corpus_diff.py
+
+      - name: Upload native build cache
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sspur-cache-windows
+          path: ${{ runner.temp }}/sspur-cache
+          if-no-files-found: ignore
+
   site:
     name: Docs site and tutorial snippets
     runs-on: ubuntu-24.04

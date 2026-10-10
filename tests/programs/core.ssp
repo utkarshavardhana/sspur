@@ -436,6 +436,10 @@ rule shipping(kg: Int, zone: Zone, prime: Bool) -> Int
   | _, Remote, _ => 12
   | _, _, _ => 8
 
+rule near(zone: Zone, kg: Int) -> Bool
+  | Local | Domestic, kg <= 10 => true
+  | _, _ => false
+
 rule grade(score: Int) -> Str
   pre score >= 0 and score <= 100
   | score >= 90 => "A"
@@ -454,3 +458,95 @@ test local_small = shipping(1, Local, false) == 3
 test remote = shipping(9, Remote, false) == 12
 test fallback = shipping(9, Domestic, true) == 8
 test grades = [95, 80, 51, 10].map(grade) == ["A", "B", "C", "F"]
+test near_rule = near(Local, 3) and near(Domestic, 10) and not near(Remote, 1) and not near(Local, 11)
+
+// richer patterns: or-patterns, list patterns, if e is p (ADR 0029)
+
+type Tok = TLit{v: Int} | TNeg{v: Int} | TAdd | TSub | TMul | TOpen | TClose
+
+fn tok_value(t: Tok) -> Int
+= match t
+  | TLit{v} | TNeg{v} => v
+  | TAdd | TSub | TMul => 0
+  | TOpen | TClose => -1
+
+fn is_op(t: Tok) -> Bool
+= match t
+  | TAdd | TSub | TMul => true
+  | _ => false
+
+fn rpn(toks: List[Tok], stack: List[Int]) -> Opt[Int]
+= match (toks, stack)
+  | ([], [x]) => some(x)
+  | ([TLit{v}, ..rest], _) => rpn(rest, [v] + stack)
+  | ([TAdd, ..rest], [b, a, ..s]) => rpn(rest, [a + b] + s)
+  | ([TSub, ..rest], [b, a, ..s]) => rpn(rest, [a - b] + s)
+  | ([TMul, ..rest], [b, a, ..s]) => rpn(rest, [a * b] + s)
+  | _ => none
+
+fn pairwise(xs: List[Int]) -> List[Int]
+= match xs
+  | [a, b, ..rest] => [a + b] + pairwise([b] + rest)
+  | [_] | [] => []
+
+fn middle(xs: List[Str]) -> List[Str]
+= match xs
+  | [_, ..mid, _] => mid
+  | _ => []
+
+fn last_two(xs: List[Int]) -> Opt[(Int, Int)]
+= match xs
+  | [..init, a, b] => some((a + init.len * 0, b))
+  | _ => none
+
+fn firsts(xs: List[Res[Int, Str]]) -> Str
+= match xs
+  | [ok(0 | 1), ..] => "small"
+  | [ok(n), ..] if n > 100 => "big"
+  | [ok(_), err(e), ..] => "then {e}"
+  | [err(_) | ok(_), ..rest] if rest.is_empty => "alone"
+  | [_, ..] => "other"
+  | [] => "empty"
+
+fn zip_sum(ps: List[(Int, Int)]) -> Int
+= match ps
+  | [(a, b), ..rest] => a * b + zip_sum(rest)
+  | [] => 0
+
+fn route(req: List[Str]) -> Str
+= match req
+  | ["GET", path] | ["HEAD", path] => "read {path}"
+  | ["POST", path, ..body] => "write {path} {body.len}"
+  | [m, ..] => "unknown {m}"
+  | [] => "empty"
+
+fn nested(o: Opt[Opt[Int]]) -> Int
+= match o
+  | some(some(x)) => x
+  | some(none) => -1
+  | none => -2
+
+fn bools(p: (Bool, Bool)) -> Int
+= match p
+  | (true, true) => 3
+  | (true, false) | (false, true) => 1
+  | (false, false) => 0
+
+fn count_pos(xs: List[Opt[Int]]) -> Int
+= do
+  var n = 0
+  for x in xs
+    if x is some(v) and v > 0 then n := n + v
+  n
+
+fn parity(n: Int) -> Str
+= if n.str.to_int is some(m) and m % 2 == 0 then "even" else if n is 1 | 3 | 5 then "small odd" else "odd"
+
+fn opt_or(o: Opt[Str]) -> Str
+= if o is some(s) then s else "-"
+
+test or_patterns = tok_value(TNeg{v: -3}) == -3 and tok_value(TClose) == -1 and is_op(TMul) and not is_op(TLit{v: 1}) and bools((false, true)) == 1 and bools((true, true)) == 3 and bools((false, false)) == 0
+test list_patterns = rpn([TLit{v: 2}, TLit{v: 3}, TAdd, TLit{v: 4}, TMul], []) == some(20) and rpn([TAdd], []) == none and pairwise([1, 2, 3, 4]) == [3, 5, 7] and middle(["a", "b", "c", "d"]) == ["b", "c"] and middle(["a"]) == [] and last_two([1, 2, 3]) == some((2, 3)) and last_two([1]) == none
+test nested_list_patterns = firsts([ok(1)]) == "small" and firsts([ok(500)]) == "big" and firsts([ok(7), err("x")]) == "then x" and firsts([err("e")]) == "alone" and firsts([err("e"), ok(2)]) == "other" and firsts([]) == "empty" and zip_sum([(1, 2), (3, 4)]) == 14
+test literal_list_patterns = route(["GET", "/a"]) == "read /a" and route(["HEAD", "/b"]) == "read /b" and route(["POST", "/c", "x", "y"]) == "write /c 2" and route(["PUT"]) == "unknown PUT" and route([]) == "empty" and nested(some(none)) == -1 and nested(some(some(4))) == 4
+test if_is = count_pos([some(2), none, some(-1), some(3)]) == 5 and parity(4) == "even" and parity(3) == "small odd" and parity(7) == "odd" and opt_or(none) == "-" and opt_or(some("a")) == "a"

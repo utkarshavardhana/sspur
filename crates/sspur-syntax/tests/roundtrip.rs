@@ -145,3 +145,28 @@ fn index_after_method_with_constructor_expression() {
     assert!(matches!(&h.body.kind, ExprKind::Method { targs, .. } if targs.len() == 1));
     roundtrip(src);
 }
+
+#[test]
+fn richer_patterns_print_canonically() {
+    let cases = [
+        ("fn f(o: Opt[Int]) -> Int\n= if let some(v) = o then v else 0", "= if o is some(v) then v else 0"),
+        ("fn f(o: Opt[Int]) -> Int\n= if o is some(v) and v > 0 or v < -9 then v else 0", "= if o is some(v) and (v > 0 or v < -9) then v else 0"),
+        ("fn f(a: Bool, b: Bool) -> Int\n= if (a and b) is true then 1 else 0", "= if (a and b) is true then 1 else 0"),
+        ("fn f(o: Opt[Int]) -> Unit ! log\n= if o is some(v) then log(\"{v}\")", "= if o is some(v) then log(\"{v}\")"),
+        ("fn f(o: Opt[Int], p: Opt[Int]) -> Int\n= if o is some(v) then v else if p is some(w) then w else 0", "= if o is some(v) then v else if p is some(w) then w else 0"),
+        ("fn f(o: Opt[Int], p: Opt[Int]) -> Int\n= if o is some(v) then (if p is some(w) then w else v) else 0", "then (if p is some(w) then w else v) else 0"),
+        ("fn f(xs: List[Int]) -> Int\n= match xs\n  | [x, ...rest] => x\n  | [*rest] => 0", "| [x, ..rest] => x\n| [..rest] => 0"),
+        ("fn f(xs: List[Int]) -> Int\n= match xs\n  | [] | [_] => 0\n  | [a, .., z] | [a, z] => a + z", "| [] | [_] => 0\n| [a, .., z] | [a, z] => a + z"),
+        ("fn f(o: Opt[Int]) -> Int\n= match o\n  | some(0 | 1) | none => 0\n  | some(_) => 1", "| some(0 | 1) | none => 0"),
+    ];
+    for (src, want) in cases {
+        roundtrip(src);
+        let printed = print_module(&parse(src).unwrap());
+        assert!(printed.contains(want), "{src}\n---\n{printed}");
+    }
+    let (_, notes) = sspur_syntax::parse_noted("fn f(o: Opt[Int], xs: List[Int]) -> Int\n= if let some(v) = o then v else match xs\n  | [x, ...r] => x\n  | _ => 0").unwrap();
+    assert_eq!(notes, ["if let p = e -> if e is p", "...rest -> ..rest"]);
+    for (src, code) in [("fn f(a: Bool, b: Opt[Int]) -> Int\n= if a and b is some(v) then v else 0", "E_PARSE_IS"), ("fn f(xs: List[Int]) -> Int\n= match xs\n  | [a, .., ..] => a\n  | _ => 0", "E_PARSE_PATTERN")] {
+        assert_eq!(parse(src).unwrap_err().code, code, "{src}");
+    }
+}

@@ -77,3 +77,17 @@ fn examples_are_part_of_identity() {
     assert_ne!(a["f"], b["f"]);
     assert_eq!(a["f"], c["g"], "self-references in examples are rename-stable");
 }
+
+#[test]
+fn richer_patterns_hash_by_meaning() {
+    let h = |src: &str| hashes(src)["f"].clone();
+    let swap = h("fn f(p: (Int, Int)) -> Int\n= match p\n  | (a, 0) | (0, a) => a\n  | _ => 1");
+    assert_eq!(swap, h("fn f(q: (Int, Int)) -> Int\n= match q\n  | (b, 0) | (0, b) => b\n  | _ => 1"));
+    let order = |pat: &str| h(&format!("fn f(p: (Int, Int)) -> Int\n= match p\n  | {pat} => a - b\n  | _ => 1"));
+    assert_ne!(order("(a, b) | (b, a)"), order("(a, b) | (a, b)"));
+    let lists = ["[x, ..r]", "[..r, x]", "[x, .., y]", "[x, y]"].map(|p| h(&format!("fn f(xs: List[Int]) -> Int\n= match xs\n  | {p} => 1\n  | _ => 0")));
+    assert!(lists.iter().enumerate().all(|(i, a)| lists[i + 1..].iter().all(|b| a != b)));
+    let is = h("fn f(o: Opt[Int]) -> Int\n= if o is some(v) then v else 0");
+    assert_eq!(is, h("fn f(o: Opt[Int]) -> Int\n= if let some(w) = o then w else 0"));
+    assert_ne!(is, h("fn f(o: Opt[Int]) -> Int\n= match o\n  | some(v) => v\n  | _ => 0"));
+}

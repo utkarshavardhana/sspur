@@ -2116,17 +2116,18 @@ impl Checker {
                 let out = exp.cloned().unwrap_or_else(|| self.fresh());
                 let before = self.diags.len();
                 self.check_arms(&st, arms, &out);
-                if !self.diags[before..].iter().any(Diag::is_error) {
-                    self.report_unreachable(&st, arms, *form);
-                }
                 if arms.last().is_some_and(|a| matches!(a.body.kind, ExprKind::Match(..))) && self.diags[before..].iter().any(Diag::is_error) {
                     let i = self.diags[before..].iter().position(Diag::is_error).unwrap() + before;
                     self.diags[i].hint = Some("a match inside an arm takes every arm below it; move the inner match into a helper fn".into());
                 }
+                let arm_errors = self.diags[before..].iter().any(Diag::is_error);
                 let missing = self.missing_cases(&st, arms);
                 if !missing.is_empty() {
                     let arms_hint = missing.iter().map(|m| format!("| {} => ?", m.strip_suffix("{..}").unwrap_or(m))).collect::<Vec<_>>().join(" ");
                     self.push_diag("E_NONEXHAUSTIVE", "error", e.span, format!("match does not cover: {}", missing.join(", ")), Some(format!("add {arms_hint}")), vec![]);
+                }
+                if !arm_errors {
+                    self.report_unreachable(&st, arms, *form);
                 }
                 self.resolve(&out)
             }

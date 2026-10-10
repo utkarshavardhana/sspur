@@ -281,3 +281,48 @@ fn early_return_in_a_block_lambda_is_rejected_with_a_hint() {
     c.sort();
     assert_eq!(c, ["E_EFFECT_MISSING", "E_EFFECT_MISSING"]);
 }
+
+#[test]
+fn or_patterns_bind_the_same_names_at_the_same_types() {
+    let base = "type S = A{x: Int} | B{x: Int, s: Str} | C\n";
+    assert!(codes(&format!("{base}fn f(v: S) -> Int\n= match v\n  | A{{x}} | B{{x}} => x\n  | C => 0")).is_empty());
+    let d = diags(&format!("{base}fn f(v: S) -> Int\n= match v\n  | A{{x}} | C => x\n  | B => 0"));
+    assert_eq!(d[0].code, "E_PATTERN_OR_BINDS");
+    assert!(d[0].msg.contains("'A{x}' binds 'x' but the alternative 'C' does not"), "{}", d[0].msg);
+    assert!(d[0].hint.as_deref().unwrap().contains("bind 'x' in every alternative"));
+    let d = diags(&format!("{base}fn f(v: S) -> Int\n= match v\n  | A{{x}} | B{{s: x}} => 1\n  | C => 0"));
+    assert_eq!(d[0].code, "E_PATTERN_OR_BINDS");
+    assert!(d[0].msg.contains("'x' is Int in 'A{x}' but Str in 'B{s: x}'"), "{}", d[0].msg);
+}
+
+#[test]
+fn exhaustiveness_sees_nested_patterns_lists_and_alternatives() {
+    let missing = |src: &str| diags(src).into_iter().find(|d| d.code == "E_NONEXHAUSTIVE").map(|d| d.msg).unwrap_or_default();
+    assert!(codes("fn f(o: Opt[Opt[Int]]) -> Int\n= match o\n  | some(some(x)) => x\n  | some(none) | none => 0").is_empty());
+    assert_eq!(missing("fn f(o: Opt[Opt[Int]]) -> Int\n= match o\n  | some(some(x)) => x\n  | none => 0"), "match does not cover: some(none)");
+    assert!(codes("fn f(xs: List[Int]) -> Int\n= match xs\n  | [] => 0\n  | [x, ..rest] => x + f(rest)").is_empty());
+    assert!(codes("fn f(xs: List[Int]) -> Int\n= match xs\n  | [first, .., last] => first + last\n  | [x] => x\n  | [] => 0").is_empty());
+    assert_eq!(missing("fn f(xs: List[Int]) -> Int\n= match xs\n  | [] => 0\n  | [x] => x"), "match does not cover: [_, _, ..]");
+    assert_eq!(missing("fn f(xs: List[Opt[Int]]) -> Int\n= match xs\n  | [some(x), ..] => x\n  | [] => 0"), "match does not cover: [none, ..]");
+    assert_eq!(missing("fn f(p: (Bool, Bool)) -> Int\n= match p\n  | (true, _) | (_, true) => 1"), "match does not cover: (false, false)");
+    assert_eq!(missing("type S = A{x: Opt[Int]} | B\nfn f(v: S) -> Int\n= match v\n  | A{x: some(n)} => n\n  | B => 0"), "match does not cover: A{x: none}");
+    assert!(codes("fn f(o: Opt[Int]) -> Int\n= if o is some(v) and v > 0 then v else 0").is_empty());
+}
+
+#[test]
+fn arms_the_earlier_arms_cover_are_unreachable() {
+    let warn = |src: &str| diags(src).into_iter().filter(|d| d.code == "W_ARM_UNREACHABLE").map(|d| d.msg).collect::<Vec<_>>();
+    assert_eq!(warn("fn f(xs: List[Int]) -> Int\n= match xs\n  | [x, ..] => x\n  | [x, y] => y\n  | [] => 0"), ["arm 2 '| [x, y]' can never match: the arms above cover it"]);
+    assert_eq!(warn("fn f(o: Opt[Int]) -> Int\n= match o\n  | some(x) => x\n  | none => 0\n  | _ => 1"), ["arm 3 '| _' can never match: the arms above cover it"]);
+    assert_eq!(warn("fn f(n: Int) -> Int\n= match n\n  | 1 | 2 => 0\n  | 3 | 2 => 1\n  | _ => 2"), ["alternative '2' of arm 2 can never match: earlier patterns cover it"]);
+    assert_eq!(warn("fn f(p: (Int, Int)) -> Int\n= if p is (a, b) then a + b else 0"), ["the pattern always matches, so the else branch never runs"]);
+    assert!(warn("fn f(o: Opt[Int]) -> Int\n= match o\n  | some(x) if x > 0 => x\n  | some(x) => 0\n  | none => 1").is_empty());
+    assert_eq!(codes("fn f(xs: List[Int]) -> Int\n= match xs\n  | [a, ..r] | [..r, a] => a + r.len\n  | [] => 0"), ["W_ARM_UNREACHABLE"]);
+}
+
+#[test]
+fn list_patterns_type_their_parts() {
+    assert_eq!(codes("fn f(n: Int) -> Int\n= match n\n  | [x] => x\n  | _ => 0"), vec!["E_PATTERN_TYPE"]);
+    assert!(codes("fn f(xs: List[Str]) -> Int\n= match xs\n  | [x, ..rest] => x + rest.len\n  | [] => 0").iter().all(|c| c == "E_TYPE_MISMATCH"));
+    assert!(codes("fn f(xs: List[Str]) -> Int\n= match xs\n  | [x, ..rest] => x.len + rest.len\n  | [] => 0").is_empty());
+}

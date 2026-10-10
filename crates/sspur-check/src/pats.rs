@@ -111,7 +111,7 @@ impl Pm<'_> {
                 _ => Dp::Wild,
             },
             Pat::Ctor { name, args } => {
-                let name = canon_ctor(name);
+                let name = name.as_str();
                 let fields = |fs: &[(String, Type)]| -> Vec<Dp> {
                     match args {
                         CtorArgs::None => fs.iter().map(|_| Dp::Wild).collect(),
@@ -120,7 +120,7 @@ impl Pm<'_> {
                     }
                 };
                 match self.shape(t) {
-                    Shape::Finite(vs) => match vs.iter().find(|(v, _)| v == name) {
+                    Shape::Finite(vs) => match vs.iter().find(|(v, _)| v == name).or_else(|| vs.iter().find(|(v, _)| v == canon_ctor(name))) {
                         Some((v, fs)) => Dp::Ctor(K::Named(v.clone()), fields(fs)),
                         None => Dp::Ctor(K::Named(name.to_string()), vec![]),
                     },

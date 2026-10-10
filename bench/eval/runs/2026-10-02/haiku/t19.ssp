@@ -1,7 +1,0 @@
-fn group_by_len(words: List[Str]) -> Map[Int, List[Str]]
-= words.fold(empty_map(), (m, w) =>
-    do
-    var len = w.len
-    var lst = m.get(len).or([])
-    m.put(len, lst.push(w))
-  )

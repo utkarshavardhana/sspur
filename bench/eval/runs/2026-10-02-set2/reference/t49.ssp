@@ -1,2 +1,0 @@
-fn partition[A](xs: List[A], f: A -> Bool) -> (List[A], List[A])
-= (xs.filter(f), xs.filter(x => not f(x)))

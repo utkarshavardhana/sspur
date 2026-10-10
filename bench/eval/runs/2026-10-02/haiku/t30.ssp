@@ -1,8 +1,0 @@
-fn binary(n: Int) -> Str
-  pre n >= 0
-= if n == 0 then "0"
-  else binary_build(n, "")
-
-fn binary_build(n: Int, acc: Str) -> Str
-= if n == 0 then acc
-  else binary_build(n / 2, (if n % 2 == 0 then "0" else "1") + acc)

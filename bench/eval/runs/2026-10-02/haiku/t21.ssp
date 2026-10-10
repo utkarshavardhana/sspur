@@ -1,3 +1,0 @@
-fn apply_n[A](x: A, n: Int, f: A -> A) -> A
-  pre n >= 0
-= if n == 0 then x else apply_n(f(x), n - 1, f)

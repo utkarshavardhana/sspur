@@ -1,4 +1,0 @@
-fn depth(t: Tree) -> Int
-= match t
-  | Leaf => 0
-  | Node{left, right, value: _} => 1 + max(depth(left), depth(right))

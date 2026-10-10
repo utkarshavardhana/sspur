@@ -1,6 +1,0 @@
-fn is_palindrome_num(n: Int) -> Bool
-  pre n >= 0
-= do
-  var s = n.str
-  var rev = s.reverse
-  s == rev

@@ -1,8 +1,0 @@
-fn dedupe_adjacent(xs: List[Int]) -> List[Int]
-= do
-  var out = xs.take(0)
-  for i in 0..xs.len
-    if i == 0 or xs[i] != xs[i - 1] then out := out.push(xs[i])
-  out
-
-test dedupe_basic = dedupe_adjacent([1, 1, 2, 2, 2, 1]) == [1, 2, 1]

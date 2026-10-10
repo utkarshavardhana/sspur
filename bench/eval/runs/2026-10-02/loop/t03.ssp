@@ -1,5 +1,0 @@
-fn running_sum(xs: List[Int]) -> List[Int]
-= xs.fold([], (acc, x) => acc.push(acc.last.or(0) + x))
-
-test r1 = running_sum([1, 2, 3]) == [1, 3, 6]
-test r2 = running_sum([]) == []

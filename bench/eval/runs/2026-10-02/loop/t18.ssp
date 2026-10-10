@@ -1,6 +1,0 @@
-fn pairs[A](xs: List[A]) -> List[(A, A)]
-= xs.zip(xs.drop(1))
-
-test t18_basic = pairs([1, 2, 3]) == [(1, 2), (2, 3)]
-test t18_one = pairs([1]) == []
-test t18_empty = pairs(["a"].drop(1)) == []

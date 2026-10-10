@@ -1,4 +1,0 @@
-fn clamp(x: Int, lo: Int, hi: Int) -> Int
-  pre lo <= hi
-  post r >= lo and r <= hi
-= max(lo, min(x, hi))

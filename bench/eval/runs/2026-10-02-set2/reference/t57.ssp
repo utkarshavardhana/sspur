@@ -1,5 +1,0 @@
-fn sum_nums(j: Json) -> Int
-= match j
-  | JNum{n} => n
-  | JArr{items} => items.map(sum_nums).sum
-  | _ => 0

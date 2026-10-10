@@ -1,2 +1,0 @@
-fn most_common(xs: List[Str]) -> Opt[Str]
-= xs.counts.sort_by(-_.1).first.map(_.0)

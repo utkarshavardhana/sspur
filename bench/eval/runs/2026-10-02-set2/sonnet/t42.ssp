@@ -1,8 +1,0 @@
-fn gcd_of(a: Int, b: Int) -> Int
-= if b == 0 then a else gcd_of(b, a % b)
-
-fn lcm_step(acc: Int, x: Int) -> Int
-= acc / gcd_of(acc, x) * x
-
-fn lcm_list(xs: List[Int]) -> Int
-= xs.fold(1, lcm_step)

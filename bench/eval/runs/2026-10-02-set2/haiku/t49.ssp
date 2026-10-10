@@ -1,8 +1,0 @@
-fn partition[A](xs: List[A], f: A -> Bool) -> (List[A], List[A])
-= do
-  var true_list = []
-  var false_list = []
-  for x in xs do
-    if f(x) then true_list := true_list.push(x)
-    else false_list := false_list.push(x)
-  (true_list, false_list)

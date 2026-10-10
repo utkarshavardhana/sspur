@@ -1,2 +1,0 @@
-fn count_vowels(s: Str) -> Int
-= s.lower.chars.filter(c => ["a", "e", "i", "o", "u"].contains(c)).len

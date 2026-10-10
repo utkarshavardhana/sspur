@@ -28,7 +28,7 @@ The test suite is heavy (it compiles a lot of C). If memory is tight, limit para
 
 ## The corpus check
 
-`tools/corpus_diff.py` takes every program in `bench/eval/runs/`, adds its hidden tests, and runs it in the interpreter and as native code. It passes only when every program gives identical output in both tiers, every function compiles natively, and no native build fails:
+`tools/corpus_diff.py` takes every program in `bench/eval/corpus.jsonl`, adds its hidden tests, and runs it in the interpreter and as native code. It passes only when every program gives identical output in both tiers, every function compiles natively, and no native build fails:
 
 ```
 199/199 programs identical; 270/270 functions native; 0 native build failures

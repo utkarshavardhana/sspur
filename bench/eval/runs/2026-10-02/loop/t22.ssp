@@ -1,6 +1,0 @@
-fn compose_all(fs: List[Int -> Int]) -> Int -> Int
-= x => fs.fold(x, (acc, f) => f(acc))
-
-test compose_empty = compose_all([])(7) == 7
-test compose_order = compose_all([_ + 1, _ * 10])(2) == 30
-test compose_order2 = compose_all([_ * 10, _ + 1])(2) == 21

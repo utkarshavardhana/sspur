@@ -1,5 +1,0 @@
-fn flatten(xss: List[List[Int]]) -> List[Int]
-= xss.flat_map(x => x)
-
-test f1 = flatten([[1, 2], [], [3]]) == [1, 2, 3]
-test f2 = flatten([]) == []

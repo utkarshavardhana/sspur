@@ -1,2 +1,0 @@
-fn inventory_value(items: List[Item]) -> Int
-= items.map(_.price * _.qty).sum

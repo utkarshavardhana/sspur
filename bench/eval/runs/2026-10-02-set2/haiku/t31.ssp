@@ -1,9 +1,0 @@
-fn max_subarray(xs: List[Int]) -> Int
-  pre xs.len > 0
-= do
-  var max_so_far = xs.first.get
-  var max_ending_here = xs.first.get
-  for x in xs.drop(1) do
-    max_ending_here := max(x, max_ending_here + x)
-    max_so_far := max(max_so_far, max_ending_here)
-  max_so_far

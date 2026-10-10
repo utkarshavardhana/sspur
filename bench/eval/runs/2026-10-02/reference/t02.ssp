@@ -1,2 +1,0 @@
-fn second_largest(xs: List[Int]) -> Opt[Int]
-= xs.unique.sort.reverse.get(1)

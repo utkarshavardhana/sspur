@@ -1,5 +1,0 @@
-fn perimeter(s: Shape) -> F64
-= match s
-  | Circle{r} => 2.0 * 3.14159 * r
-  | Rect{w, h} => 2.0 * (w + h)
-  | Square{s} => 4.0 * s

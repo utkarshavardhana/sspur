@@ -1,4 +1,0 @@
-fn merge_sorted(a: List[Int], b: List[Int]) -> List[Int]
-= (a + b).sort
-
-test merge_basic = merge_sorted([1, 3, 5], [2, 3, 6]) == [1, 2, 3, 3, 5, 6]

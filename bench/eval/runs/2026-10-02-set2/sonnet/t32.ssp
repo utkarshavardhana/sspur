@@ -1,4 +1,0 @@
-fn rotate(xs: List[Int], k: Int) -> List[Int]
-= if xs.is_empty then xs else xs.drop(k % xs.len) + xs.take(k % xs.len)
-
-test rotate_basic = rotate([1, 2, 3, 4], 1) == [2, 3, 4, 1]

@@ -1,5 +1,0 @@
-fn merge_sorted(a: List[Int], b: List[Int]) -> List[Int]
-= match (a.first, b.first)
-  | (some(x), some(y)) => if x <= y then [x] + merge_sorted(a.drop(1), b) else [y] + merge_sorted(a, b.drop(1))
-  | (none, _) => b
-  | _ => a

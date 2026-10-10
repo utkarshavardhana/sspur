@@ -1,5 +1,0 @@
-fn add_word(m: Map[Int, List[Str]], w: Str) -> Map[Int, List[Str]]
-= m.put(w.len, m.get(w.len).or([]).push(w))
-
-fn group_by_len(words: List[Str]) -> Map[Int, List[Str]]
-= words.fold(empty_map(), add_word)

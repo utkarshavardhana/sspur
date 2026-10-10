@@ -1,2 +1,0 @@
-fn cheapest(items: List[Item]) -> Opt[Str]
-= if items.is_empty then none else some(items.fold(items.first.get, (acc, item) => if item.price < acc.price then item else acc).name)

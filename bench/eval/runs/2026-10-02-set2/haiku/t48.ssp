@@ -1,7 +1,0 @@
-fn trace_sum(xs: List[Int]) -> Int ! log
-= do
-  var total = 0
-  for x in xs do
-    total := total + x
-    log("total=" + total.str)
-  total

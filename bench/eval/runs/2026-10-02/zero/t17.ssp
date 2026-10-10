@@ -1,5 +1,0 @@
-fn withdraw(a: Account, amt: Int) -> Account ! fail[TxErr]
-= if amt <= 0 then raise Invalid else if amt > a.balance then raise Insufficient{short: amt - a.balance} else Account{id: a.id, balance: a.balance - amt}
-
-fn apply_all(a: Account, amts: List[Int]) -> Account ! fail[TxErr]
-= amts.fold(a, withdraw)

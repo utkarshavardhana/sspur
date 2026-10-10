@@ -1,5 +1,0 @@
-fn log_each(xs: List[Str]) -> Int ! log
-= do
-  for (i, x) in xs.enumerate
-    log("{i}: {x}")
-  xs.len

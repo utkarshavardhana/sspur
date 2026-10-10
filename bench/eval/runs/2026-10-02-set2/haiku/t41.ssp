@@ -1,3 +1,0 @@
-fn digit_sum(n: Int) -> Int
-  pre n >= 0
-= if n == 0 then 0 else (n % 10) + digit_sum(n / 10)

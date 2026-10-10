@@ -1,9 +1,0 @@
-fn dedupe_adjacent(xs: List[Int]) -> List[Int]
-= if xs.is_empty then []
-  else
-    do
-      var result = [xs.first.get]
-      for x in xs.drop(1) do
-        if x != result.last.get then
-          result := result.push(x)
-      result

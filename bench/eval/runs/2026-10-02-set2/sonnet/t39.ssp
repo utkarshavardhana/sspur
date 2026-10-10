@@ -1,4 +1,0 @@
-fn longest_word(s: Str) -> Str
-= s.split(" ").filter(w => w.len > 0).fold("", (best, w) => if w.len > best.len then w else best)
-
-test longest_word_basic = longest_word("a  bcd ef") == "bcd"

@@ -1,4 +1,0 @@
-fn second_largest(xs: List[Int]) -> Opt[Int]
-= do
-  sorted = xs.unique.sort_by(x => -x)
-  sorted.get(1)

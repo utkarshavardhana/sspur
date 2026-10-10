@@ -1,2 +1,0 @@
-fn longest_word(s: Str) -> Str
-= s.split(" ").fold("", (best, w) => if w.len > best.len then w else best)

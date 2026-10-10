@@ -1,5 +1,0 @@
-fn count_vowels(s: Str) -> Int
-= s.lower.chars.filter(c => "aeiou".contains(c)).len
-
-test v1 = count_vowels("HEllo World") == 3
-test v2 = count_vowels("") == 0

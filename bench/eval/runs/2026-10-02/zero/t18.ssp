@@ -1,2 +1,0 @@
-fn pairs[A](xs: List[A]) -> List[(A, A)]
-= xs.take(max(xs.len - 1, 0)).zip(xs.drop(1))

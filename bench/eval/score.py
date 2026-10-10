@@ -4,16 +4,24 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SSPUR = os.environ.get("SSPUR", os.path.join(HERE, "../../target/release/sspur"))
 
 
+def answers_of(answers, tasks_file):
+    """A directory of <id>.ssp files, or a run name packed in corpus.jsonl (e.g. 2026-10-02/haiku)."""
+    if os.path.isdir(answers):
+        return {f[:-4]: open(os.path.join(answers, f)).read() for f in os.listdir(answers) if f.endswith(".ssp")}
+    rows = (json.loads(l) for l in open(os.path.join(HERE, "corpus.jsonl")) if l.strip())
+    return {r["id"]: r["src"] for r in rows if r["run"] == answers and r["tasks"] == tasks_file}
+
+
 def score(answers, tasks_file="tasks.json"):
     tasks = json.load(open(os.path.join(HERE, tasks_file)))
+    found = answers_of(answers, tasks_file)
     results = []
     for t in tasks:
-        path = os.path.join(answers, t["id"] + ".ssp")
-        if not os.path.exists(path):
+        if t["id"] not in found:
             results.append((t["id"], "missing", ""))
             continue
         hidden = "\n\n".join(f"test hidden_{i} = {x}" for i, x in enumerate(t["tests"]))
-        src = t.get("prelude", "") + "\n\n" + open(path).read() + "\n\n" + hidden + "\n"
+        src = t.get("prelude", "") + "\n\n" + found[t["id"]] + "\n\n" + hidden + "\n"
         with tempfile.NamedTemporaryFile("w", suffix=".ssp", delete=False) as f:
             f.write(src)
         c = subprocess.run([SSPUR, "check", f.name, "--json"], capture_output=True, text=True)

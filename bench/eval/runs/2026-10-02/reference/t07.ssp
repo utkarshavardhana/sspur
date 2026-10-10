@@ -1,5 +1,0 @@
-fn cap(w: Str) -> Str
-= w.chars.take(1).join("").upper + w.chars.drop(1).join("").lower
-
-fn title_case(s: Str) -> Str
-= s.split(" ").map(cap).join(" ")

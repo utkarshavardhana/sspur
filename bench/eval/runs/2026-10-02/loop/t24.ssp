@@ -1,7 +1,0 @@
-fn tree_sum(t: Tree) -> Int
-= match t
-  | Leaf => 0
-  | Node{left, value, right} => tree_sum(left) + value + tree_sum(right)
-
-test tree_sum_leaf = tree_sum(Leaf) == 0
-test tree_sum_some = tree_sum(Node{left: Node{left: Leaf, value: 2, right: Leaf}, value: 1, right: Node{left: Leaf, value: 4, right: Leaf}}) == 7

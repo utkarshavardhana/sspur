@@ -1,9 +1,0 @@
-fn height(t: Tree) -> Int
-= match t
-  | Leaf => 0
-  | Node{left, right} => 1 + max(height(left), height(right))
-
-fn tree_height_balanced(t: Tree) -> Bool
-= match t
-  | Leaf => true
-  | Node{left, right} => (height(left) - height(right)).abs <= 1 and tree_height_balanced(left) and tree_height_balanced(right)

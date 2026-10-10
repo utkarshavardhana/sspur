@@ -1,5 +1,0 @@
-fn letters(s: Str) -> List[Str]
-= s.lower.chars.filter(_.is_alpha).sort
-
-fn is_anagram(a: Str, b: Str) -> Bool
-= letters(a) == letters(b)

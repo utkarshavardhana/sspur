@@ -1,2 +1,0 @@
-fn primes_upto(n: Int) -> List[Int]
-= (2..n + 1).filter(p => (2..p).all(d => d * d > p or p % d != 0))

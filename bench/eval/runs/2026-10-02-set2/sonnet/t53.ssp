@@ -1,4 +1,0 @@
-fn insert(t: Tree, x: Int) -> Tree
-= match t
-  | Leaf => Node{left: Leaf, value: x, right: Leaf}
-  | Node{left, value, right} => if x < value then Node{left: insert(left, x), value: value, right: right} else if x > value then Node{left: left, value: value, right: insert(right, x)} else t

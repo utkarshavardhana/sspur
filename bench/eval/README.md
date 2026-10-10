@@ -8,7 +8,7 @@ This measures whether a model that has never seen SSPUR can write correct progra
 - Agents see only the reference and the task statements (signatures, descriptions, and prelude types). They never see the tests, the suite programs, or the compiler source.
 - **Zero-shot**: no tool use beyond writing answer files.
 - **Compiler loop**: the agent may run `check.sh` (typecheck plus the agent's own tests) up to 6 times per task.
-- Scoring: `python3 score.py <answers-dir>` builds `prelude + answer + hidden tests`, typechecks it, and runs the hidden tests. A task passes only if it compiles and every hidden test passes.
+- Scoring: `python3 score.py <answers-dir or run> [tasks2.json]` builds `prelude + answer + hidden tests`, typechecks it, and runs the hidden tests. A task passes only if it compiles and every hidden test passes.
 
 ## Results (2026-10-02)
 
@@ -37,4 +37,4 @@ This measures whether a model that has never seen SSPUR can write correct progra
 - Haiku's 7 remaining failures are logic errors that the checker rejects correctly.
 - Writing the reference solutions found two more compiler bugs before the runs: a lone `{` in a string, and inferring a field access on a value of unknown type.
 
-`runs/2026-10-02/` contains every answer file, plus `reference/`, which holds the author's solutions used to validate the hidden tests.
+`corpus.jsonl` contains every answer file (210 programs, one JSON object each: `run`, `tasks`, `id`, `src`), including the `reference` runs, which hold the author's solutions used to validate the hidden tests. `python3 score.py 2026-10-02/haiku` rescores one run from it, and `tools/corpus_diff.py` uses it as the native differential corpus.

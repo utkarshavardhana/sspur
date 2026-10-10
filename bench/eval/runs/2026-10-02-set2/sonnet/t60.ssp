@@ -1,9 +1,0 @@
-fn tr_(m: List[List[Int]]) -> List[List[Int]]
-= match m.first
-  | none => []
-  | some(r) => if r.is_empty then [] else [m.map(row => row[0])] + tr_(m.map(row => row.drop(1)))
-
-fn spiral(m: List[List[Int]]) -> List[Int]
-= match m.first
-  | none => []
-  | some(row) => row + spiral(tr_(m.drop(1)).reverse)

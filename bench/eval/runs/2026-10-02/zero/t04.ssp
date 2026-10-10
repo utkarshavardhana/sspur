@@ -1,7 +1,0 @@
-fn chunk(xs: List[Int], n: Int) -> List[List[Int]]
-  pre n > 0
-= do
-  var out = []
-  for i in 0..((xs.len + n - 1) / n)
-    out := out.push(xs.drop(i * n).take(n))
-  out

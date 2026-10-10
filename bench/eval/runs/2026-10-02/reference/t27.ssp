@@ -1,9 +1,0 @@
-fn next(l: Light) -> Light
-= match l
-  | Green => Yellow
-  | Yellow => Red
-  | Red => Green
-
-fn after(l: Light, n: Int) -> Light
-  pre n >= 0
-= if n == 0 then l else after(next(l), (n - 1) % 3)

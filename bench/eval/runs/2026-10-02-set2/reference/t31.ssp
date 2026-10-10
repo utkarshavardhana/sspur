@@ -1,8 +1,0 @@
-fn max_subarray(xs: List[Int] where _.len > 0) -> Int
-= do
-  var best = xs[0]
-  var cur = 0
-  for x in xs
-    cur := max(x, cur + x)
-    best := max(best, cur)
-  best

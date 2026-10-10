@@ -1,7 +1,0 @@
-fn better(best: Opt[(Str, Int)], c: (Str, Int)) -> Opt[(Str, Int)]
-= match best
-  | none => some(c)
-  | some(b) => if c.1 > b.1 then some(c) else best
-
-fn most_common(xs: List[Str]) -> Opt[Str]
-= xs.counts.fold(none, better).map(_.0)

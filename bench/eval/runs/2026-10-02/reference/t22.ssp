@@ -1,2 +1,0 @@
-fn compose_all(fs: List[Int -> Int]) -> Int -> Int
-= fs.fold(x => x, (acc, f) => (x => f(acc(x))))

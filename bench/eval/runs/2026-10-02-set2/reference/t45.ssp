@@ -1,5 +1,0 @@
-fn cheapest(items: List[Item]) -> Opt[Str]
-= items.fold(none, (best, i) => match best
-    | some(b) if b.price <= i.price => some(b)
-    | _ => some(i)
-  ).map(_.name)

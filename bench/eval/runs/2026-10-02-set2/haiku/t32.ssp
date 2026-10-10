@@ -1,8 +1,0 @@
-fn rotate(xs: List[Int], k: Int) -> List[Int]
-= if xs.is_empty then xs
-  else
-    do
-      var n = xs.len
-      var actual_k = k % n
-      if actual_k < 0 then actual_k := actual_k + n
-      xs.drop(actual_k).concat(xs.take(actual_k))

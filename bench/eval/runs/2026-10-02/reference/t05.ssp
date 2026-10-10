@@ -1,2 +1,0 @@
-fn flatten(xss: List[List[Int]]) -> List[Int]
-= xss.flat_map(xs => xs)

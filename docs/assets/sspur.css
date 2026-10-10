@@ -23,3 +23,32 @@ code.language-sspur .hljs-subst { color: inherit; }
 .sspur-card p { margin: 0 0 0.6em; color: var(--fg); opacity: 0.8; font-size: 0.92em; }
 .sspur-card ul { margin: 0; padding-left: 1.1em; }
 .sspur-card li { margin: 0.15em 0; }
+
+.sspur-play-link {
+  display: inline-flex;
+  align-items: center;
+  height: var(--menu-bar-height, 50px);
+  padding: 0 10px;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--icons);
+  text-decoration: none;
+}
+.sspur-play-link:hover { color: var(--icons-hover); text-decoration: none; }
+
+pre.sspur-has-run { position: relative; }
+.sspur-run {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  padding: 0.15rem 0.6rem;
+  font-size: 1.2rem;
+  font-family: var(--sans-font, system-ui, sans-serif);
+  border: 1px solid var(--theme-popup-border, #ccc);
+  border-radius: 6px;
+  background: var(--theme-popup-bg, #fff);
+  color: var(--links);
+  text-decoration: none;
+  opacity: 0.85;
+}
+.sspur-run:hover { opacity: 1; text-decoration: none; }

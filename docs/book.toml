@@ -12,7 +12,7 @@ create-missing = false
 [output.html]
 site-url = "/sspur/"
 git-repository-url = "https://github.com/utkarshavardhana/sspur"
-additional-js = ["assets/sspur-highlight.js"]
+additional-js = ["assets/sspur-highlight.js", "assets/sspur-play.js"]
 additional-css = ["assets/sspur.css"]
 default-theme = "light"
 preferred-dark-theme = "navy"

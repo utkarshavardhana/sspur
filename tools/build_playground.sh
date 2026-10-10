@@ -95,6 +95,17 @@ with open(sys.argv[1], "w", encoding="utf-8") as f:
     json.dump(items, f)
 EOF
 
+# Every docs snippet, so a docs code block that shows part of a file can open the whole file.
+python3 - "$out/snippets.json" <<'EOF2'
+import glob, json, sys
+files = {}
+for path in sorted(glob.glob("docs/snippets/**/*.ssp", recursive=True)):
+    with open(path, encoding="utf-8") as f:
+        files[path] = "\n".join(l for l in f.read().split("\n") if not l.lstrip().startswith(("// ANCHOR:", "// ANCHOR_END:")))
+with open(sys.argv[1], "w", encoding="utf-8") as f:
+    json.dump(files, f, separators=(",", ":"))
+EOF2
+
 raw=$(wc -c < "$wasm" | tr -d ' ')
 gz=$(gzip -9 -c "$wasm" | wc -c | tr -d ' ')
 echo "playground in $out: wasm $((raw / 1024)) KiB, $((gz / 1024)) KiB gzipped"

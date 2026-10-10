@@ -150,18 +150,33 @@ fn fixes(src: &str, d: &Diag, module: Option<&Module>) -> Vec<Edit> {
         }
     }
     let hint = d.hint.as_deref().unwrap_or("");
-    if d.code == "E_NONEXHAUSTIVE"
-        && let Some(arms) = hint.strip_prefix("add ")
-    {
-        let text = src.get(a..b).unwrap_or("");
+    let missing = match d.code.as_str() {
+        "E_NONEXHAUSTIVE" => hint.strip_prefix("add ").map(|arms| (arms, (a, b))),
+        "E_RULE_GAP" => hint.strip_prefix("add a row such as ").zip(module.and_then(|m| d.def.as_deref().and_then(|n| def_named(m, n)))).map(|(row, def)| (row, (def.span().start as usize, (def.span().end as usize).min(src.len())))),
+        _ => None,
+    };
+    if let Some((arms, (from, to))) = missing {
+        let text = src.get(from..to).unwrap_or("").trim_end();
+        let end = from + text.len();
         let last_arm = text.lines().rev().find(|l| l.trim_start().starts_with('|'));
-        let line_start = src[..a].rfind('\n').map_or(0, |i| i + 1);
+        let line_start = src[..from].rfind('\n').map_or(0, |i| i + 1);
         let base: String = src[line_start..].chars().take_while(|c| *c == ' ').collect();
         let indent = last_arm.map_or(format!("{base}  "), |l| l[..l.len() - l.trim_start().len()].to_string());
         let arms: Vec<String> = arms.split(" | ").map(|x| format!("| {}", x.trim_start_matches("| "))).collect();
         let insert: String = arms.iter().map(|x| format!("\n{indent}{x}")).collect();
-        let title = if arms.len() == 1 { format!("Add the arm {}", arms[0]) } else { format!("Add the {} missing arms", arms.len()) };
-        out.push(Edit { title, from: b, to: b, insert });
+        let title = match (arms.len(), d.code.as_str()) {
+            (_, "E_RULE_GAP") => format!("Add the row {}", arms[0]),
+            (1, _) => format!("Add the arm {}", arms[0]),
+            (n, _) => format!("Add the {n} missing arms"),
+        };
+        out.push(Edit { title, from: end, to: end, insert });
+    }
+    if d.code == "W_ARM_UNREACHABLE" {
+        let start = src[..a].rfind('\n').map_or(0, |i| i + 1);
+        let stop = src[b..].find('\n').map_or(src.len(), |i| b + i);
+        if src[start..stop].trim_start().starts_with('|') && !src[start..stop].contains("\n") {
+            out.push(Edit { title: "Remove the arm".into(), from: start.saturating_sub(1), to: stop, insert: String::new() });
+        }
     }
     if let Some(rest) = hint.strip_prefix("did you mean '")
         && let Some(name) = rest.strip_suffix("'?")
@@ -662,7 +677,7 @@ fn member_items(t: &Type, a: &Analysis) -> Vec<Item> {
             out.push(Item {
                 label: n.to_string(),
                 kind: "method",
-                detail: method_sig(sig),
+                detail: method_sig(sig).trim_start_matches(n).to_string(),
                 info: d.by_method.get(&(shown(&key).to_string(), n.to_string())).cloned(),
                 apply: (!rest.is_empty()).then(|| snippet(n, rest)),
                 boost: 1,
@@ -679,7 +694,7 @@ fn member_items(t: &Type, a: &Analysis) -> Vec<Item> {
                 let sig = a.check.sigs.get(name).cloned().unwrap_or_default();
                 let rest: Vec<String> = split_sig(sig.trim_start_matches("pub ").trim_start_matches("fn ")).map(|(_, p, _)| p.iter().skip(1).map(|x| x.to_string()).collect()).unwrap_or_default();
                 let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
-                out.push(Item { label: name.clone(), kind: "function", detail: format!("({}) -> {ret}", rest.join(", ")), info: Some(sig.clone()), apply: (!rest.is_empty()).then(|| snippet(name, &rest)), boost: 2 });
+                out.push(Item { label: name.clone(), kind: "function", detail: format!("({}) -> {ret}", rest.join(", ")), info: Some(sig.clone()), apply: (!rest.is_empty()).then(|| snippet(name, &rest)), boost: 1 });
             }
         }
         for (tr, ty) in a.check.traits.impls.keys() {

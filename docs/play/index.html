@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SSPUR Playground</title>
+  <meta name="description" content="Write, check, run and test SSPUR programs in the browser.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="play.css">
+  <link rel="modulepreload" href="editor.bundle.js">
+  <script>
+    (function () {
+      var own = localStorage.getItem("sspur-play-theme");
+      var book = (localStorage.getItem("mdbook-theme") || "").replace(/"/g, "");
+      var dark = own ? own === "dark" : book ? /^(coal|navy|ayu)$/.test(book) : matchMedia("(prefers-color-scheme: dark)").matches;
+      if (dark) document.documentElement.classList.add("dark");
+    })();
+  </script>
+</head>
+<body>
+  <header class="bar">
+    <a class="brand" href="../index.html">SSPUR</a>
+    <span class="name">Playground</span>
+    <select id="examples" aria-label="Examples"><option value="">Examples</option></select>
+    <button id="run" class="primary" title="Run main (Ctrl or Cmd + Enter)">Run</button>
+    <button id="stop" class="danger" hidden title="Stop the running program">Stop</button>
+    <button id="test" title="Run the tests and examples (Ctrl or Cmd + Shift + Enter)">Test</button>
+    <button id="format" title="Format (Shift + Alt + F)">Format</button>
+    <button id="share" title="Put the program in the link (Ctrl or Cmd + S)">Share</button>
+    <span class="spacer"></span>
+    <a class="link" href="../get-started/five-minutes.html">Docs</a>
+    <a class="link" href="../reference/language.html">Reference</a>
+    <button id="theme" class="icon" title="Light or dark" aria-label="Toggle dark mode">&#9680;</button>
+  </header>
+  <input id="link" class="share-link" readonly hidden aria-label="Share link">
+  <main>
+    <section id="editor" class="pane"></section>
+    <section class="pane side">
+      <nav class="tabs">
+        <button data-tab="output" class="on">Output</button>
+        <button data-tab="problems">Problems <span id="nprob" class="badge"></span></button>
+        <button data-tab="about">About</button>
+      </nav>
+      <div id="output" class="panel"><div class="line quiet">Press Run, or Ctrl+Enter (Cmd+Enter on a Mac).</div></div>
+      <div id="problems" class="panel" hidden></div>
+      <div id="about" class="panel prose" hidden>
+        <p>This page runs SSPUR's checker and interpreter in your browser, compiled to WebAssembly. Your code stays on this page; a share link carries it in the part of the URL after <code>#</code>, which the server never sees.</p>
+        <p>Programs run in the interpreter, the same one <code>sspur run --interp</code> uses, so output and test results match the command line. Some things work differently here:</p>
+        <ul>
+          <li><code>fs</code> works on a file system in memory that starts empty, with <code>/</code> and <code>/tmp</code>, on every run. Symlinks aren't supported.</li>
+          <li><code>env</code> is empty and <code>args()</code> is <code>[]</code>. <code>read_line</code> sees no input.</li>
+          <li><code>time</code> uses the browser's clock. <code>sleep_ms</code> moves the clock forward instead of waiting.</li>
+          <li><code>par</code> tasks run one after another, which gives the same results unless a task waits on a channel that a later task fills.</li>
+          <li><code>proc</code>, <code>extern fn</code> (C interop), named time zones, packages, services and native code aren't available. They report an error instead of running.</li>
+        </ul>
+        <p>The token count is a rough estimate of about four characters per token, not the tokenizers the <a href="https://github.com/utkarshavardhana/sspur/tree/main/bench/tokens">token benchmark</a> uses.</p>
+        <p>To run programs on your machine, with native code, see <a href="../get-started/installation.html">Installation</a>.</p>
+      </div>
+    </section>
+  </main>
+  <footer class="status">
+    <span id="engine">Loading...</span>
+    <span class="spacer"></span>
+    <span id="tokens"></span>
+    <span id="cursor"></span>
+  </footer>
+  <script type="module" src="main.js"></script>
+</body>
+</html>

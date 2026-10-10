@@ -24,3 +24,14 @@ Everything that touches the outside world is behind an effect: `fs` for files, `
 | `exit(code)` | `Unit ! proc`: ends the program with that status |
 
 Errors are `"{path}: not found"`, `permission denied`, `is a directory`, `not a directory`, `already exists`, `directory not empty`, `invalid UTF-8`, `invalid path`, `byte out of range`, `not a symlink`, `same file`, `mode out of range` or `os error N`. Service endpoints may perform `time` and `env` but not `fs`, `io` or `proc`.
+
+## On Windows
+
+The calls behave the same, with the differences the OS forces:
+
+- Mode bits: Windows only has a read-only flag. `set_mode` sets it when the owner write bit (`0o200`) is clear and clears it otherwise; `file_mode` reports `0o644` or `0o444` for files and `0o755` or `0o555` for directories. `copy_file` copies contents but not the read-only flag.
+- `remove_file` removes read-only files, as it does on POSIX.
+- Opening a directory as a file (`read_file`, `write_file`, `copy_file`, `open_file` and friends) gives `is a directory`, which Windows itself reports as access denied.
+- `run_cmd` has no signals: the status is the process exit code, never `128 + signal`. There is no `/bin/sh`; run `cmd /c` or a `sh` on `PATH` (Git for Windows ships one).
+- Temporary files: Windows sets `TEMP` and `TMP` rather than `TMPDIR`.
+- `env_var("OS")` is `Windows_NT` on every Windows system, which is the way to tell the platforms apart.

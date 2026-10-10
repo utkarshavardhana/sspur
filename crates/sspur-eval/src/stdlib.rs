@@ -112,6 +112,17 @@ pub fn os_reason(e: &std::io::Error) -> String {
     }
 }
 
+// Windows reports opening a directory as a file as access denied, where POSIX says EISDIR.
+#[cfg(windows)]
+pub fn open_err(p: &str, e: std::io::Error) -> std::io::Error {
+    if e.kind() == std::io::ErrorKind::PermissionDenied && std::fs::metadata(p).is_ok_and(|m| m.is_dir()) { std::io::ErrorKind::IsADirectory.into() } else { e }
+}
+
+#[cfg(not(windows))]
+pub fn open_err(_: &str, e: std::io::Error) -> std::io::Error {
+    e
+}
+
 fn io_res(path: &str, r: Result<Value, std::io::Error>) -> Value {
     if path.contains('\0') {
         return Value::Res(Err(Rc::new(Value::str(&format!("{path}: invalid path")))));
@@ -184,7 +195,7 @@ fn modified_ms(m: &std::fs::Metadata) -> i64 {
 
 fn copy_file(from: &str, to: &str) -> Value {
     use std::io::{Read, Write};
-    let err = |p: &str, e: std::io::Error| fs_msg(p, &os_reason(&e));
+    let err = |p: &str, e: std::io::Error| fs_msg(p, &os_reason(&open_err(p, e)));
     if from.contains('\0') {
         return fs_msg(from, "invalid path");
     }
@@ -501,14 +512,14 @@ impl Interp {
             }
             "read_file" => {
                 let p = s(&a[0])?;
-                let r = std::fs::read(p).and_then(|b| String::from_utf8(b).map_err(|_| std::io::Error::other("utf8"))).map(|t| Value::str(&t));
+                let r = std::fs::read(p).map_err(|e| open_err(p, e)).and_then(|b| String::from_utf8(b).map_err(|_| std::io::Error::other("utf8"))).map(|t| Value::str(&t));
                 io_res(p, r)
             }
             "write_file" | "append_file" => {
                 use std::io::Write;
                 let (p, text) = (s(&a[0])?, s(&a[1])?);
                 let f = if n == "write_file" { std::fs::File::create(p) } else { std::fs::OpenOptions::new().append(true).create(true).open(p) };
-                io_res(p, f.and_then(|mut f| f.write_all(text.as_bytes())).map(|_| Value::Unit))
+                io_res(p, f.map_err(|e| open_err(p, e)).and_then(|mut f| f.write_all(text.as_bytes())).map(|_| Value::Unit))
             }
             "list_dir" => {
                 let p = s(&a[0])?;
@@ -528,7 +539,7 @@ impl Interp {
             }
             "read_bytes" => {
                 let p = s(&a[0])?;
-                io_res(p, std::fs::read(p).map(|b| ints(b.into_iter().map(i64::from))))
+                io_res(p, std::fs::read(p).map_err(|e| open_err(p, e)).map(|b| ints(b.into_iter().map(i64::from))))
             }
             "write_bytes" => {
                 let p = s(&a[0])?;
@@ -540,7 +551,7 @@ impl Interp {
                         Err(_) => break,
                     }
                 }
-                io_res(p, std::fs::write(p, bs).map(|_| Value::Unit))
+                io_res(p, std::fs::write(p, bs).map_err(|e| open_err(p, e)).map(|_| Value::Unit))
             }
             "mkdir" => {
                 let p = s(&a[0])?;

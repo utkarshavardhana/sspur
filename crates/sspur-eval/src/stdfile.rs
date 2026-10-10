@@ -72,7 +72,7 @@ pub fn open(path: &str, mode: &str) -> R<Result<Value, String>> {
     }
     let file = match o.open(path) {
         Ok(f) => f,
-        Err(e) => return Ok(Err(format!("{path}: {}", os_reason(&e)))),
+        Err(e) => return Ok(Err(format!("{path}: {}", os_reason(&crate::stdlib::open_err(path, e))))),
     };
     let fd = crate::sys::into_fd(file);
     let (dev, ino) = identity(fd).unwrap_or((0, 0));

@@ -147,6 +147,7 @@ SS_W_API int __stdcall FindNextFileW(void* h, void* data);
 SS_W_API int __stdcall FindClose(void* h);
 SS_W_API int __stdcall MoveFileExW(const wchar_t* a, const wchar_t* b, unsigned long fl);
 SS_W_API unsigned long __stdcall GetFileAttributesW(const wchar_t* p);
+SS_W_API int __stdcall SetFileAttributesW(const wchar_t* p, unsigned long a);
 SS_W_API unsigned char __stdcall CreateSymbolicLinkW(const wchar_t* link, const wchar_t* target, unsigned long fl);
 SS_W_API int __stdcall DeviceIoControl(void* h, unsigned long code, void* in, unsigned long inn, void* out, unsigned long outn, unsigned long* got, void* ov);
 #define SS_W_BAD ((void*)(intptr_t)-1)
@@ -172,7 +173,9 @@ static char* ss_w_narrow(const wchar_t* w, int wn, int* n) {
 }
 static int ss_w_open(const char* p, int fl, ...) {
     wchar_t* w = ss_w_wide(p); if (!w) return -1;
-    int fd = _wopen(w, fl | _O_BINARY | _O_NOINHERIT, _S_IREAD | _S_IWRITE); free(w); return fd;
+    int fd = _wopen(w, fl | _O_BINARY | _O_NOINHERIT, _S_IREAD | _S_IWRITE);
+    if (fd < 0 && errno == EACCES) { unsigned long a = GetFileAttributesW(w); if (a != 0xFFFFFFFFu && (a & 0x10)) errno = EISDIR; }
+    free(w); return fd;
 }
 #define open(...) ss_w_open(__VA_ARGS__)
 #ifndef O_CLOEXEC
@@ -210,7 +213,15 @@ static int ss_w_fstat(int fd, struct ss_w_stat* sb) { void* h = (void*)_get_osfh
 static int ss_w_stat(const char* p, struct ss_w_stat* sb) { return ss_w_pstat(p, sb, 0); }
 static int ss_w_mkdir(const char* p) { wchar_t* w = ss_w_wide(p); if (!w) return -1; int r = _wmkdir(w); free(w); return r; }
 static int ss_w_rmdir(const char* p) { wchar_t* w = ss_w_wide(p); if (!w) return -1; int r = _wrmdir(w); free(w); return r; }
-static int ss_w_unlink(const char* p) { wchar_t* w = ss_w_wide(p); if (!w) return -1; int r = _wunlink(w); free(w); return r; }
+static int ss_w_unlink(const char* p) {
+    wchar_t* w = ss_w_wide(p); if (!w) return -1;
+    int r = _wunlink(w);
+    if (r != 0 && errno == EACCES) {
+        unsigned long a = GetFileAttributesW(w);
+        if (a != 0xFFFFFFFFu && (a & 0x11) == 1 && SetFileAttributesW(w, a & ~1ul)) { r = _wunlink(w); if (r != 0) { int e = errno; SetFileAttributesW(w, a); errno = e; } }
+    }
+    free(w); return r;
+}
 static int ss_w_chmod(const char* p, int m) { wchar_t* w = ss_w_wide(p); if (!w) return -1; int r = _wchmod(w, (m & 0200) ? (_S_IREAD | _S_IWRITE) : _S_IREAD); free(w); return r; }
 static int ss_w_rename(const char* a, const char* b) {
     wchar_t* x = ss_w_wide(a); wchar_t* y = x ? ss_w_wide(b) : 0; if (!x || !y) { free(x); return -1; }

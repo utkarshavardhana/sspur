@@ -1,7 +1,7 @@
 // std_files
 
 fn scratch(tag: Str) -> Str ! env, time
-= "{trim_end_slash(env_var("TMPDIR").or("/tmp"))}/sspur_files_{tag}_{mono_ns()}"
+= "{trim_end_slash(env_var("TMPDIR").or(env_var("TEMP").or(env_var("TMP").or("/tmp"))))}/sspur_files_{tag}_{mono_ns()}"
 
 fn trim_end_slash(p: Str) -> Str
 = if p.ends_with("/") then p.take(p.len - 1) else p
@@ -78,7 +78,7 @@ test stderr = warn("low disk") == 8
 // std_io
 
 fn scratch_io(tag: Str) -> Str ! env, time
-= "{trim_end_slash_io(env_var("TMPDIR").or("/tmp"))}/sspur_std_{tag}_{mono_ns()}"
+= "{trim_end_slash_io(env_var("TMPDIR").or(env_var("TEMP").or(env_var("TMP").or("/tmp"))))}/sspur_std_{tag}_{mono_ns()}"
 
 fn trim_end_slash_io(p: Str) -> Str
 = if p.ends_with("/") then p.take(p.len - 1) else p
@@ -119,7 +119,7 @@ fn missing(tag: Str) -> Str ! fs, env, time
   | err(e) => e.drop(p.len) + remove_file(p).map(u => "").or(" twice")
 
 fn tmp_sorted() -> Bool ! fs, env
-= match list_dir(env_var("TMPDIR").or("/tmp"))
+= match list_dir(env_var("TMPDIR").or(env_var("TEMP").or(env_var("TMP").or("/tmp"))))
   | ok(names) => names == names.sort
   | err(_) => false
 
@@ -148,15 +148,23 @@ test no_args = arg_count() == 0
 
 // std_proc
 
-fn sh(script: Str) -> Res[(Int, Str, Str), Str] ! proc
-= run_cmd("/bin/sh", ["-c", script], "")
+fn windows_proc() -> Bool ! env
+= env_var("OS") == some("Windows_NT")
+
+fn sh(script: Str) -> Res[(Int, Str, Str), Str] ! proc, env
+= run_cmd(if windows_proc() then "sh" else "/bin/sh", ["-c", script], "")
+
+fn killed_code() -> Bool ! proc, env
+= do
+  code = sh("kill -9 $$").map(_.0).or(0)
+  if windows_proc() then code != 0 else code == 137
 
 fn word_count(text: Str) -> Int ! proc
 = match run_cmd("wc", ["-w"], text)
   | ok((0, out, _)) => out.trim.to_int.or(-1)
   | _ => -1
 
-fn status_of(code: Int) -> Int ! proc
+fn status_of(code: Int) -> Int ! proc, env
 = sh("exit {code}").map(_.0).or(-1)
 
 fn missing_proc() -> Str ! proc
@@ -173,7 +181,7 @@ test stdout_capture = sh("echo hello; echo world") == ok((0, "hello\nworld\n", "
 test stderr_capture = sh("echo oops >&2; exit 2") == ok((2, "", "oops\n"))
 test stdin_feed = word_count("the quick brown fox") == 4
 test exit_codes = [0, 1, 7, 255].map(status_of) == [0, 1, 7, 255]
-test signal_code = sh("kill -9 $$").map(_.0).or(0) == 137
+test signal_code = killed_code()
 test not_found_proc = missing_proc() == "/no/such/program: not found"
 test large_pipe = big_echo(300000) == 300000
 
@@ -181,7 +189,7 @@ test large_pipe = big_echo(300000) == 300000
 // std_handles
 
 fn scratch_handles(tag: Str) -> Str ! env, time
-= "{trim_end_slash_handles(env_var("TMPDIR").or("/tmp"))}/sspur_handles_{tag}_{mono_ns()}"
+= "{trim_end_slash_handles(env_var("TMPDIR").or(env_var("TEMP").or(env_var("TMP").or("/tmp"))))}/sspur_handles_{tag}_{mono_ns()}"
 
 fn trim_end_slash_handles(p: Str) -> Str
 = if p.ends_with("/") then p.take(p.len - 1) else p
@@ -307,7 +315,7 @@ test raise_closes = raised("r") == "file is closed"
 
 fn scratch_links(tag: Str) -> Str ! fs, env, time
 = do
-  root = "{trim_end_slash_links(env_var("TMPDIR").or("/tmp"))}/sspur_links_{tag}_{mono_ns()}"
+  root = "{trim_end_slash_links(env_var("TMPDIR").or(env_var("TEMP").or(env_var("TMP").or("/tmp"))))}/sspur_links_{tag}_{mono_ns()}"
   made = mkdir_all(root)
   root
 
@@ -318,6 +326,9 @@ fn why[T](r: Res[T, Str]) -> Str
 = match r
   | ok(_) => "ok"
   | err(e) => e.split_once(": ").map(p => p.1).or(e)
+
+fn windows_links() -> Bool ! env
+= env_var("OS") == some("Windows_NT")
 
 fn cleanup(root: Str, names: List[Str]) -> Bool ! fs
 = do
@@ -370,6 +381,6 @@ fn modes(tag: Str) -> List[Str] ! fs, env, time
   ok = cleanup(d, ["m.sh"])
   res.push("{ok}")
 
-test copy_files = copying("cp") == ["ok", "true", "416", "ok", "12", "same file", "not found", "is a directory", "false", "not found", "true"]
+test copy_files = copying("cp") == ["ok", "true", if windows_links() then "420" else "416", "ok", "12", "same file", "not found", "is a directory", "false", "not found", "true"]
 test symlinks = linking("ln") == ["ok", "already exists", "t.txt", "true false false true", "false true", "target", "not a symlink", "not found", "missing.txt", "true", "true"]
-test permissions = modes("mode") == ["ok", "755", "400", "mode out of range", "mode out of range", "not found", "invalid path", "not found", "true"]
+test permissions = modes("mode") == ["ok"] + (if windows_links() then ["644", "444"] else ["755", "400"]) + ["mode out of range", "mode out of range", "not found", "invalid path", "not found", "true"]

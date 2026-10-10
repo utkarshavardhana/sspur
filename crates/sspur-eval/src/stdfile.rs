@@ -70,11 +70,17 @@ pub fn open(path: &str, mode: &str) -> R<Result<Value, String>> {
     if path.contains('\0') {
         return Ok(Err(format!("{path}: invalid path")));
     }
-    let file = match o.open(path) {
-        Ok(f) => f,
+    #[cfg(target_family = "wasm")]
+    let opened = {
+        let _ = o;
+        crate::web::open(path, mode.starts_with('r') || mode.ends_with('+'), mode.starts_with('w') || mode == "r+", mode.starts_with('a'), mode != "r" && mode != "r+", mode.starts_with('w'))
+    };
+    #[cfg(not(target_family = "wasm"))]
+    let opened = o.open(path).map(crate::sys::into_fd);
+    let fd = match opened {
+        Ok(fd) => fd,
         Err(e) => return Ok(Err(format!("{path}: {}", os_reason(&crate::stdlib::open_err(path, e))))),
     };
-    let fd = crate::sys::into_fd(file);
     let (dev, ino) = identity(fd).unwrap_or((0, 0));
     Ok(Ok(Value::Record(
         "#File".into(),

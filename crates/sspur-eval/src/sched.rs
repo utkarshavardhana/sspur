@@ -1,3 +1,5 @@
+// The sequential scheduler in the browser leaves the thread hand-off unused.
+#![cfg_attr(target_family = "wasm", allow(dead_code))]
 use crate::value::{AtomCell, ChanCell, Value};
 use crate::{trap, Ctrl, Interp, R};
 use std::cell::{Cell, RefCell};
@@ -7,6 +9,8 @@ use std::sync::{Condvar, Mutex};
 
 pub const DEADLOCK: &str = "deadlock: every task is blocked on recv";
 pub const SEND_CLOSED: &str = "send on a closed channel";
+#[cfg(target_family = "wasm")]
+pub const PAR_SEQUENTIAL: &str = "recv would wait for a task that hasn't started: the playground runs par tasks one after another, so this program needs the native build";
 const TASK_STACK: usize = 1 << 29;
 
 #[derive(Default)]
@@ -24,6 +28,9 @@ struct State {
     dead: HashSet<usize>,
     remaining: HashMap<usize, usize>,
     next_obj: u64,
+    /// Tasks not yet started in the sequential scheduler.
+    #[cfg(target_family = "wasm")]
+    later: usize,
 }
 
 impl State {
@@ -106,6 +113,34 @@ impl Interp {
             s.ready.extend(ids.iter().copied());
             (me, ids)
         };
+        let results = self.run_bodies(me, &ids, body);
+        let mut out = Vec::with_capacity(n);
+        let mut first_err: Option<Ctrl> = None;
+        let mut deadlock: Option<Ctrl> = None;
+        for slot in results {
+            match slot.into_inner().unwrap_or_else(|| trap("task did not finish")) {
+                Ok(v) => out.push(v),
+                Err(Ctrl::Trap(m)) if m == DEADLOCK => {
+                    if deadlock.is_none() {
+                        deadlock = Some(Ctrl::Trap(m));
+                    }
+                }
+                Err(c) => {
+                    if first_err.is_none() {
+                        first_err = Some(c);
+                    }
+                }
+            }
+        }
+        match first_err.or(deadlock) {
+            Some(c) => Err(c),
+            None => Ok(out),
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn run_bodies(&self, me: usize, ids: &[usize], body: &dyn Fn(usize) -> R) -> Vec<RefCell<Option<R>>> {
+        let n = ids.len();
         let depth = self.depth.get();
         let results: Vec<RefCell<Option<R>>> = (0..n).map(|_| RefCell::new(None)).collect();
         std::thread::scope(|sc| {
@@ -152,28 +187,37 @@ impl Interp {
             }
             self.switch(Some(me));
         });
-        let mut out = Vec::with_capacity(n);
-        let mut first_err: Option<Ctrl> = None;
-        let mut deadlock: Option<Ctrl> = None;
-        for slot in results {
-            match slot.into_inner().unwrap_or_else(|| trap("task did not finish")) {
-                Ok(v) => out.push(v),
-                Err(Ctrl::Trap(m)) if m == DEADLOCK => {
-                    if deadlock.is_none() {
-                        deadlock = Some(Ctrl::Trap(m));
-                    }
-                }
-                Err(c) => {
-                    if first_err.is_none() {
-                        first_err = Some(c);
-                    }
-                }
+        results
+    }
+
+    /// Without threads every task runs to completion in spawn order, which is the order the
+    /// threaded scheduler starts them in. A `recv` that would wait for a later task can't.
+    #[cfg(target_family = "wasm")]
+    fn run_bodies(&self, me: usize, ids: &[usize], body: &dyn Fn(usize) -> R) -> Vec<RefCell<Option<R>>> {
+        let depth = self.depth.get();
+        let handlers = self.handlers.take();
+        let mut results = Vec::with_capacity(ids.len());
+        for (k, &id) in ids.iter().enumerate() {
+            {
+                let mut s = self.st();
+                s.ready.retain(|t| *t != id);
+                s.current = id;
+                s.later += ids.len() - k - 1;
             }
+            self.depth.set(depth);
+            let r = body(k);
+            self.handlers.take();
+            self.st().later -= ids.len() - k - 1;
+            results.push(RefCell::new(Some(r)));
         }
-        match first_err.or(deadlock) {
-            Some(c) => Err(c),
-            None => Ok(out),
-        }
+        let mut s = self.st();
+        s.remaining.remove(&me);
+        s.ready.retain(|t| *t != me);
+        s.current = me;
+        drop(s);
+        self.handlers.replace(handlers);
+        self.depth.set(depth);
+        results
     }
 
     pub(crate) fn chan_send(&self, c: &ChanCell, v: Value) -> R {
@@ -209,17 +253,23 @@ impl Interp {
             if c.closed.get() {
                 return Ok(None);
             }
+            #[cfg(target_family = "wasm")]
+            return trap(if self.st().later > 0 { PAR_SEQUENTIAL } else { DEADLOCK });
+            #[cfg(not(target_family = "wasm"))]
             let me = {
                 let mut s = self.st();
                 let cur = s.current;
                 s.blocked.push(cur);
                 s.current
             };
-            c.waiters.borrow_mut().push_back(me);
-            self.switch(Some(me));
-            if self.st().dead.remove(&me) {
-                c.waiters.borrow_mut().retain(|t| *t != me);
-                return trap(DEADLOCK);
+            #[cfg(not(target_family = "wasm"))]
+            {
+                c.waiters.borrow_mut().push_back(me);
+                self.switch(Some(me));
+                if self.st().dead.remove(&me) {
+                    c.waiters.borrow_mut().retain(|t| *t != me);
+                    return trap(DEADLOCK);
+                }
             }
         }
     }

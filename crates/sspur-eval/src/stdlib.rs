@@ -3,7 +3,6 @@ use crate::{from_nval, to_nval, trap, Interp, R};
 use sspur_syntax::{Expr, Span};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn int(v: &Value) -> R<i64> {
     match v {
@@ -143,7 +142,7 @@ fn same_file(meta: &std::fs::Metadata, to: &str) -> bool {
     std::fs::metadata(to).is_ok_and(|m| m.dev() == meta.dev() && m.ino() == meta.ino())
 }
 
-#[cfg(windows)]
+#[cfg(not(unix))]
 fn same_file(_: &std::fs::Metadata, from_to: (&str, &str)) -> bool {
     matches!((std::fs::canonicalize(from_to.0), std::fs::canonicalize(from_to.1)), (Ok(a), Ok(b)) if a == b)
 }
@@ -154,7 +153,7 @@ fn file_mode_of(m: &std::fs::Metadata) -> u32 {
     m.mode() & 0o7777
 }
 
-#[cfg(windows)]
+#[cfg(not(unix))]
 fn file_mode_of(m: &std::fs::Metadata) -> u32 {
     match (m.is_dir(), m.permissions().readonly()) {
         (true, true) => 0o555,
@@ -170,7 +169,7 @@ fn permissions(mode: u32) -> std::fs::Permissions {
     std::fs::Permissions::from_mode(mode)
 }
 
-#[cfg(windows)]
+#[cfg(not(unix))]
 fn set_mode(p: &str, mode: u32) -> std::io::Result<()> {
     let mut perm = std::fs::metadata(p)?.permissions();
     perm.set_readonly(mode & 0o200 == 0);
@@ -188,7 +187,7 @@ fn modified_ms(m: &std::fs::Metadata) -> i64 {
     m.mtime() * 1000 + m.mtime_nsec() / 1_000_000
 }
 
-#[cfg(windows)]
+#[cfg(not(unix))]
 fn modified_ms(m: &std::fs::Metadata) -> i64 {
     m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis() as i64)
 }
@@ -215,7 +214,7 @@ fn copy_file(from: &str, to: &str) -> Value {
     }
     #[cfg(unix)]
     let same = same_file(&meta, to);
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     let same = same_file(&meta, (from, to));
     if same {
         return fs_msg(from, "same file");
@@ -247,7 +246,7 @@ fn copy_file(from: &str, to: &str) -> Value {
     if let Err(e) = dst.set_permissions(permissions(mode)) {
         return err(to, e);
     }
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     drop((dst, mode));
     Value::Res(Ok(Rc::new(Value::Unit)))
 }
@@ -272,7 +271,7 @@ fn run_cmd(prog: &str, args: &[String], input: String) -> Result<Value, String> 
     let _ = writer.join();
     #[cfg(unix)]
     let code = out.status.code().map_or_else(|| 128 + i64::from(std::os::unix::process::ExitStatusExt::signal(&out.status).unwrap_or(0)), i64::from);
-    #[cfg(windows)]
+    #[cfg(not(unix))]
     let code = out.status.code().map_or(-1, i64::from);
     let text = |b: Vec<u8>| String::from_utf8(b).map_err(|_| "invalid UTF-8".to_string());
     let (so, se) = (text(out.stdout)?, text(out.stderr)?);
@@ -382,6 +381,16 @@ fn pad(x: &str, n: i64, fill: &str, left: bool) -> R {
 
 impl Interp {
     pub(crate) fn std_global(&self, n: &str, a: Vec<Value>) -> R {
+        #[cfg(target_family = "wasm")]
+        {
+            if n == "eprint" {
+                self.emit(format!("{}{}", crate::web::STDERR, s(&a[0])?));
+                return Ok(Value::Unit);
+            }
+            if let Some(v) = crate::web::builtin(n, &a)? {
+                return Ok(v);
+            }
+        }
         if let Some(v) = crate::stdrng::global(n, &a)? {
             return Ok(v);
         }
@@ -582,6 +591,8 @@ impl Interp {
                 let r = std::os::unix::fs::symlink(t, l);
                 #[cfg(windows)]
                 let r = if std::fs::metadata(t).is_ok_and(|m| m.is_dir()) { std::os::windows::fs::symlink_dir(t, l) } else { std::os::windows::fs::symlink_file(t, l) };
+                #[cfg(not(any(unix, windows)))]
+                let r: std::io::Result<()> = Err(std::io::ErrorKind::Unsupported.into());
                 io_res(l, r.map(|_| Value::Unit))
             }
             "read_link" => {
@@ -646,10 +657,10 @@ impl Interp {
                 }
                 Value::list(out)
             }
-            "now_ms" => Value::Int(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)),
+            "now_ms" => Value::Int(crate::sys::wall_ms()),
             "mono_ns" => Value::Int(mono_ns()),
             "sleep_ms" => {
-                std::thread::sleep(Duration::from_millis(int(&a[0])?.max(0) as u64));
+                crate::sys::sleep_ms(int(&a[0])?);
                 Value::Unit
             }
             "env_var" => {

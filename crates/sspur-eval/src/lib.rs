@@ -1,5 +1,6 @@
 #![allow(clippy::mutable_key_type)]
 mod builtins;
+#[cfg(feature = "native")]
 mod ffi;
 pub mod fuzz;
 pub mod progen;
@@ -19,6 +20,8 @@ mod stdtz;
 mod stdview;
 mod stdx;
 mod sys;
+#[cfg(target_family = "wasm")]
+pub mod web;
 pub mod value;
 
 use sspur_syntax::*;
@@ -102,6 +105,7 @@ pub struct Interp {
     pub output: RefCell<Option<Vec<String>>>,
     depth: Cell<u32>,
     pub fuel: Cell<u64>,
+    #[cfg(feature = "native")]
     native: Option<sspur_native::Compiled>,
     pub bypass_native: Cell<bool>,
     pub native_hits: Cell<u64>,
@@ -188,6 +192,7 @@ impl Interp {
             output: RefCell::new(None),
             depth: Cell::new(0),
             fuel: Cell::new(u64::MAX),
+            #[cfg(feature = "native")]
             native: None,
             bypass_native: Cell::new(false),
             native_hits: Cell::new(0),
@@ -542,15 +547,23 @@ impl Interp {
         self.layouts = sspur_native::nval::Layouts::from_check(c);
     }
 
+    #[cfg(feature = "native")]
     pub fn set_native(&mut self, c: sspur_native::Compiled) {
         self.native = Some(c);
     }
 
+    #[cfg(feature = "native")]
     pub fn native_has(&self, name: &str) -> bool {
         self.native.as_ref().is_some_and(|n| n.has(name))
     }
 
+    #[cfg(not(feature = "native"))]
+    pub fn native_has(&self, _name: &str) -> bool {
+        false
+    }
+
     pub fn call_fn(&self, f: &FnDef, args: Vec<Value>) -> R {
+        #[cfg(feature = "native")]
         if let Some(n) = self.native.as_ref().filter(|_| !self.bypass_native.get() && !self.log_handled()) {
             fn emit_hook(ctx: *const (), s: &str) {
                 let it = unsafe { &*(ctx as *const Interp) };
@@ -712,7 +725,10 @@ impl Interp {
 
     fn call_fn_inner(&self, f: &FnDef, args: Vec<Value>, parent: &Rc<Env>) -> R {
         if f.ext.is_some() {
+            #[cfg(feature = "native")]
             return ffi::call(f, &args);
+            #[cfg(not(feature = "native"))]
+            return trap(format!("extern fn {}: C interop is not available in the playground", f.name));
         }
         let env = Env::child(parent);
         let r = self.call_body(f, args, &env);
@@ -828,6 +844,7 @@ impl Interp {
         }
     }
 
+    #[cfg(feature = "native")]
     fn log_handled(&self) -> bool {
         self.handlers.borrow().iter().any(|f| f.handles("log"))
     }

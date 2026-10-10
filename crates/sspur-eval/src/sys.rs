@@ -1,4 +1,4 @@
-//! The few OS calls the interpreter makes directly, matching the native runtime: POSIX descriptors on Unix, CRT descriptors on Windows.
+//! The few OS calls the interpreter makes directly, matching the native runtime: POSIX descriptors on Unix, CRT descriptors on Windows, and the in-memory host in the browser.
 use std::ffi::c_void;
 
 #[cfg(unix)]
@@ -190,6 +190,21 @@ mod imp {
     pub fn fd_len(fd: i32) -> std::io::Result<u64> {
         info(fd).map(|i| (u64::from(i.size_hi) << 32) | u64::from(i.size_lo)).ok_or_else(|| std::io::Error::from_raw_os_error(6))
     }
+}
+
+#[cfg(target_family = "wasm")]
+mod imp {
+    pub use crate::web::{errno, errno_reason, fd_close, fd_len, fd_pread, fd_read, fd_seek, fd_write, identity, mono_ns, sleep_ms, wall_ms};
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn wall_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn sleep_ms(ms: i64) {
+    std::thread::sleep(std::time::Duration::from_millis(ms.max(0) as u64));
 }
 
 pub use imp::*;

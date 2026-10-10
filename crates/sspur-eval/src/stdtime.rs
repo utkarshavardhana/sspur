@@ -51,7 +51,7 @@ pub fn global(n: &str, a: &[Value]) -> R<Value> {
             Value::Str(s) => opt_time(parse(s)),
             _ => return trap("expected Str"),
         },
-        "now" => Value::Time(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)),
+        "now" => Value::Time(crate::sys::wall_ms()),
         "millis" => scaled(1)?,
         "secs" => scaled(1000)?,
         "mins" => scaled(60_000)?,

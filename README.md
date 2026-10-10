@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/assets/logo/sspur.svg" width="128" alt="SSPUR logo"></p>
+
 # SSPUR
 
 [![CI](https://github.com/utkarshavardhana/sspur/actions/workflows/ci.yml/badge.svg)](https://github.com/utkarshavardhana/sspur/actions/workflows/ci.yml)

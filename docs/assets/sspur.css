@@ -52,3 +52,14 @@ pre.sspur-has-run { position: relative; }
   opacity: 0.85;
 }
 .sspur-run:hover { opacity: 1; text-decoration: none; }
+
+.menu-title::before {
+  content: "";
+  display: inline-block;
+  width: 1.15em;
+  height: 1.15em;
+  margin-right: 0.4em;
+  vertical-align: -0.2em;
+  background: url("logo/sspur.svg") center / contain no-repeat;
+}
+.sspur-hero-logo { display: block; margin: 1.5rem 0 0.5rem; }

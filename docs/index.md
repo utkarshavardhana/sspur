@@ -1,3 +1,5 @@
+<img class="sspur-hero-logo" src="assets/logo/sspur.svg" width="96" height="96" alt="SSPUR logo">
+
 # SSPUR documentation
 
 **A programming language for AI agents to write, read, and maintain.** SSPUR is statically typed and effect-tracked. Code lives in a content-addressed store of typechecked definitions, agents change it through atomic edits that run every test, and contracts are checked at run time, fuzzed and proved. It compiles to native code that runs faster than idiomatic C++ with the same safety checks.

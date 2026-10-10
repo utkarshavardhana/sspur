@@ -1,0 +1,31 @@
+# sspur.lock
+
+`sspur.lock` pins every package in the dependency graph, direct or not. `sspur add` and `sspur deps update` write it; you don't edit it by hand, and you commit it.
+
+```console
+{{#include ../snippets/handbook/pkg.out:lock}}
+```
+
+| Field | Meaning |
+|---|---|
+| `name`, `version` | The package's manifest name and version |
+| `source` | Where it was resolved from: `path+DIR` or `git+URL` |
+| `rev` | For git sources, the rev the manifest asked for |
+| `hash` | The hash of the package's exports |
+| `deps` | The names of its own dependencies, which have their own `[[dep]]` entries |
+
+## Pinned by what it exports
+
+The hash is the Merkle root over the hashes of the package's `pub` definitions, and each of those includes everything it calls. So the lock pins behavior, not a version string: a new release that doesn't change any export locks to the same hash, and any change to an exported function's body, signature, effects or contracts changes it.
+
+A build reads only the lock and the package cache, `~/.cache/sspur/pkgs/<hash>` (or `$SSPUR_CACHE/pkgs`). A missing package is fetched and its hash verified before use. The errors that come from the lock:
+
+| Code | When | Fix |
+|---|---|---|
+| `E_DEP_HASH` | A cached package doesn't hash to what the lock says | Delete that cache entry and run `sspur deps fetch` |
+| `E_DEP_STALE` | `sspur.toml` asks for a different source or rev than the lock pins | `sspur deps update NAME`, which shows the diff first |
+| `E_DEP_CONFLICT` | Two versions of one package in the graph | `sspur deps update NAME` where the older one is pinned |
+
+`sspur deps update` prints a line per changed export, such as `~ lib.f  effects: + log`, `~ lib.g  contracts: + pre n > 0`, `+ lib.new` or `- lib.old`, typechecks your package against the new version, and refuses to write the lock if it no longer checks, unless you pass `--force`.
+
+When codebases sync (`sspur sync push` and `pull`), the lock and each locked package's source travel with the commits, and the receiver checks them by hash.

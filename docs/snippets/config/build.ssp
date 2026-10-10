@@ -1,0 +1,14 @@
+fn collatz(n: Int where _ > 0) -> Int ! div
+= do
+  var x = n
+  var steps = 0
+  while x != 1
+    x := if x % 2 == 0 then x / 2 else 3 * x + 1
+    steps := steps + 1
+  steps
+
+fn longest(limit: Int) -> Int ! div
+= (1..limit).map(collatz).max.or(0)
+
+fn main() -> Unit ! log, div
+= log("longest chain under 100000: {longest(100000)} steps")

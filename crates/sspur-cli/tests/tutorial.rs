@@ -79,7 +79,7 @@ fn quotes_open(s: &str) -> bool {
 
 fn parse(text: &str) -> Vec<Step> {
     let mut steps: Vec<Step> = Vec::new();
-    let mut lines = text.lines().filter(|l| !l.contains("ANCHOR:") && !l.contains("ANCHOR_END:"));
+    let mut lines = text.lines().filter(|l| !l.contains("ANCHOR:") && !l.contains("ANCHOR_END:") && !l.starts_with("// requires:"));
     while let Some(line) = lines.next() {
         if let Some(cmd) = line.strip_prefix("$ ") {
             let mut cmd = cmd.to_string();
@@ -160,8 +160,25 @@ fn drain<R: Read + Send + 'static>(r: R) {
     });
 }
 
+fn have_tool(tool: &str) -> bool {
+    let env = match tool {
+        "ld.lld" => std::env::var_os("SSPUR_LLD"),
+        _ => None,
+    };
+    let brew = ["/opt/homebrew/opt/lld/bin", "/opt/homebrew/opt/llvm/bin", "/usr/local/opt/lld/bin", "/usr/local/opt/llvm/bin", "/opt/homebrew/bin", "/usr/local/bin"];
+    env.is_some_and(|p| Path::new(&p).exists())
+        || std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(tool).exists()))
+        || brew.iter().any(|d| Path::new(d).join(tool).exists())
+}
+
 fn run_transcript(file: &Path) {
     let rel = file.strip_prefix(snippets()).unwrap().display().to_string();
+    let text = std::fs::read_to_string(file).unwrap();
+    let missing: Vec<&str> = text.lines().filter_map(|l| l.strip_prefix("// requires:")).flat_map(str::split_whitespace).filter(|t| !have_tool(t)).collect();
+    if !missing.is_empty() {
+        eprintln!("skipping {rel}: needs {}", missing.join(", "));
+        return;
+    }
     let work = std::env::temp_dir().join(format!("sspur-tutorial-{}-{}", std::process::id(), rel.replace(['/', '.'], "_")));
     let _ = std::fs::remove_dir_all(&work);
     copy_dir(&snippets(), &work);

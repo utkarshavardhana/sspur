@@ -1,3 +1,4 @@
+// requires: ld.lld
 // ANCHOR: test
 $ sspur test hello.ssp
 1 passed, 0 failed

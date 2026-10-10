@@ -206,8 +206,8 @@ sspur mcp             # serve the codebase over the Model Context Protocol
 
 The recommended loop is one call per change: read what you need with `sspur q`, then `sspur edit --test` with all the definitions for the change. The command prints a single line on success, or precise `def:line:col CODE message` diagnostics with fix hints, and leaves the codebase untouched if anything fails. In a large codebase, `sspur q find 'ship|tax_*'` lists matching names with their signatures and `sspur q grep TEXT` the definitions that contain TEXT, so an agent never has to print the whole listing. `sspur q pack A,B,C` returns each of several definitions with the types and signatures it uses, its tests and its callers, so one call can carry everything a change needs.
 
-- **MCP clients** (Claude Code, Claude Desktop, any stdio client): `claude mcp add sspur -- sspur mcp`, or see [docs/mcp.md](docs/mcp.md) for the Desktop config, `--dir`, and the tool list.
-- **Claude Code plugin**: [`plugins/claude-code/`](plugins/claude-code/) bundles the MCP server with a skill that teaches the workflow and loads for `.ssp` files and SSPUR questions. Install it with `claude plugin marketplace add utkarshavardhana/sspur` and `claude plugin install sspur@sspur`.
+- **MCP clients** (Claude Code, Claude Desktop, any stdio client): `claude mcp add sspur -- sspur mcp`, or see [docs/agent/mcp.md](docs/agent/mcp.md) for the Desktop config, `--dir`, and the tool list.
+- **Claude Code plugin**: [`packaging/claude-code/`](packaging/claude-code/) bundles the MCP server with a skill that teaches the workflow and loads for `.ssp` files and SSPUR questions. Install it with `claude plugin marketplace add utkarshavardhana/sspur` and `claude plugin install sspur@sspur`.
 
 ## Documentation
 
@@ -215,17 +215,17 @@ Everything below is also published as a searchable site at [utkarshavardhana.git
 
 | Document | Contents |
 |---|---|
-| [Vision](docs/00-vision.md) | Why SSPUR exists and the principles behind it |
-| [Core semantics](docs/01-core-semantics.md) | Types, effects, contracts, memory, concurrency |
-| [Graph model](docs/02-graph-model.md) | Content-addressed definitions, operations, the query API |
-| [Text projection](docs/03-text-projection.md) | The token-optimized source format |
-| [Deploy model](docs/04-deploy-model.md) | Services, stores, effects as permissions |
-| [Systems layer](docs/05-systems-layer.md) | Systems programming features and the C++ parity matrix |
-| [AI-native constructs](docs/06-ai-native-constructs.md) | `Guess`, taint types, decision tables, and other agent-oriented types |
-| [Language reference](docs/07-reference-v0.md) | The complete reference |
-| [Agent reference](docs/agent-spec.md) | The compact reference served by `sspur spec` |
-| [MCP setup](docs/mcp.md) | `sspur mcp` for Claude Code, Claude Desktop and other MCP clients, and the Claude Code plugin |
-| [Roadmap](docs/roadmap.md) | Phases and exit criteria |
+| [Vision](docs/design/00-vision.md) | Why SSPUR exists and the principles behind it |
+| [Core semantics](docs/design/01-core-semantics.md) | Types, effects, contracts, memory, concurrency |
+| [Graph model](docs/design/02-graph-model.md) | Content-addressed definitions, operations, the query API |
+| [Text projection](docs/design/03-text-projection.md) | The token-optimized source format |
+| [Deploy model](docs/design/04-deploy-model.md) | Services, stores, effects as permissions |
+| [Systems layer](docs/design/05-systems-layer.md) | Systems programming features and the C++ parity matrix |
+| [AI-native constructs](docs/design/06-ai-native-constructs.md) | `Guess`, taint types, decision tables, and other agent-oriented types |
+| [Language reference](docs/reference/language.md) | The complete reference |
+| [Agent reference](docs/agent/agent-spec.md) | The compact reference served by `sspur spec` |
+| [MCP setup](docs/agent/mcp.md) | `sspur mcp` for Claude Code, Claude Desktop and other MCP clients, and the Claude Code plugin |
+| [Roadmap](docs/design/roadmap.md) | Phases and exit criteria |
 | [Design decisions](docs/adr/) | Architecture decision records for every major change |
 
 ## Project status
@@ -242,7 +242,7 @@ SSPUR is at version 0.2 and under active development. The language and tools are
 | 6. Deployment, migrations, hot swap, replay, GPU kernels, standard library | Mostly done: all 23 C++ library areas covered (locale for six bundled locales); first real AWS deploy verified end to end |
 | 7. Multi-agent sync, replica sync, global build cache, proven rewrites, cost-driven optimization | Done: 100 concurrent agents with no lost work, per-definition native objects, proven rewrites with `sspur explain-opt`, cost-driven inlining and fusion; an authenticated sync server remains |
 
-See the [roadmap](docs/roadmap.md) for details and exit criteria.
+See the [roadmap](docs/design/roadmap.md) for details and exit criteria.
 
 ## Repository layout
 
@@ -255,12 +255,14 @@ See the [roadmap](docs/roadmap.md) for details and exit criteria.
 | `crates/sspur-smt` | SMT encoding and Z3 integration |
 | `crates/sspur-store` | Content-addressed codebase, transactions, queries, packages |
 | `crates/sspur-cli` | The `sspur` command, MCP server, deployer |
-| `bench/` | Token, agent, evaluation, and native performance benchmarks |
-| `tests/` | Suite programs, the ownership soundness suite, bare-metal tests |
-| `schema/` | JSON schemas for definitions, operations, and diagnostics |
-| `site/` | The documentation site (mdBook): pages, the tutorial's checked snippets, the SSPUR highlighter |
+| `crates/sspur-deploy` | The deployer: CloudFormation and IAM from effects, migrations, the local Lambda and DynamoDB emulator, replay |
+| `crates/sspur-hash` | Name resolution and content hashing of definitions |
+| `docs/` | The documentation site (mdBook, `docs/book.toml`): handbook, reference, tutorials, design docs and ADRs, the agent spec that `sspur spec` embeds, the JSON schemas, and `docs/snippets/`, the checked code every page includes |
+| `examples/` | Small complete programs: hello, a CRUD service, C interop, packages |
+| `tests/` | Suite programs, the ownership soundness suite, bare-metal, GPU and fuzz regression tests |
+| `bench/` | Benchmarks: `native/` against C++, `agent/` and `eval/` for agents, `incremental/`, `llvm/`, and `tokens/`, the Phase 1 token count |
+| `packaging/` | The Homebrew formula template and the Claude Code plugin (`packaging/claude-code/`) |
 | `tools/` | The corpus differential check and the site link check run by CI |
-| `packaging/` | Homebrew formula template |
 
 ## Contributing
 

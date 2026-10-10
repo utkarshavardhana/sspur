@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "sspur",
-      "source": "./plugins/claude-code",
+      "source": "./packaging/claude-code",
       "description": "The SSPUR workflow skill and the sspur MCP server",
       "category": "development"
     }

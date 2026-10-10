@@ -687,7 +687,7 @@ A crash at any point leaves the old or the new state. Check results are cached p
 
 `sspur sync serve [--port N] [--max N]` serves the codebase over TCP (one JSON line per request). `sspur sync pull REMOTE` and `sspur sync push REMOTE` exchange commits and texts by hash with a directory or `tcp://host:port` and merge them by the rules above. A pull with conflicts, or whose merge doesn't typecheck, leaves HEAD unchanged and prints both sides; settle it with `sspur sync resolve ours|theirs [PATH...]`, or with a transaction that has `"merge": true` (and `resolve` ops). A push that would conflict is refused: pull, resolve, push again. `sspur sync status` shows HEAD, heads and any pending merge. Replicas that have exchanged all commits have the same root hash.
 
-Queries (`sspur q <query> [target] [--budget N]`, or the MCP tool `query`; see `docs/mcp.md`):
+Queries (`sspur q <query> [target] [--budget N]`, or the MCP tool `query`; see `docs/agent/mcp.md`):
 
 | Query | Returns |
 |---|---|
@@ -703,4 +703,4 @@ Queries (`sspur q <query> [target] [--budget N]`, or the MCP tool `query`; see `
 | `impact X` | Everything that depends on X, including tests |
 | `holes`, `diag`, `log` | Open holes, all diagnostics, or the edit history |
 
-Reading the spec and the code in one call: `sspur start [NAME|PATTERN...]` (the MCP tool `start`, with `names`) prints the agent spec (`docs/agent-spec.md`), then the codebase: all of it when the source is at most 12,000 bytes, otherwise the counts per kind, `q pack` of the arguments that name a definition and `q find` of the others. `sspur spec [--full] [src] [QUERY TARGET...]` prints the spec (or this reference) followed by `src` and the given queries, for example `sspur spec find 'ship|tax' pack money,tax_rate`; `list`, `holes`, `diag` and `log` take no target there.
+Reading the spec and the code in one call: `sspur start [NAME|PATTERN...]` (the MCP tool `start`, with `names`) prints the agent spec (`docs/agent/agent-spec.md`), then the codebase: all of it when the source is at most 12,000 bytes, otherwise the counts per kind, `q pack` of the arguments that name a definition and `q find` of the others. `sspur spec [--full] [src] [QUERY TARGET...]` prints the spec (or this reference) followed by `src` and the given queries, for example `sspur spec find 'ship|tax' pack money,tax_rate`; `list`, `holes`, `diag` and `log` take no target there.

@@ -2,7 +2,7 @@
 
 This tutorial goes from an empty directory to a small CRUD service running on your machine. On the way you will write a function with a contract, test it, fuzz it, prove it, and use records, pattern matching, effects and a package.
 
-Every file and every terminal session on this page is a real file under [`site/tutorial/`](https://github.com/utkarshavardhana/sspur/tree/main/site/tutorial) in the repository. CI runs each command and fails if the output differs from what is printed here, so what you see is what the current compiler does.
+Every file and every terminal session on this page is a real file under [`docs/snippets/`](https://github.com/utkarshavardhana/sspur/tree/main/docs/snippets) in the repository. CI runs each command and fails if the output differs from what is printed here, so what you see is what the current compiler does.
 
 ## 1. Install
 
@@ -167,6 +167,6 @@ Contracts guard the service boundary too: the empty title is rejected with a 400
 ## Where next
 
 - [SSPUR for AI agents](agents.md) shows the workflow an agent uses on a codebase: `sspur start`, `q`, and one `edit --test` per change.
-- The [language reference](docs/07-reference-v0.md) covers everything in one page, including concurrency, generators, the `sys` and `bare` profiles and GPU kernels.
-- The [deploy model](docs/04-deploy-model.md) and [ADR 0019](docs/adr/0019-migrations-hot-swap-replay.md) cover schema migrations, hot swap and replaying recorded traffic against a new version with `sspur deploy local --record`.
+- The [language reference](docs/reference/language.md) covers everything in one page, including concurrency, generators, the `sys` and `bare` profiles and GPU kernels.
+- The [deploy model](docs/design/04-deploy-model.md) and [ADR 0019](docs/adr/0019-migrations-hot-swap-replay.md) cover schema migrations, hot swap and replaying recorded traffic against a new version with `sspur deploy local --record`.
 - [`examples/`](https://github.com/utkarshavardhana/sspur/tree/main/examples) and [`tests/programs/`](https://github.com/utkarshavardhana/sspur/tree/main/tests/programs) have more programs, from C interop to bare-metal kernels.

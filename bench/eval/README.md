@@ -1,6 +1,6 @@
 # Spec-only model evaluation
 
-This measures whether a model that has never seen SSPUR can write correct programs from `docs/07-reference-v0.md` alone. It is the Phase 2 exit criterion: at least 70% on 30 held-out tasks.
+This measures whether a model that has never seen SSPUR can write correct programs from `docs/reference/language.md` alone. It is the Phase 2 exit criterion: at least 70% on 30 held-out tasks.
 
 ## Method
 

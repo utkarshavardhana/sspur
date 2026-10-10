@@ -1,10 +1,14 @@
-// Runs every transcript (*.out) under site/tutorial against the built sspur, so the
-// tutorial and the docs pages that include these files cannot drift from the compiler.
+// Checks the code in the docs (docs/, an mdBook) against the built sspur.
 //
-// A transcript is `$ command` lines, each followed by its expected output. `...` matches
-// any number of lines; lines with `ANCHOR:` or `ANCHOR_END:` are mdBook markers and are
-// skipped. Commands: `sspur ...`, `cd DIR`, `cat FILE`, and `curl` against the server
-// started by `sspur deploy local ... --port 8080` earlier in the same transcript.
+// Every transcript (*.out) under docs/snippets runs in a copy of that directory, starting
+// in the transcript's own folder. A transcript is `$ command` lines, each followed by its
+// expected output. `...` matches any number of lines; lines with `ANCHOR:` or `ANCHOR_END:`
+// are mdBook markers and are skipped. Commands: `sspur ...`, `cd DIR`, `cat FILE`, and
+// `curl` against the server started by `sspur deploy local ... --port 8080` earlier in the
+// same transcript; later commands that say `8080` get that server's real port.
+//
+// Pages may only show code that is a file under docs/snippets (see doc_code_blocks_are_checked_files),
+// and every diagnostic code the compiler can emit is listed in docs/reference/errors.md.
 
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
@@ -16,8 +20,8 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-fn tutorial() -> PathBuf {
-    root().join("site/tutorial")
+fn snippets() -> PathBuf {
+    root().join("docs/snippets")
 }
 
 struct Kill(Child);
@@ -157,11 +161,11 @@ fn drain<R: Read + Send + 'static>(r: R) {
 }
 
 fn run_transcript(file: &Path) {
-    let rel = file.strip_prefix(tutorial()).unwrap().display().to_string();
+    let rel = file.strip_prefix(snippets()).unwrap().display().to_string();
     let work = std::env::temp_dir().join(format!("sspur-tutorial-{}-{}", std::process::id(), rel.replace(['/', '.'], "_")));
     let _ = std::fs::remove_dir_all(&work);
-    copy_dir(&tutorial(), &work);
-    let mut cwd = work.clone();
+    copy_dir(&snippets(), &work);
+    let mut cwd = work.join(file.parent().unwrap().strip_prefix(snippets()).unwrap());
     let mut server: Option<(Kill, u16)> = None;
     for step in parse(&std::fs::read_to_string(file).unwrap()) {
         let args = split(&step.cmd);
@@ -191,8 +195,17 @@ fn run_transcript(file: &Path) {
                 got.concat().replace(&port.to_string(), PORT)
             }
             "sspur" => {
-                let r = Command::new(env!("CARGO_BIN_EXE_sspur")).args(&args[1..]).current_dir(&cwd).output().unwrap();
-                format!("{}{}", String::from_utf8_lossy(&r.stdout), String::from_utf8_lossy(&r.stderr))
+                let port = server.as_ref().map(|s| s.1.to_string());
+                let a: Vec<&str> = args[1..].iter().map(|a| match &port {
+                    Some(p) if a == PORT => p.as_str(),
+                    _ => a.as_str(),
+                }).collect();
+                let r = Command::new(env!("CARGO_BIN_EXE_sspur")).args(&a).current_dir(&cwd).output().unwrap();
+                let out = format!("{}{}", String::from_utf8_lossy(&r.stdout), String::from_utf8_lossy(&r.stderr));
+                match &port {
+                    Some(p) => out.replace(p.as_str(), PORT),
+                    None => out,
+                }
             }
             other => panic!("{rel}: unsupported command {other}"),
         };
@@ -206,7 +219,7 @@ fn run_transcript(file: &Path) {
 #[test]
 fn tutorial_transcripts_match() {
     let mut all = Vec::new();
-    files(&tutorial(), &mut all);
+    files(&snippets(), &mut all);
     let outs: Vec<_> = all.iter().filter(|p| p.extension().is_some_and(|e| e == "out")).collect();
     assert!(outs.len() >= 8, "{outs:?}");
     for f in outs {
@@ -214,40 +227,120 @@ fn tutorial_transcripts_match() {
     }
 }
 
-// Every code block in the tutorial is an include of a file under site/tutorial, and every
-// file there is included by some page, so nothing shown is unchecked or orphaned.
+// Sections whose every code block must be one include of a docs/snippets file.
+const STRICT: [&str; 3] = ["handbook/", "tutorials/", "cheat-sheet.md"];
+// Sections where SSPUR, console and TOML blocks must be includes; other languages may be inline.
+const STRICT_SSPUR: [&str; 3] = ["get-started/", "config/", "index.md"];
+
+fn pages() -> Vec<PathBuf> {
+    let docs = root().join("docs");
+    let mut all = Vec::new();
+    files(&docs, &mut all);
+    all.retain(|p| p.extension().is_some_and(|e| e == "md") && !p.starts_with(docs.join("snippets")) && !p.starts_with(docs.join("book")));
+    all
+}
+
+fn exercised(ssp: &Path, outs: &[PathBuf]) -> bool {
+    if ssp.parent().unwrap().join("sspur.toml").is_file() {
+        return true;
+    }
+    outs.iter().any(|o| {
+        let Ok(rel) = ssp.strip_prefix(o.parent().unwrap()) else { return false };
+        let rel = rel.display().to_string();
+        std::fs::read_to_string(o).unwrap().lines().filter_map(|l| l.strip_prefix("$ ")).any(|l| split(l).iter().any(|a| *a == rel))
+    })
+}
+
+// Every code block in the handbook and tutorials is an include of a file under docs/snippets,
+// every .ssp there is run by a transcript (or is a package source), and every file there is
+// used by some page or transcript, so nothing shown is unchecked or orphaned.
 #[test]
-fn tutorial_code_blocks_are_checked_files() {
-    let src = root().join("site/src");
+fn doc_code_blocks_are_checked_files() {
+    let docs = root().join("docs");
+    let snip = snippets().canonicalize().unwrap();
     let mut included = std::collections::BTreeSet::new();
-    let mut pages: Vec<_> = std::fs::read_dir(&src).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "md")).collect();
-    pages.sort();
+    let pages = pages();
+    assert!(pages.len() > 40, "{pages:?}");
     for path in pages {
-        let page = path.file_name().unwrap().to_string_lossy().into_owned();
+        let page = path.strip_prefix(&docs).unwrap().display().to_string();
+        let strict = STRICT.iter().any(|s| page.starts_with(s));
+        let strict_sspur = STRICT_SSPUR.iter().any(|s| page.starts_with(s));
         let text = std::fs::read_to_string(&path).unwrap();
-        let mut in_fence = false;
+        let mut fence: Option<String> = None;
         let mut body: Vec<String> = Vec::new();
         for line in text.lines() {
-            if line.trim_start().starts_with("```") {
-                if in_fence && page == "tutorial.md" {
-                    assert!(body.len() == 1 && body[0].starts_with("{{#include ../tutorial/"), "{page}: a code block that is not one include of a site/tutorial file: {body:?}");
+            if let Some(info) = line.trim_start().strip_prefix("```") {
+                match fence.take() {
+                    Some(lang) => {
+                        if strict || (strict_sspur && ["sspur", "console", "toml", ""].contains(&lang.as_str())) {
+                            assert!(body.len() == 1 && body[0].starts_with("{{#include ") && body[0].contains("snippets/"), "{page}: a code block that is not one include of a docs/snippets file: {body:?}");
+                        }
+                    }
+                    None => fence = Some(info.trim().to_string()),
                 }
-                in_fence = !in_fence;
                 body.clear();
-            } else if in_fence {
+            } else if fence.is_some() {
                 body.push(line.trim().to_string());
             }
-            for part in line.split("{{#include ../tutorial/").skip(1) {
-                let name = part.split(['}', ':']).next().unwrap();
-                assert!(tutorial().join(name).is_file(), "{page}: includes missing file {name}");
-                included.insert(name.to_string());
+            for part in line.split("{{#include ").skip(1) {
+                let target = part.split("}}").next().unwrap().trim();
+                let (file, anchor) = target.split_once(':').unwrap_or((target, ""));
+                let full = path.parent().unwrap().join(file);
+                assert!(full.is_file(), "{page}: includes missing file {file}");
+                let full = full.canonicalize().unwrap();
+                if !anchor.is_empty() && !anchor.starts_with(|c: char| c.is_ascii_digit()) {
+                    let src = std::fs::read_to_string(&full).unwrap();
+                    assert!(src.contains(&format!("ANCHOR: {anchor}")), "{page}: {file} has no anchor {anchor}");
+                }
+                if let Ok(rel) = full.strip_prefix(&snip) {
+                    included.insert(rel.display().to_string());
+                }
             }
         }
     }
     let mut all = Vec::new();
-    files(&tutorial(), &mut all);
-    for f in all {
-        let rel = f.strip_prefix(tutorial()).unwrap().display().to_string();
-        assert!(included.contains(&rel), "site/tutorial/{rel} is not included by any page");
+    files(&snippets(), &mut all);
+    let outs: Vec<PathBuf> = all.iter().filter(|p| p.extension().is_some_and(|e| e == "out")).cloned().collect();
+    let out_text: String = outs.iter().map(|o| std::fs::read_to_string(o).unwrap()).collect();
+    for f in &all {
+        let rel = f.strip_prefix(snippets()).unwrap().display().to_string();
+        let name = f.file_name().unwrap().to_string_lossy();
+        assert!(included.contains(&rel) || out_text.contains(&*name), "docs/snippets/{rel} is not included by any page or used by any transcript");
+        if f.extension().is_some_and(|e| e == "ssp") {
+            assert!(exercised(f, &outs), "docs/snippets/{rel} is not run by any transcript in its folder or above");
+        }
     }
+}
+
+fn codes_in(dir: &Path, out: &mut std::collections::BTreeSet<String>) {
+    let mut all = Vec::new();
+    files(dir, &mut all);
+    for f in all.iter().filter(|p| p.extension().is_some_and(|e| e == "rs")) {
+        let text = std::fs::read_to_string(f).unwrap();
+        for part in text.split('"').skip(1) {
+            let code: String = part.chars().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_').collect();
+            if code.len() > 2 && ["E_", "W_", "A_"].iter().any(|p| code.starts_with(p)) && !code.ends_with('_') {
+                out.insert(code);
+            }
+        }
+    }
+}
+
+// docs/reference/errors.md has one table row per diagnostic code in the compiler's source, and no others.
+#[test]
+fn error_codes_are_documented() {
+    let mut codes = std::collections::BTreeSet::new();
+    for c in std::fs::read_dir(root().join("crates")).unwrap() {
+        let src = c.unwrap().path().join("src");
+        if src.is_dir() {
+            codes_in(&src, &mut codes);
+        }
+    }
+    assert!(codes.len() > 150, "{}", codes.len());
+    let page = std::fs::read_to_string(root().join("docs/reference/errors.md")).unwrap();
+    let documented: std::collections::BTreeSet<String> = page.lines().filter_map(|l| l.strip_prefix("| `")).filter_map(|l| l.split('`').next()).map(String::from).collect();
+    let missing: Vec<_> = codes.difference(&documented).collect();
+    let extra: Vec<_> = documented.difference(&codes).collect();
+    assert!(missing.is_empty(), "codes the compiler emits but docs/reference/errors.md does not list: {missing:?}");
+    assert!(extra.is_empty(), "codes docs/reference/errors.md lists but the compiler never emits: {extra:?}");
 }

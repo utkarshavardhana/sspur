@@ -101,7 +101,7 @@ Claude Desktop starts servers from its own directory and does not read your shel
 }
 ```
 
-[MCP setup](docs/mcp.md) has the details, other clients and a one-line check from a shell.
+[MCP setup](docs/agent/mcp.md) has the details, other clients and a one-line check from a shell.
 
 ## Claude Code plugin
 
@@ -112,7 +112,7 @@ claude plugin marketplace add utkarshavardhana/sspur
 claude plugin install sspur@sspur
 ```
 
-From a local clone, use the path instead: `claude plugin marketplace add /path/to/sspur`. To try it for one session without installing anything: `claude --plugin-dir /path/to/sspur/plugins/claude-code`.
+From a local clone, use the path instead: `claude plugin marketplace add /path/to/sspur`. To try it for one session without installing anything: `claude --plugin-dir /path/to/sspur/packaging/claude-code`.
 
 ## The token benchmark
 

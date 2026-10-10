@@ -46,7 +46,7 @@ Run these on anything you touch in `sspur-native`, `sspur-smt` or the optimizer.
 
 ## Design records
 
-Decisions with lasting impact get an ADR in `docs/adr/`. If your change alters behavior described in one, update it or add a new one, and keep `docs/07-reference-v0.md` and `docs/agent-spec.md` in sync.
+Decisions with lasting impact get an ADR in `docs/adr/`. If your change alters behavior described in one, update it or add a new one, and keep `docs/reference/language.md` and `docs/agent/agent-spec.md` in sync.
 
 ## Commits
 

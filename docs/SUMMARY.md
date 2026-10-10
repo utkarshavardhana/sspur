@@ -6,13 +6,13 @@
 
 - [Your first SSPUR program in 10 minutes](tutorial.md)
 - [SSPUR for AI agents](agents.md)
-  - [MCP setup](docs/mcp.md)
-  - [Agent reference](docs/agent-spec.md)
-    - [Agent reference, more](docs/agent-spec-more.md)
+  - [MCP setup](docs/agent/mcp.md)
+  - [Agent reference](docs/agent/agent-spec.md)
+    - [Agent reference, more](docs/agent/agent-spec-more.md)
 
 # Reference
 
-- [Language reference](docs/07-reference-v0.md)
+- [Language reference](docs/reference/language.md)
 - [Standard library](stdlib.md)
 - [Command line](cli.md)
 
@@ -23,14 +23,14 @@
 
 # Design
 
-- [Vision](docs/00-vision.md)
-- [Core semantics](docs/01-core-semantics.md)
-- [Graph model](docs/02-graph-model.md)
-- [Text projection](docs/03-text-projection.md)
-- [Deploy model](docs/04-deploy-model.md)
-- [Systems layer](docs/05-systems-layer.md)
-- [AI-native constructs](docs/06-ai-native-constructs.md)
-- [Roadmap](docs/roadmap.md)
+- [Vision](docs/design/00-vision.md)
+- [Core semantics](docs/design/01-core-semantics.md)
+- [Graph model](docs/design/02-graph-model.md)
+- [Text projection](docs/design/03-text-projection.md)
+- [Deploy model](docs/design/04-deploy-model.md)
+- [Systems layer](docs/design/05-systems-layer.md)
+- [AI-native constructs](docs/design/06-ai-native-constructs.md)
+- [Roadmap](docs/design/roadmap.md)
 - [Design decisions](design.md)
   - [ADR 0001: Foundations](docs/adr/0001-foundations.md)
   - [ADR 0002: Phase 2 compiler core](docs/adr/0002-phase2-compiler-core.md)

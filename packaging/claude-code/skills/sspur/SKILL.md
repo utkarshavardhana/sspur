@@ -36,4 +36,4 @@ Use the `sspur` MCP tools when they are available (`mcp__sspur__start`, `query`,
 - Syntax that looks familiar often isn't SSPUR: `and or not` (not `&& || !`), `x.len` (not `len(x)`), `none some(x) ok(x)` (lowercase), `x => e` lambdas, `if c then a else b`, effect rows with commas (`! fail[E], log`), a bare `Ctor` pattern to ignore fields, a literal `{` in a string is `\{`.
 - A `match` nested in an arm takes every arm below it; put the inner match in a helper fn.
 - Calling a fn that raises means the caller declares `fail[E]` too, unless it handles every variant with `catch`.
-- See `docs/mcp.md` in the SSPUR repository for MCP setup.
+- See `docs/agent/mcp.md` in the SSPUR repository for MCP setup.

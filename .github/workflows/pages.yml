@@ -32,15 +32,15 @@ jobs:
         uses: actions/configure-pages@v6
 
       - name: Build
-        run: mdbook build site
+        run: mdbook build docs
 
       - name: Check internal links
-        run: python3 tools/check_site_links.py site/book
+        run: python3 tools/check_site_links.py docs/book
 
       - name: Upload
         uses: actions/upload-pages-artifact@v5
         with:
-          path: site/book
+          path: docs/book
 
   deploy:
     name: Deploy to GitHub Pages

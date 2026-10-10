@@ -38,7 +38,7 @@ SSPUR runs on macOS (arm64, x86_64) and Linux (x86_64, aarch64). Native compilat
 
 - [Your first SSPUR program in 10 minutes](tutorial.md): hello world to a CRUD service running locally.
 - [SSPUR for AI agents](agents.md): `sspur start`, `q`, `edit --test`, MCP and the Claude Code plugin.
-- [Language reference](docs/07-reference-v0.md), [standard library](stdlib.md) and [command line](cli.md).
+- [Language reference](docs/reference/language.md), [standard library](stdlib.md) and [command line](cli.md).
 - [Performance](performance.md): the native benchmarks against C++, and how they were measured.
 - [Design](design.md): the design documents and every architecture decision record.
 - [Changelog](changelog.md) and the [source on GitHub](https://github.com/utkarshavardhana/sspur).

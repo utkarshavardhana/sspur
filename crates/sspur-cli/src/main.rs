@@ -17,9 +17,9 @@ use sspur_syntax::{line_col, print_module};
 use std::io::Read;
 use std::process::ExitCode;
 
-pub const REFERENCE: &str = include_str!("../../../docs/07-reference-v0.md");
-pub const AGENT_SPEC: &str = include_str!("../../../docs/agent-spec.md");
-pub const AGENT_SPEC_MORE: &str = include_str!("../../../docs/agent-spec-more.md");
+pub const REFERENCE: &str = include_str!("../../../docs/reference/language.md");
+pub const AGENT_SPEC: &str = include_str!("../../../docs/agent/agent-spec.md");
+pub const AGENT_SPEC_MORE: &str = include_str!("../../../docs/agent/agent-spec-more.md");
 
 const USAGE: &str = "usage:
   sspur init [file.ssp] [--pkg NAME]    create a codebase in .sspur/ (optionally import a file; --pkg also writes sspur.toml)

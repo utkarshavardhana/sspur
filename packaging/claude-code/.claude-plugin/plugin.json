@@ -5,7 +5,7 @@
   "author": {
     "name": "Utkarsha Vardhana"
   },
-  "homepage": "https://github.com/utkarshavardhana/sspur/blob/main/docs/mcp.md",
+  "homepage": "https://github.com/utkarshavardhana/sspur/blob/main/docs/agent/mcp.md",
   "repository": "https://github.com/utkarshavardhana/sspur",
   "license": "MIT OR Apache-2.0",
   "keywords": ["sspur", "language", "mcp", "codebase", "typechecked-edits"]

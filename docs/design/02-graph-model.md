@@ -70,7 +70,7 @@ Agents never send text diffs. They send ops. Each batch of ops is one atomic tra
 
 A transaction is either fully applied with its typecheck and effect check passing, or rejected with diagnostics. A root that doesn't typecheck can never exist.
 
-Ops may be sent as JSON (`schema/ops.schema.json`) or written inline in SSP-T. The encoder resolves names to hashes using the agent's current context pack.
+Ops may be sent as JSON (`docs/reference/schema/ops.schema.json`) or written inline in SSP-T. The encoder resolves names to hashes using the agent's current context pack.
 
 ## 5. Propagation
 

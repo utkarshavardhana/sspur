@@ -1,5 +1,4 @@
 // ANCHOR: start
-$ cd agents
 $ sspur init cart.ssp
 ok 6 definitions
 $ sspur start total

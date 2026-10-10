@@ -4,7 +4,7 @@ target/
 *.log
 .DS_Store
 .claude/
-site/book/
+docs/book/
 
 # cross-language bench (run 9)
 bench/agent/xlang/node_modules/

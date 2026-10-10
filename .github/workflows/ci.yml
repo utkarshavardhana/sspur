@@ -104,16 +104,16 @@ jobs:
           curl -fsSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$RUNNER_TEMP/mdbook"
           echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
 
-      - name: Tutorial snippets (every transcript under site/tutorial)
+      - name: Tutorial snippets (every transcript under docs/snippets)
         env:
           SSPUR_STRICT_NATIVE: "1"
         run: cargo test --release -p sspur-cli --test tutorial
 
       - name: Highlighter syntax
-        run: node --check site/assets/sspur-highlight.js
+        run: node --check docs/assets/sspur-highlight.js
 
       - name: Build the site
-        run: mdbook build site
+        run: mdbook build docs
 
       - name: Check internal links
-        run: python3 tools/check_site_links.py site/book
+        run: python3 tools/check_site_links.py docs/book

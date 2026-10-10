@@ -26,7 +26,7 @@ Everything SSPUR does goes through one binary, `sspur`. This is its usage text, 
 
 ## Queries
 
-The query API is how an agent reads a large codebase without printing all of it. The [graph model](docs/02-graph-model.md#6-query-api) describes every query; these are the ones agents use most:
+The query API is how an agent reads a large codebase without printing all of it. The [graph model](docs/design/02-graph-model.md#6-query-api) describes every query; these are the ones agents use most:
 
 | Query | Prints |
 |---|---|

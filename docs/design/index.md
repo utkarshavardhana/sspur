@@ -2,7 +2,7 @@
 
 Every change that shapes the language, the compiler or the tools has an architecture decision record (ADR). Each one states the context, the options considered, what was decided and why, and what was measured afterwards. They are the best place to find out why SSPUR works the way it does, and what was tried and rejected.
 
-The design documents in this section describe the system as a whole: the [vision](docs/00-vision.md), [core semantics](docs/01-core-semantics.md), the [graph model](docs/02-graph-model.md), the [text projection](docs/03-text-projection.md), the [deploy model](docs/04-deploy-model.md), the [systems layer](docs/05-systems-layer.md), the [AI-native constructs](docs/06-ai-native-constructs.md) and the [roadmap](docs/roadmap.md).
+The design documents in this section describe the system as a whole: the [vision](docs/design/00-vision.md), [core semantics](docs/design/01-core-semantics.md), the [graph model](docs/design/02-graph-model.md), the [text projection](docs/design/03-text-projection.md), the [deploy model](docs/design/04-deploy-model.md), the [systems layer](docs/design/05-systems-layer.md), the [AI-native constructs](docs/design/06-ai-native-constructs.md) and the [roadmap](docs/design/roadmap.md).
 
 | ADR | Decision | Area |
 |---|---|---|

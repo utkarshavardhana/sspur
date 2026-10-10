@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check every internal link in the built site (site/book by default).
+"""Check every internal link in the built site (docs/book by default).
 
 A link is internal when it has no scheme. Its file must exist, and a #fragment must
 match an id in that file. Links that leave the book (to ../README.md, a source
@@ -40,9 +40,9 @@ def parse(path, cache):
 
 
 def main():
-    root = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "site", "book"))
+    root = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "docs", "book"))
     if not os.path.isfile(os.path.join(root, "index.html")):
-        sys.exit(f"no built site at {root}; run `mdbook build site` first")
+        sys.exit(f"no built site at {root}; run `mdbook build docs` first")
     cache, broken, checked = {}, [], 0
     for dirpath, _, names in os.walk(root):
         for name in sorted(names):

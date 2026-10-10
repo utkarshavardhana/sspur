@@ -2,7 +2,7 @@
 
 The standard library is built in: there is nothing to import, and a definition of your own with the same name takes precedence over a builtin. Every function behaves identically in the interpreter and in native code, which the test suite and the differential fuzzer check. Anything that touches the outside world is behind an effect, so it shows up in signatures.
 
-The method-by-method list is in the [Builtins section of the language reference](docs/07-reference-v0.md#builtins). The compact version that agents read is in the [agent reference (`spec --more`)](docs/agent-spec-more.md#builtins). [ADR 0018](docs/adr/0018-std-library.md) records every design choice, from the deque that is just `List` to the regex engine that cannot backtrack, and the [systems layer](docs/05-systems-layer.md) compares the coverage with the C++ standard library area by area.
+The method-by-method list is in the [Builtins section of the language reference](docs/reference/language.md#builtins). The compact version that agents read is in the [agent reference (`spec --more`)](docs/agent/agent-spec-more.md#builtins). [ADR 0018](docs/adr/0018-std-library.md) records every design choice, from the deque that is just `List` to the regex engine that cannot backtrack, and the [systems layer](docs/design/05-systems-layer.md) compares the coverage with the C++ standard library area by area.
 
 ## Overview
 
@@ -14,7 +14,7 @@ The method-by-method list is in the [Builtins section of the language reference]
 | Time | `Time` and `Duration` in milliseconds, calendar math, ISO 8601, and IANA time zones through `Zone` |
 | Data | `json.encode(v)` and `json.decode[T](s)` for any data type, with readable decode errors (`lines[0].qty: expected Int, found a string`) |
 | Files and processes | `fs` (files, streaming `File` handles, directories, copies, symlinks and permission bits), `io` (stdin, stderr), `time`, `env` and `proc` (child processes), each its own effect |
-| Traits | `Eq`, `Ord`, `Show`, `Hash`, `Json`, `Add`, `Sub`, `Mul`, `Div`, `Neg`, `Index` and `Copy`, implemented by the built-in types and by `derive`, used through bounds such as `[T: Ord]` and by the operators; see [Traits](docs/07-reference-v0.md#traits) |
+| Traits | `Eq`, `Ord`, `Show`, `Hash`, `Json`, `Add`, `Sub`, `Mul`, `Div`, `Neg`, `Index` and `Copy`, implemented by the built-in types and by `derive`, used through bounds such as `[T: Ord]` and by the operators; see [Traits](docs/reference/language.md#traits) |
 | Concurrency | `for x in par(xs)`, `Atomic[Int]` and channels under the `conc` effect, with data races rejected by the checker |
 
 ## Errors and absence

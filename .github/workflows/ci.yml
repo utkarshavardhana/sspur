@@ -137,10 +137,16 @@ jobs:
         run: ./target/release/sspur.exe --version
 
       - name: Native smoke test
+        shell: pwsh
         run: |
-          ./target/release/sspur.exe test --strict-native tests/programs/core.ssp
-          ./target/release/sspur.exe test --strict-native tests/programs/concurrency.ssp
-          ./target/release/sspur.exe test --strict-native tests/programs/std_system.ssp
+          foreach ($t in "core", "concurrency", "std_system") {
+            ./target/release/sspur.exe test --interp tests/programs/$t.ssp
+            "interp $t exit 0x{0:X8}" -f $LASTEXITCODE
+            ./target/release/sspur.exe test --strict-native tests/programs/$t.ssp
+            $c = $LASTEXITCODE
+            "native $t exit 0x{0:X8}" -f $c
+            if ($c -ne 0) { exit 1 }
+          }
 
       - name: Clippy
         run: cargo clippy --release --all-targets -- -D warnings

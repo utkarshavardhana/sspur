@@ -81,11 +81,14 @@ async function main() {
   const runner = new Engine(module);
   const builtins = await ide.call("builtins");
   $("engine").textContent = "Ready";
+  $("engine").classList.add("ready");
 
   const pick = $("examples");
   examples.forEach((ex, i) => pick.appendChild(new Option(ex.name, String(i))));
   const shared = await fromHash(location.hash).catch(() => null);
   const initial = shared ?? store.get(STORE) ?? examples[0].source;
+  const known = examples.findIndex((ex) => ex.source === initial);
+  if (known >= 0) pick.value = String(known);
 
   let seq = 0;
   let timer = 0;
@@ -167,6 +170,7 @@ async function main() {
   }
 
   async function go(op) {
+    const asked = op;
     if (op === "run" && !/^(pub\s+)?fn\s+main\b/m.test(editor.text())) op = "test";
     const box = $("output");
     tab("output");
@@ -193,7 +197,7 @@ async function main() {
           row.appendChild(el("span", null, t.name + (t.ok ? "" : ": " + t.message)));
           box.appendChild(row);
         }
-        if (!/^(pub\s+)?fn\s+main\b/m.test(editor.text())) box.appendChild(el("div", "line quiet", "No main, so Run ran the tests."));
+        if (asked === "run") box.appendChild(el("div", "line quiet", "No main, so Run ran the tests."));
         box.appendChild(el("div", "line " + (r.failed ? "err" : "quiet"), `${r.passed} passed, ${r.failed} failed (${ms} ms)`));
       }
     } catch (e) {
@@ -242,15 +246,42 @@ async function main() {
   pick.onchange = () => {
     if (pick.value === "") return;
     editor.setText(examples[Number(pick.value)].source);
-    pick.value = "";
+    pick.blur();
     tab("output");
   };
-  $("theme").onclick = () => {
+  const toggleTheme = () => {
     dark = !dark;
     store.set(THEME, dark ? "dark" : "light");
     document.documentElement.classList.toggle("dark", dark);
     editor.setDark(dark);
+    $("theme-item").textContent = dark ? "Light mode" : "Dark mode";
   };
+  $("theme").onclick = toggleTheme;
+  $("theme-item").textContent = dark ? "Light mode" : "Dark mode";
+
+  const split = $("split"), ed = $("editor");
+  split.onpointerdown = (e) => {
+    split.setPointerCapture(e.pointerId);
+    split.classList.add("drag");
+    const box = ed.parentElement.getBoundingClientRect();
+    split.onpointermove = (m) => {
+      const f = Math.min(0.8, Math.max(0.3, (m.clientX - box.left) / box.width));
+      ed.style.flex = `0 0 ${(f * 100).toFixed(1)}%`;
+    };
+    split.onpointerup = () => { split.classList.remove("drag"); split.onpointermove = split.onpointerup = null; };
+  };
+
+  const sheet = $("sheet"), scrim = $("scrim"), menu = $("menu");
+  const openMenu = (on) => {
+    sheet.hidden = scrim.hidden = !on;
+    menu.setAttribute("aria-expanded", String(on));
+    if (on) $("close").focus();
+  };
+  menu.onclick = () => openMenu(true);
+  $("close").onclick = scrim.onclick = () => openMenu(false);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !sheet.hidden) openMenu(false); });
+  const acts = { format, theme: toggleTheme, about: () => tab("about") };
+  for (const b of sheet.querySelectorAll("[data-act]")) b.onclick = () => { openMenu(false); acts[b.dataset.act](); };
   window.addEventListener("hashchange", async () => {
     const src = await fromHash(location.hash).catch(() => null);
     if (src !== null && src !== editor.text()) editor.setText(src);

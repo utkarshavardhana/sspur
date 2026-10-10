@@ -206,7 +206,7 @@ function highlight(p) {
 function theme(dark) {
   return EditorView.theme(
     {
-      "&": { height: "100%", fontSize: "14px", backgroundColor: "var(--editor-bg)", color: "var(--fg)" },
+      "&": { height: "100%", fontSize: "var(--editor-font, 14px)", backgroundColor: "var(--editor-bg)", color: "var(--fg)" },
       ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.55" },
       ".cm-content": { caretColor: "var(--accent)" },
       ".cm-gutters": { backgroundColor: "var(--editor-bg)", color: "var(--muted)", border: "none" },

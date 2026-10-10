@@ -64,7 +64,8 @@ fn boot(target: &str, elf: &Path) -> (String, Option<i32>) {
 }
 
 fn boots(target: &str, example: &str, expect: &str) {
-    boots_with(target, &format!("examples/bare/{example}.ssp"), expect, 0);
+    let dir = if example == "hello" { "examples" } else { "tests" };
+    boots_with(target, &format!("{dir}/bare/{example}.ssp"), expect, 0);
 }
 
 fn boots_with(target: &str, path: &str, expect: &str, status: i32) {
@@ -203,7 +204,7 @@ fn bare_modules_test_on_the_host() {
     assert!(out.contains("1 passed, 0 failed"), "{out}");
     let (_, err, ok) = sspur(&["run", "examples/bare/hello.ssp"]);
     assert!(!ok && err.contains("needs a bare target"), "{err}");
-    let (out, _, ok) = sspur(&["fmt", "examples/bare/timer.ssp"]);
+    let (out, _, ok) = sspur(&["fmt", "tests/bare/timer.ssp"]);
     assert!(ok && out.contains("mmio[U8](268435461)") && out.contains("  interrupt timer\n"), "{out}");
 }
 
@@ -239,7 +240,7 @@ fn statics_shared_with_interrupt_handlers_and_stack_arrays_on_every_target() {
     for target in ["riscv64-qemu", "aarch64-qemu", "thumbv7em-mps2"] {
         boots(target, "ticks", "hist 804\nticks 5 seen 14 base 1005\n");
     }
-    let (out, err, ok) = sspur(&["test", "examples/bare/ticks.ssp"]);
+    let (out, err, ok) = sspur(&["test", "tests/bare/ticks.ssp"]);
     assert!(ok && out.contains("3 passed, 0 failed"), "{out}{err}");
 }
 
@@ -254,7 +255,7 @@ fn fixed_arrays_match_across_tiers() {
     for f in ["fill_ring", "grid", "pts", "flags", "at"] {
         assert!(out.contains(&format!("native  {f}\n")), "{f}: {out}");
     }
-    let (out, _, ok) = sspur(&["fmt", "examples/bare/ticks.ssp"]);
+    let (out, _, ok) = sspur(&["fmt", "tests/bare/ticks.ssp"]);
     assert!(ok && out.contains("static seen: Array[Int, 4] = [0; 4]\n") && out.contains("  var a = [0; 8]\n") && out.contains("    a[i % 8] := a[i % 8] + i\n"), "{out}");
 }
 
@@ -295,7 +296,7 @@ fn statics_and_arrays_reject_unsafe_access() {
 }
 
 fn host_floats() -> String {
-    let src = std::fs::read_to_string(root().join("examples/bare/floats.ssp")).unwrap();
+    let src = std::fs::read_to_string(root().join("tests/bare/floats.ssp")).unwrap();
     let pure = src.split("// host:").next().unwrap().trim_start_matches("profile bare\n");
     let d = scratch("floats-host");
     let f = d.join("host.ssp");
@@ -315,10 +316,10 @@ fn f64_on_fpu_targets_matches_the_host_interpreter() {
     for target in ["aarch64-qemu", "thumbv7em-mps2"] {
         boots(target, "floats", &expect);
     }
-    let (out, err, ok) = sspur(&["test", "examples/bare/floats.ssp"]);
+    let (out, err, ok) = sspur(&["test", "tests/bare/floats.ssp"]);
     assert!(ok && out.contains("1 passed, 0 failed"), "{out}{err}");
     let d = scratch("floats-rv");
-    let (_, err, ok) = sspur(&["build", "--target", "riscv64-qemu", "examples/bare/floats.ssp", "-o", d.join("k.elf").to_str().unwrap()]);
+    let (_, err, ok) = sspur(&["build", "--target", "riscv64-qemu", "tests/bare/floats.ssp", "-o", d.join("k.elf").to_str().unwrap()]);
     assert!(!ok && err.contains("F64 needs a floating-point unit"), "{err}");
     let _ = std::fs::remove_dir_all(&d);
 }

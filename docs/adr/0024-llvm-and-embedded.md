@@ -93,7 +93,7 @@ fn fence()
 | 6 | `arch() == "riscv64"` (and `!=`) against a literal is folded to a C constant in native code, so the other target's asm is never emitted | Lets one source carry per-architecture asm, as the bare examples do |
 | 7 | The parser stores `asm` as a method node named `asm` on the template with records `in`, `out`, `clobber` as arguments and the output types as type arguments; the printer prints it back in source form | Same approach as `mmio[W](a)` in ADR 0017: no new AST variant, so hashing, renaming and every traversal keep working |
 
-Verified: `tests/asm/host_aarch64.ssp` (counter reads, a two-instruction add, `sdiv`/`msub` with two outputs, `cset` into `Bool`, a `dmb` barrier) runs natively on the aarch64 host; `examples/bare/cycles.ssp` reads `mcycle` (riscv64) or `cntvct_el0` (aarch64), runs an asm arithmetic loop and prints `mix 63534 counter advanced` on both QEMU machines; the rejection codes and `sspur fmt` round trip are checked in `crates/sspur-cli/tests/bare.rs`.
+Verified: `tests/asm/host_aarch64.ssp` (counter reads, a two-instruction add, `sdiv`/`msub` with two outputs, `cset` into `Bool`, a `dmb` barrier) runs natively on the aarch64 host; `tests/bare/cycles.ssp` reads `mcycle` (riscv64) or `cntvct_el0` (aarch64), runs an asm arithmetic loop and prints `mix 63534 counter advanced` on both QEMU machines; the rejection codes and `sspur fmt` round trip are checked in `crates/sspur-cli/tests/bare.rs`.
 
 ## 5. Cortex-M: `thumbv7em-mps2`
 
@@ -108,7 +108,7 @@ Verified: `tests/asm/host_aarch64.ssp` (counter reads, a two-instruction add, `s
 | 64-bit helpers | `Int` stays 64-bit on the 32-bit core. The freestanding runtime defines `__aeabi_ldivmod`, `__aeabi_uldivmod` (naked trampolines into C shift-subtract division with a 32-bit fast path), `__mulodi4` for checked multiplication and the `__aeabi_mem*` family, since there is no compiler-rt for the target |
 | Board I/O | Clock-free, from user code through `mmio`: CMSDK UART0 at 0x40004000 (enable TX in `CTRL`, poll `STATE`, write `DATA`) and the FPGA I/O LED register at 0x40028000 |
 
-`arch()` is `"thumbv7em"`. `examples/bare/hello.ssp` and `timer.ssp` gained a third UART branch and boot unchanged on all three targets. `examples/bare/m4_hello.ssp` (about 7 KB of code) prints:
+`arch()` is `"thumbv7em"`. `examples/bare/hello.ssp` and `tests/bare/timer.ssp` gained a third UART branch and boot unchanged on all three targets. `tests/bare/m4_hello.ssp` (about 7 KB of code) prints:
 
 ```
 hello from sspur on cortex-m4
@@ -164,7 +164,7 @@ fn histogram(n: Int) -> Int
 | 7 | `E_STATIC_RACE`: if interrupt code (handlers, `on_trap`, and what they call) writes a static and code reachable from `main` uses it, or the reverse, then code reachable from `main` may not `store` or `swap` a value computed from the same static. `x.store(x.load + 1)` there must be `x.add(1)` or a `cas` loop. Handlers themselves may read-modify-write | `main` can be interrupted between the load and the store, and the handler's update would be lost. Handlers are not preempted by `main` |
 | 8 | On the host, `sspur test` runs statics in the interpreter, reset before `main` and before each test; functions that perform `static` are not compiled natively there | One copy of the state, in one tier, so interpreter and native code can't disagree about it |
 
-Verified: `examples/bare/ticks.ssp` (a timer handler counting into a static `Int`, a static array and a `Bool` flag that `main` waits on, a static with a non-zero initializer in `.data`, and an 8-element stack array) prints `hist 804` and `ticks 5 seen 14 base 1005` on riscv64, aarch64 and Cortex-M4 under QEMU; its three host tests pass; `tests/bare/arrays.ssp` (arrays in records, a ring buffer, nested `[[0; 3]; 3]` arrays updated with `g[i][j] := v`, arrays of records and of `Bool`, an out-of-bounds trap) prints the same in native code and the interpreter, with every function native; the rejection codes are checked in `crates/sspur-cli/tests/bare.rs`.
+Verified: `tests/bare/ticks.ssp` (a timer handler counting into a static `Int`, a static array and a `Bool` flag that `main` waits on, a static with a non-zero initializer in `.data`, and an 8-element stack array) prints `hist 804` and `ticks 5 seen 14 base 1005` on riscv64, aarch64 and Cortex-M4 under QEMU; its three host tests pass; `tests/bare/arrays.ssp` (arrays in records, a ring buffer, nested `[[0; 3]; 3]` arrays updated with `g[i][j] := v`, arrays of records and of `Bool`, an out-of-bounds trap) prints the same in native code and the interpreter, with every function native; the rejection codes are checked in `crates/sspur-cli/tests/bare.rs`.
 
 ## Not yet
 

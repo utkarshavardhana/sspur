@@ -190,7 +190,7 @@ More examples:
 | [`examples/crud/`](examples/crud) | A CRUD HTTP service, with `sspur deploy plan` and `sspur deploy local` |
 | [`examples/ffi/`](examples/ffi) | Calling libc and libm, and calling SSPUR from C |
 | [`examples/packages/`](examples/packages) | A text library and an app that depends on it by path, with its lockfile |
-| [`examples/bare/`](examples/bare) | Bare-metal hello world, a timer interrupt, inline asm, statics shared with an interrupt handler, floats and two cores on QEMU riscv64 and aarch64 and a Cortex-M4 (MPS2 AN386) |
+| [`examples/bare/`](examples/bare) | Bare-metal hello world on QEMU riscv64 and aarch64 and a Cortex-M4 (MPS2 AN386); [`tests/bare/`](tests/bare) adds a timer interrupt, inline asm, statics shared with an interrupt handler, floats and two cores |
 | [`tests/programs/`](tests/programs) | 15 runnable programs, one per area, covering every language feature and library area |
 
 ## Using SSPUR with AI agents

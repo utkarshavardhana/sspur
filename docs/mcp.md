@@ -12,7 +12,7 @@ From the project directory:
 claude mcp add sspur -- sspur mcp
 ```
 
-That adds it for you in this project. `--scope project` writes a `.mcp.json` that you can commit, so everyone working on the repository gets the server; `examples/mcp/.mcp.json` is that file:
+That adds it for you in this project. `--scope project` writes a `.mcp.json` that you can commit, so everyone working on the repository gets the server; it looks like this:
 
 ```json
 {

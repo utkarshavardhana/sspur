@@ -222,9 +222,14 @@ fn tutorial_transcripts_match() {
     files(&snippets(), &mut all);
     let outs: Vec<_> = all.iter().filter(|p| p.extension().is_some_and(|e| e == "out")).collect();
     assert!(outs.len() >= 8, "{outs:?}");
+    let mut failed = Vec::new();
     for f in outs {
-        run_transcript(f);
+        if let Err(e) = std::panic::catch_unwind(|| run_transcript(f)) {
+            let msg = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_default();
+            failed.push(msg);
+        }
     }
+    assert!(failed.is_empty(), "{} transcript(s) failed:\n\n{}", failed.len(), failed.join("\n\n"));
 }
 
 // Sections whose every code block must be one include of a docs/snippets file.

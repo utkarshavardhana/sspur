@@ -1,0 +1,274 @@
+// case alloc E_KERNEL
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := [1.0].len.to_f32
+
+// case call E_KERNEL
+fn f(x: Int) -> Int
+= if x <= 0 then 0 else f(x - 1)
+
+kernel fn k(y: &mut [Int]) @grid(y.len, 64)
+= y[gid] := f(y[gid])
+
+// case conflict E_BORROW_CONFLICT
+kernel fn k(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := x[gid]
+
+fn main() ! dev
+= do
+  var ys = [1.0]
+  k(&ys, &mut ys)
+
+// case effect E_KERNEL_EFFECT
+kernel fn k(y: &mut [F32]) ! log @grid(y.len, 64)
+= y[gid] := 1.0
+
+// case elem E_KERNEL_SIG
+kernel fn k(y: &mut [Str]) @grid(y.len, 64)
+= ()
+
+// case grid_gid E_KERNEL
+kernel fn k(y: &mut [F32]) @grid(gid, 64)
+= y[gid] := 1.0
+
+// case group E_KERNEL_GRID
+kernel fn k(y: &mut [F32]) @grid(y.len, 2000)
+= y[gid] := 1.0
+
+// case immut E_BORROW_IMMUTABLE
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := 1.0
+
+fn main() ! dev
+= do
+  ys = [1.0]
+  k(&mut ys)
+
+// case mixed E_KERNEL_TYPE
+kernel fn k(y: &mut [F32], a: F64) @grid(y.len, 64)
+= y[gid] := y[gid] * a
+
+// case noborrow E_KERNEL_ARG
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := 1.0
+
+fn main() ! dev
+= do
+  var ys = [1.0]
+  k(ys)
+
+// case noeffect E_EFFECT_MISSING
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := 1.0
+
+fn main() -> Int
+= do
+  var ys = [1.0]
+  k(&mut ys)
+  1
+
+fn g() -> Int
+= main()
+
+// case race_block E_KERNEL_RACE
+kernel fn k(y: &mut [F32], w: Int) @grid(y.len, 64)
+= do
+  for j in 0..w + 1
+    y[gid * w + j] := 0.0
+
+// case race_const E_KERNEL_RACE
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[0] := 1.0
+
+// case race_div E_KERNEL_RACE
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[gid / 2] := 1.0
+
+// case race_neighbor E_KERNEL_RACE
+kernel fn k(y: &mut [F32]) @grid(y.len - 1, 64)
+= y[gid + 1] := y[gid] + 1.0
+
+// case race_var E_KERNEL_RACE
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= do
+  var i = gid
+  y[i] := 1.0
+
+// case types E_KERNEL_TYPE
+kernel fn k(y: &mut [I32]) @grid(y.len, 64)
+= y[gid] := y[gid] / 2.0
+
+// case value E_KERNEL_VALUE
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := 1.0
+
+fn main() ! dev
+= do
+  f = k
+  ()
+
+// case while E_KERNEL
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= do
+  var i = 0
+  while i < 3
+    i := i + 1
+
+// case write_readonly E_KERNEL_WRITE
+kernel fn k(x: &[F32]) @grid(x.len, 64)
+= x[gid] := 1.0
+
+// case barrier_branch E_KERNEL_BARRIER
+kernel fn k(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= do
+  t = shared[F32](64)
+  t[lid] := x[gid]
+  if gid < 10 then barrier()
+  y[gid] := t[lid]
+
+// case barrier_loop E_KERNEL_BARRIER
+kernel fn k(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= do
+  t = shared[F32](64)
+  for j in 0..lid
+    t[lid] := x[gid]
+    barrier()
+  y[gid] := t[lid]
+
+// case shared_race E_KERNEL_RACE
+kernel fn k(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= do
+  t = shared[F32](64)
+  t[lid] := x[gid]
+  y[gid] := t[lid + 1]
+
+// case shared_const E_KERNEL_RACE
+kernel fn k(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= do
+  t = shared[F32](64)
+  t[0] := x[gid]
+  barrier()
+  y[gid] := t[0]
+
+// case shared_loop E_KERNEL_RACE
+kernel fn k(x: &[F32], y: &mut [F32]) @grid(y.len, 256)
+= do
+  sh = shared[F32](256)
+  sh[lid] := x[gid]
+  barrier()
+  for k in 0..8
+    s = 128.shr(k)
+    if lid < s then sh[lid] := sh[lid] + sh[lid + s]
+  y[gid] := sh[lid]
+
+// case shared_nested E_KERNEL_SHARED
+kernel fn k(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= do
+  for j in 0..2
+    t = shared[F32](64)
+    t[lid] := x[gid]
+  y[gid] := x[gid]
+
+// case shared_big E_KERNEL_SHARED
+kernel fn k(x: &[F64], y: &mut [F64]) @grid(y.len, 64)
+= do
+  t = shared[F64](8192)
+  t[lid] := x[gid]
+  y[gid] := x[gid]
+
+// case group_write E_KERNEL_RACE
+kernel fn k(x: &[F32], y: &mut [F32]) @grid(x.len, 64)
+= y[group_id] := x[gid]
+
+// case shared_wrap E_KERNEL_RACE
+kernel fn k(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
+= do
+  t = shared[F32](65)
+  var acc = 0.0
+  for j in 0..4
+    t[lid] := x[gid]
+    barrier()
+    acc := acc + t[lid + 1]
+  y[gid] := acc
+
+// case atomic_mixed E_KERNEL_RACE
+kernel fn k(x: &[I32], h: &mut [I32]) @grid(x.len, 64)
+= do
+  h.atomic_add(x[gid].to_int % h.len, 1)
+  h[gid] := 0
+
+// case atomic_kinds E_KERNEL_RACE
+kernel fn k(x: &[I32], h: &mut [I32]) @grid(x.len, 64)
+= do
+  h.atomic_add(0, x[gid])
+  h.atomic_max(1, x[gid])
+
+// case atomic_cas E_KERNEL_RACE
+kernel fn k(h: &mut [I32]) @grid(64, 64)
+= h.atomic_cas(0, 0, gid.to_i32)
+
+// case atomic_value E_KERNEL
+kernel fn k(h: &mut [I32], y: &mut [I32]) @grid(y.len, 64)
+= y[gid] := h.atomic_add(0, 1)
+
+// case atomic_type E_KERNEL_TYPE
+kernel fn k(h: &mut [Int]) @grid(64, 64)
+= h.atomic_add(0, 1)
+
+// case atomic_shared E_KERNEL_RACE
+kernel fn k(x: &[I32], y: &mut [I32]) @grid(y.len, 64)
+= do
+  c = shared[I32](8)
+  c.atomic_add(x[gid].to_int % 8, 1)
+  y[gid] := c[lid % 8]
+
+// case grid2_plain E_KERNEL
+kernel fn k(y: &mut [F32], w: Int) @grid2(w, y.len / w, 8, 8)
+= y[gid] := 1.0
+
+// case grid1_axis E_KERNEL
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[gid.x] := 1.0
+
+// case grid2_group E_KERNEL_GRID
+kernel fn k(y: &mut [F32], w: Int) @grid2(w, y.len / w, 32, 64)
+= y[gid.y * w + gid.x] := 1.0
+
+// case grid2_race E_KERNEL_RACE
+kernel fn k(y: &mut [F32], w: Int) @grid2(w, y.len / w, 8, 8)
+= y[gid.y * 7 + gid.x] := 1.0
+
+// case helper_effect E_KERNEL_EFFECT
+fn f(x: Int) -> Int ! log
+= do
+  log("x")
+  x
+
+kernel fn k(y: &mut [Int]) @grid(y.len, 64)
+= y[gid] := f(y[gid])
+
+// case helper_slice E_KERNEL_SIG
+fn f(xs: List[Int]) -> Int
+= xs.len
+
+kernel fn k(y: &mut [Int]) @grid(y.len, 64)
+= y[gid] := f(y[gid])
+
+// case helper_host E_KERNEL_DEVICE
+fn half(x: I32) -> I32
+= x / 2
+
+fn main() ! log
+= log("{half(4)}")
+
+// case helper_body E_KERNEL
+fn f(x: F32) -> F32
+= do
+  xs = [x]
+  x
+
+// case helper_gid E_KERNEL
+fn f(x: F32) -> F32
+= x + gid.to_f32
+
+kernel fn k(y: &mut [F32]) @grid(y.len, 64)
+= y[gid] := f(y[gid])

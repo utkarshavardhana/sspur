@@ -1,5 +1,0 @@
-kernel fn k(y: &mut [F32]) @grid(y.len, 64)
-= do
-  var i = 0
-  while i < 3
-    i := i + 1

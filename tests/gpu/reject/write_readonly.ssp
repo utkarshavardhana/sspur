@@ -1,2 +1,0 @@
-kernel fn k(x: &[F32]) @grid(x.len, 64)
-= x[gid] := 1.0

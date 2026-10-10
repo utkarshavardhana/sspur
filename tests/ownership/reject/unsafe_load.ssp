@@ -1,4 +1,0 @@
-profile sys
-
-fn peek(p: Ptr[Int]) -> Int
-= p.load(0)

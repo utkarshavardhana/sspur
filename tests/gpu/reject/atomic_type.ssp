@@ -1,2 +1,0 @@
-kernel fn k(h: &mut [Int]) @grid(64, 64)
-= h.atomic_add(0, 1)

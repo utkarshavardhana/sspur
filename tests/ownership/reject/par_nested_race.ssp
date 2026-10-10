@@ -1,7 +1,0 @@
-fn f() -> Int
-= do
-  var s = 0
-  for w in par(0..2)
-    (a, b) = par(1, 2)
-    s := a
-  s

@@ -1,0 +1,1439 @@
+// case closure_env_shadowing
+// Inside a local function, captured variables are reached through the closure environment pointer e_.
+// Several library expansions declared their own e_ before evaluating an argument, which shadowed the environment and broke the C build.
+
+fn hm(b: List[Int]) -> Int
+= do
+  var acc = 0
+  fn g(k: Int) -> Int
+  = do
+    acc := hash_map().put("a", acc + k).put("b", acc).len + acc
+    acc
+  g(1) + g(2)
+
+fn stepped(n: Int) -> Int
+= do
+  var step = 2
+  fn g(k: Int) -> Int
+  = do
+    step := step + k
+    range(0, 20, step).sum
+  g(1) + g(n % 3)
+
+fn pw(n: Int) -> Int
+= do
+  var e = 3
+  fn g(k: Int) -> Int
+  = do
+    e := e + k % 3
+    big(2).pow(e).to_int.or(0)
+  g(n)
+
+test captured = hm([1]) == 6 and stepped(1) == 103 and pw(0) == 8
+
+// case dangling_else_print
+// The printer wrote `if a then (if b then x) else y` as `if a then if b then x else y`, so the else moved to the inner if.
+// The optimizer prints and re-parses every module, so native code ran the wrong branch.
+
+fn pick(a: Bool, b: Bool) -> Int ! log
+= do
+  var v = 0
+  if a then do
+    if b then v := 1
+  else do
+    log("outer else")
+    v := 2
+  v
+
+fn always(n: Int) -> Int ! log
+= do
+  var hits = 0
+  for i in 0..n % 5
+    if [i].all(e => e == e) then do
+      if i > 100 then hits := hits + 100
+    else do
+      log("never {i}")
+  hits
+
+test dangling = pick(true, false) == 0 and pick(false, true) == 2 and pick(true, true) == 1 and always(4) == 0
+
+// case empty_range_interval
+// An empty range gives its element the empty interval [0, -1]. The interval prover divided by the bound 0 and the compiler panicked.
+
+fn plain(a: Int) -> Int
+= (0..0).map(e => e / e).sum
+
+fn guarded(a: Int) -> Int
+= do
+  var v = (if a > 3 then (0..0).map(e => e / e).sum else a - 1)
+  v
+
+test empty_range = plain(5) == 0 and guarded(5) == 0 and guarded(1) == 0
+
+// case ev_copy_trap_names
+type Small = Int where _ < 100
+
+fn refined(a: Int where _ > 0) -> Small ! log
+= do
+  log("refined {a}")
+  a * 2
+
+fn quiet_refined(n: Int) -> Int
+= do
+  var seen = 0
+  r = handle refined(n) + 1
+    | log(m) => do
+      seen := seen + m.len
+      resume()
+  r + seen
+
+test ok = quiet_refined(3) == 16
+
+// case handler_reentry
+// interp-ok: deep re-enters its own aborting handler, so it stays interpreted
+effect tick(x: Int) -> Int
+
+fn deep(n: Int) -> Int ! tick
+= handle (if n > 0 then deep(n - 1) else tick(0))
+  | tick(x) => if x >= 2 then x * 10 else resume(tick(x + 1))
+  | return(v) => v + n * 1000
+
+fn top(n: Int) -> Int
+= handle deep(n)
+  | tick(x) => resume(x)
+
+test nested_abort = top(3) == 3020
+test shallow = top(0) == 1
+
+// case if_in_interpolation
+fn shown(a: Int, b: Int) -> Str ! log
+= do
+  log("{if a > 0 then (if b > 0 then a else b) else 11} {"x"}")
+  "{if a > b then (if b > 0 then 1 else 2) else 3}"
+
+fn captured(a: Int, b: Int) -> Int
+= do
+  var n = 0
+  s = handle shown(a, b)
+    | log(m) => do
+      n := n + m.len
+      resume()
+  n + s.len
+
+test t = captured(1, 2) == 4 and shown(3, 1) == "1"
+
+// case local_fn_late_capture
+// Local functions in one block are emitted together. When a later function captured a variable declared after the first one, native code could not see it and the function fell back to the interpreter.
+
+fn later_var(a: Int) -> Int
+= do
+  var acc = a
+  fn g(k: Int) -> Int
+  = acc + k
+  var v = acc * 2
+  fn h(k: Int) -> Int
+  = do
+    v := v + k
+    v
+  h(1) + g(2) + h(3)
+
+fn later_let(a: Int) -> Int
+= do
+  fn g(k: Int) -> Int
+  = k + 1
+  x = a % 100
+  fn h(k: Int) -> Int
+  = x * k
+  g(h(3))
+
+fn shadowed(a: Int) -> Int
+= do
+  x = 1
+  fn g(k: Int) -> Int
+  = x + k
+  x = 5
+  fn h(k: Int) -> Int
+  = k * 2
+  g(0) * 10 + h(x)
+
+test captured = later_var(1) == 3 + 3 + 6 and later_let(4) == 13 and shadowed(0) == 20
+
+// case local_fn_res_reassign
+profile sys
+
+res type Rs = {id: Int, v: Int} drop rdrop
+
+fn rdrop(r: Rs) -> Unit ! log
+= log("drop {r.id} {r.v}")
+
+fn rmk(id: Int, v: Int) -> Rs
+= Rs{id: id, v: v}
+
+fn reassign_after_local_fn(a: Int) -> Int ! log
+= do
+  var r = rmk(82, a)
+  var acc = 0
+  for i in 0..a % 3
+    fn g(k: Int) -> Int
+    = acc + k
+    acc := g(i)
+  r := rmk(110, acc)
+  acc + a
+
+test value = reassign_after_local_fn(4) == 4
+
+// case nan_sign_order
+fn nan() -> F64
+= 0.0 / 0.0
+
+fn neg(x: F64) -> F64
+= -x
+
+fn order(x: F64) -> Str
+= "{neg(x) == x} {neg(x) < -1e308} {x > 1e308} {[x, 1.0, neg(x), -0.0, 0.0].sort} {min(neg(x), 2.0)} {max(neg(x), 2.0)}"
+
+fn keys(x: F64) -> Int
+= empty_map().put(x, 1).put(neg(x), 2).put(x * 0.0, 3).len
+
+test same_nan = order(nan()) == "true false true [-0.0, 0.0, 1.0, NaN, NaN] 2.0 NaN"
+test zeros = order(0.0) == "false false false [-0.0, -0.0, 0.0, 0.0, 1.0] -0.0 2.0"
+test nan_keys = keys(nan()) == 1
+
+// case native_handlers
+// interp-ok: asks, notes, nat_up and safe_gen perform operations, so their interpreter entry points stay interpreted
+type Oops = Oops{n: Int} | Meh
+
+effect ask(x: Int) -> Int
+effect note(s: Str)
+
+fn asks(n: Int) -> Int ! ask
+= ask(n) + ask(n + 1)
+
+fn notes(n: Int) -> Int ! note
+= do
+  note("a{n}")
+  note("b{n}")
+  n
+
+fn chatty(n: Int) -> Int ! log
+= do
+  log("chatty {n}")
+  n * 2
+
+fn abort_skips_return(n: Int) -> Int
+= handle asks(n) * 100
+  | ask(x) => if x > 3 then x else resume(x)
+  | return(v) => v + 1
+
+fn raise_escapes_body_catch(n: Int) -> Int ! fail[Oops]
+= handle do
+    r = catch asks(n)
+      | Oops{n} => n * 1000
+      | Meh => -1
+    r
+  | ask(x) => if x == 2 then raise Oops{n: x} else if x == 5 then raise Meh else resume(x)
+
+fn caught_outside(n: Int) -> Int
+= catch raise_escapes_body_catch(n)
+  | Oops{n} => -n
+  | Meh => -99
+
+fn after_resume(n: Int) -> (Int, List[Str])
+= do
+  var seen = []
+  r = handle notes(n) + notes(n + 1)
+    | note(s) => do
+      k = s.len
+      seen := seen.push("pre {s}")
+      r = resume()
+      seen := seen.push("post {s} {k} {r}")
+      r + k
+    | return(v) => v * 10
+  (r, seen)
+
+fn after_resume_abort(n: Int) -> (Int, List[Str])
+= do
+  var seen = []
+  r = handle do
+      note("x")
+      note("stop")
+      n
+    | note(s) => if s == "stop" then 7 else do
+      r = resume()
+      seen := seen.push("after {s} {r}")
+      r * 2
+  (r, seen)
+
+fn captured(n: Int) -> (Int, List[Str])
+= do
+  var lines = []
+  r = handle chatty(n) + [1, 2, 3].map(x => do
+        log("item {x}")
+        x).sum
+    | log(m) => do
+      lines := lines.push(m)
+      resume()
+  (r, lines)
+
+fn nested_logs(n: Int) -> (Int, List[Str], List[Str])
+= do
+  var outer = []
+  var inner = []
+  r = handle do
+      a = chatty(n)
+      b = handle chatty(a)
+        | log(m) => do
+          inner := inner.push(m)
+          log("relay {m}")
+          resume()
+      a + b
+    | log(m) => do
+      outer := outer.push(m)
+      resume()
+  (r, outer, inner)
+
+fn host_log(n: Int) -> Int ! log
+= chatty(n) + 1
+
+fn fold_asks(xs: List[Int]) -> Int
+= handle xs.fold(0, (acc, x) => acc + ask(x))
+  | ask(x) => resume(x * x)
+
+fn shadowed(n: Int) -> Int
+= do
+  x = 5
+  handle do
+      x = 100
+      ask(1) + x
+    | ask(_) => resume(x + n)
+
+fn shadow_mixed(n: Int) -> Int
+= do
+  x = 5
+  handle do
+      x = 100
+      ask(1) + x
+    | ask(_) => resume([1, 2].map(x => x * 10).sum + x + n)
+
+fn bound_lambda_only(n: Int) -> Int
+= handle [n, n + 1].map(x => x * 2).sum + asks(n)
+  | ask(q) => resume([q].map(x => x + 1).sum)
+
+fn nat_up() -> Unit ! yield[Int], div
+= do
+  var i = 0
+  while i < 50
+    yield(i)
+    i := i + 1
+
+fn safe_gen(xs: List[Int]) -> Unit ! yield[Int]
+= do
+  for x in xs
+    catch yield(x)
+      | Oops{n} => yield(n * 1000)
+      | Meh => yield(-1)
+
+fn gen_return(n: Int) -> Int ! div
+= do
+  for i in nat_up()
+    if i * i > n then return i
+  -1
+
+fn gen_raise(xs: List[Int]) -> Int ! fail[Oops]
+= do
+  var s = 0
+  for x in safe_gen(xs)
+    if x == 3 then raise Oops{n: x}
+    s := s + x
+  s
+
+fn gen_raise_caught(xs: List[Int]) -> Int
+= catch gen_raise(xs)
+  | Oops{n} => -n
+  | Meh => 0
+
+test abort_return = abort_skips_return(1) == 301 and abort_skips_return(5) == 5
+test resumed_return = abort_skips_return(0) == 101
+test escapes = caught_outside(1) == -2 and caught_outside(4) == -99 and caught_outside(10) == 21
+test post_order = after_resume(1) == (38, ["pre a1", "pre b1", "pre a2", "pre b2", "post b2 2 30", "post a2 2 32", "post b1 2 34", "post a1 2 36"])
+test post_abort = after_resume_abort(3) == (14, ["after x 7"])
+test logs = captured(4) == (14, ["chatty 4", "item 1", "item 2", "item 3"])
+test nested = nested_logs(2) == (12, ["chatty 2", "relay chatty 4"], ["chatty 4"])
+test host = host_log(3) == 7
+test folds = fold_asks([1, 2, 3]) == 14
+test shadow = shadowed(2) == 107 and shadow_mixed(2) == 137 and bound_lambda_only(3) == 23
+test early = gen_return(50) == 8 and gen_return(5000) == -1
+test gen_errors = gen_raise_caught([1, 2, 3, 4]) == -3 and gen_raise_caught([1, 2]) == 3
+
+// case negative_zero_receiver
+effect ask() -> Int
+
+fn width() -> Int
+= (-0.0).fmt(1).len
+
+fn shown() -> Str
+= "{(-0.0).fmt(2)} {(-0.0).str} {(-(0.0)).abs}"
+
+fn handled() -> Int
+= handle ask() + width()
+  | ask() => resume((-0.0).fmt(3).len)
+
+test w = width() == 4
+test s = shown() == "-0.00 -0.0 0.0"
+test h = handled() == 10
+
+// case o3_counted_utf8_loops
+profile sys
+// interp-ok: p131_eff and p135_eff perform an operation. Before the fix, clang -O3 fully unrolled the counted UTF-8 loop of Str.get(30) inside p131_main and spent minutes in scalar evolution
+type P131R = {a: Int, b: Int where _ != 0}
+type P131S = P131A{x: Int} | P131B{x: Int, y: Int} | P131C
+type P131T = P131Lf | P131Nd{l: P131T, v: Int, r: P131T}
+type P131E = P131Bad{c: Int} | P131Worse
+type P131G[T] = P131Nil | P131Cons{h: T, t: P131G[T]}
+type P131P[A, B] = {fst: A, snd: B}
+res type P131Rs = {id: Int, v: Int} drop p131_rdrop
+effect p131ask(x: Int) -> Int
+
+fn p131_ins(t: P131T, x: Int) -> P131T
+= match t
+  | P131Lf => P131Nd{l: P131Lf, v: x, r: P131Lf}
+  | P131Nd{l, v, r} => if x <= v then P131Nd{l: p131_ins(l, x), v: v, r: r} else P131Nd{l: l, v: v, r: p131_ins(r, x)}
+
+fn p131_inc(t: P131T, d: Int) -> P131T
+= match t
+  | P131Lf => P131Lf
+  | P131Nd{l, v, r} => P131Nd{l: p131_inc(l, d), v: v * d, r: p131_inc(r, d)}
+
+fn p131_tsum(t: P131T) -> Int
+= match t
+  | P131Lf => 0
+  | P131Nd{l, v, r} => p131_tsum(l) + v + p131_tsum(r)
+
+fn p131_items(t: P131T) -> List[Int]
+= match t
+  | P131Lf => []
+  | P131Nd{l, v, r} => p131_items(l) + [v] + p131_items(r)
+
+fn p131_build(xs: List[Int]) -> P131T
+= do
+  var t = P131Lf
+  for x in xs
+    t := p131_ins(t, x)
+  t
+
+fn p131_mkmap(xs: List[Int]) -> Map[Int, Int]
+= xs.fold(empty_map(), (m, x) => m.put(x % 7, m.get(x % 7).or(0) + x))
+
+fn p131_mkhm(xs: List[Int]) -> HashMap[Str, Int]
+= xs.fold(hash_map(), (m, x) => m.put("k{x % 5}", x))
+
+fn p131_gfrom[T](xs: List[T]) -> P131G[T]
+= xs.reverse.fold(P131Nil, (acc, x) => P131Cons{h: x, t: acc})
+
+fn p131_gto[T](g: P131G[T]) -> List[T]
+= match g
+  | P131Nil => []
+  | P131Cons{h, t} => [h] + p131_gto(t)
+
+fn p131_glen[T](g: P131G[T]) -> Int
+= match g
+  | P131Nil => 0
+  | P131Cons{t} => 1 + p131_glen(t)
+
+fn p131_gmap[A, B](g: P131G[A], f: A -> B) -> P131G[B]
+= match g
+  | P131Nil => P131Nil
+  | P131Cons{h, t} => P131Cons{h: f(h), t: p131_gmap(t, f)}
+
+fn p131_gnth[T](g: P131G[T], k: Int, d: T) -> T
+= match g
+  | P131Nil => d
+  | P131Cons{h, t} => if k <= 0 then h else p131_gnth(t, k - 1, d)
+
+fn p131_swap[A, B](q: P131P[A, B]) -> P131P[B, A]
+= P131P{fst: q.snd, snd: q.fst}
+
+fn p131_pick[T](b: Bool, x: T, y: T) -> T
+= if b then x else y
+
+fn p131_gapp[A, e](x: A, f: A -> A ! e) -> A ! e
+= f(f(x))
+
+fn p131_lg(a: Int) -> Int ! log
+= do
+  log("lg {a}")
+  a * 2 + 1
+
+fn p131_fl(x: F64, k: Int) -> F64
+= if k <= 0 then x else p131_fl(x - x * 0.25, k - 1)
+
+fn p131_rdrop(r: P131Rs) -> Unit ! log
+= log("drop {r.id} {r.v}")
+
+fn p131_rmk(id: Int, v: Int) -> P131Rs
+= P131Rs{id: id, v: v}
+
+fn p131_rbump(r: &mut P131Rs, d: Int)
+= do
+  r.v := r.v + d
+  ()
+
+fn p131_rget(r: &P131Rs) -> Int
+= r.v * 2 + r.id
+
+fn p131_rtake(r: P131Rs) -> Int ! log
+= r.v + r.id
+
+fn p131_risky(a: Int) -> Int ! fail[P131E]
+= if a % 5 == 0 then raise P131Bad{c: a} else if a % 5 == 1 then raise P131Worse else 538.abs
+
+fn p131_eff(a: Int) -> Int ! p131ask
+= p131ask(a) + p131ask(a)
+
+fn p131_rec1(n: Int, acc: Int) -> Int
+= if n == 0 then [2].index_of(n).or(-1) else p131_rec1(n / 2, [3].max.or(0).wrapping_mul((-(n))))
+
+fn p131_tr3(t: P131T, k: Int) -> P131T
+= match t
+  | P131Lf => P131Lf
+  | P131Nd{l, v, r} => P131Nd{l: p131_tr3(l, k), v: v, r: p131_tr3(r, k)}
+
+fn p131_f4(a: Int, b: Int, c: List[Int]) -> Int ! div, fail[P131E], log
+= do
+  x5 = p131_glen(p131_gmap(p131_gfrom(["日本".split(",").join("-").upper, "b"]), x => x.len))
+  var r6 = p131_rmk(74, 29)
+  var v7 = p131_ins(p131_ins(P131Lf, x5), 9)
+  for i8 in 0..c.len
+    x9 = P131R{a: p131_risky(p131_tsum(v7)), b: 6}
+    var c10 = 0
+    while c10 < 2
+      if (p131_mkmap(c).remove(x5) == p131_mkmap([(-1909), a])) then v7 := p131_ins(v7, c.concat(c).fold(0, (s, x) => s + x * 2))
+      if c.to_set.has((-755)) then return p131_lg(b)
+      c10 := c10 + 1
+  if (not (not (x5 < x5))) then v7 := p131_inc(v7, "zz9".upper.chars.len)
+  v7 := p131_ins(v7, a)
+  p131_risky(b)
+
+fn p131_f11(a: Int) -> Int ! fail[P131E]
+= do
+  m12 = match p131_inc(p131_inc(P131Lf, a), a)
+    | P131Lf => p131_mkhm([(-2147483648), 14]).len
+    | P131Nd{l: q13, v: q14, r: q15} => p131_pick((a < a), [(-1234), a, q14, 19, a][q14], range(2, 2, 1).filter(e16 => e16 == q14).filter(e17 => e17 % 2 != q14).sum)
+  m18 = match range(3, 0, -1).map(e19 => (p131_glen(p131_gmap(p131_gfrom(["42", "b"]), x => x.len)) + e19)).first
+    | some(q20) => p131_risky(p131_glen(p131_gfrom([m12, a, m12, 0])))
+    | none => (-10).abs
+  x21 = p131_mkmap([(-9223372036854775807 - 1)]).keys.push(m12)
+  m22 = match p131_tr3(P131Lf, m12)
+    | P131Lf => a
+    | P131Nd{l: q23, v: q24, r: q25} => (p131_gto(p131_gmap(p131_gfrom(x21), e26 => e26 * m12)).sum + ((-1) + 19))
+  var acc27 = 0
+  for i28 in 0..a % 8
+    for i29 in range(-3, -2, 1)
+      if (p131_mkhm(x21).len <= 4294967296) then acc27 := [i29, m12, m18, m22, 30].flat_map(x => [x, x + 1]).chunks(acc27 % 4 + 1).len
+    f31 = y32 => y32 - i28
+    x33 = x21.reverse.to_set.add(i28)
+  P131C.str.len
+
+fn p131_f34(a: Int) -> List[Int] ! log
+= do
+  var acc35 = 0
+  for i36 in 0..acc35 % 8
+    var r37 = p131_rmk(74, 17)
+  for i38 in 0..7
+    fn g39(k40: Int) -> Int
+    = do
+      acc35 := (-7)
+      acc35
+  x44 = p131_gto(p131_gmap(p131_gfrom([a, 12, 27, 21, 5]), e41 => e41 * acc35)).sort_by(e42 => p131_glen(p131_gmap(p131_gfrom(["é", "b"]), x => x.len))).sort_by(e43 => e43 + a).first.or(0)
+  var v45 = P131R{a: acc35, b: (-4)}.b
+  [(-3), v45, 1420, (-8)]
+
+fn p131_f46(a: List[Int], b: Str) -> Str
+= p131_pick((15 < (-3)), [(-0.0), (-0.0)].fold(0.5, (s, x) => s * 0.5 + x), 0.5).fmt(3)
+
+fn p131_f47(a: P131S, b: Int where _ > 0) -> Map[Int, Int]
+  pre b >= 0
+= do
+  var acc48 = 0
+  for i49 in 0..acc48 % 8
+    var v50 = acc48
+  if " x y ".contains("é") then do
+    var v51 = (if (0.5 < 1e16) then [123456789.125, 1e16, 0.25].sum else (if (15 < b) then 7.0 else 1e-300))
+  else do
+    acc48 := acc48 * p131_mkmap([acc48]).get((-3037000500)).or(0)
+  p131_mkmap([acc48, 4, (-280), acc48, acc48]).put(p131_gto(p131_gmap(p131_gfrom([b, (-1131)]), e52 => e52 % b)).sum, max(acc48, acc48)).remove((4 + range(4, 14, 1).filter(e53 => e53 < acc48).filter(e54 => "zz9".starts_with("a")).sum))
+
+fn p131_main() -> Str ! fail[P131E]
+= do
+  var acc55 = 0
+  for i56 in 0..acc55 % 8
+    x57 = p131_build([i56].unique)
+    for i58 in 0..0
+      var v59 = ((P131R{a: i58, b: 828} with a := i58) with a := p131_f11(i56))
+  (pa60, pa61, pa62) = par([(-1), 1].to_set.union([(-749), 19, 4, (-726)].to_set).items.sum, p131_mkhm([8, (-3), (-8), (-5)]).put("zz9", (-6)).get("a,b,c").or(5), (if (1e16 == 0.0) then p131_pick((27 < 19), 1e300, 7.0) else p131_gnth(p131_gfrom([1e-300, 1e16]), 5, 9.5)))
+  if p131_items(P131Lf).any(e63 => e63 % 2 == pa60) then acc55 := p131_glen(p131_gmap(p131_gfrom(["42", "b"]), x => x.len))
+  p131_f46([pa61, 30, 29, pa61, (-11)], "ab").get(30).or("?").take(4)
+
+
+type P135R = {a: Int, b: Int where _ > -100}
+type P135S = P135A{x: Int} | P135B{x: Int, y: Int} | P135C
+type P135T = P135Lf | P135Nd{l: P135T, v: Int, r: P135T}
+type P135E = P135Bad{c: Int} | P135Worse
+type P135G[T] = P135Nil | P135Cons{h: T, t: P135G[T]}
+type P135P[A, B] = {fst: A, snd: B}
+effect p135ask(x: Int) -> Int
+
+fn p135_ins(t: P135T, x: Int) -> P135T
+= match t
+  | P135Lf => P135Nd{l: P135Lf, v: x, r: P135Lf}
+  | P135Nd{l, v, r} => if x > v then P135Nd{l: p135_ins(l, x), v: v, r: r} else P135Nd{l: l, v: v, r: p135_ins(r, x)}
+
+fn p135_inc(t: P135T, d: Int) -> P135T
+= match t
+  | P135Lf => P135Lf
+  | P135Nd{l, v, r} => P135Nd{l: p135_inc(l, d), v: v + d, r: p135_inc(r, d)}
+
+fn p135_tsum(t: P135T) -> Int
+= match t
+  | P135Lf => 0
+  | P135Nd{l, v, r} => p135_tsum(l) + v + p135_tsum(r)
+
+fn p135_items(t: P135T) -> List[Int]
+= match t
+  | P135Lf => []
+  | P135Nd{l, v, r} => p135_items(l) + [v] + p135_items(r)
+
+fn p135_build(xs: List[Int]) -> P135T
+= do
+  var t = P135Lf
+  for x in xs
+    t := p135_ins(t, x)
+  t
+
+fn p135_mkmap(xs: List[Int]) -> Map[Int, Int]
+= xs.fold(empty_map(), (m, x) => m.put(x / 3, m.get(x / 3).or(0) + x))
+
+fn p135_mkhm(xs: List[Int]) -> HashMap[Str, Int]
+= xs.fold(hash_map(), (m, x) => m.put("k{x % 5}", x))
+
+fn p135_gfrom[T](xs: List[T]) -> P135G[T]
+= xs.reverse.fold(P135Nil, (acc, x) => P135Cons{h: x, t: acc})
+
+fn p135_gto[T](g: P135G[T]) -> List[T]
+= match g
+  | P135Nil => []
+  | P135Cons{h, t} => [h] + p135_gto(t)
+
+fn p135_glen[T](g: P135G[T]) -> Int
+= match g
+  | P135Nil => 0
+  | P135Cons{t} => 1 + p135_glen(t)
+
+fn p135_gmap[A, B](g: P135G[A], f: A -> B) -> P135G[B]
+= match g
+  | P135Nil => P135Nil
+  | P135Cons{h, t} => P135Cons{h: f(h), t: p135_gmap(t, f)}
+
+fn p135_gnth[T](g: P135G[T], k: Int, d: T) -> T
+= match g
+  | P135Nil => d
+  | P135Cons{h, t} => if k <= 0 then h else p135_gnth(t, k - 1, d)
+
+fn p135_swap[A, B](q: P135P[A, B]) -> P135P[B, A]
+= P135P{fst: q.snd, snd: q.fst}
+
+fn p135_pick[T](b: Bool, x: T, y: T) -> T
+= if b then x else y
+
+fn p135_gapp[A, e](x: A, f: A -> A ! e) -> A ! e
+= f(f(x))
+
+fn p135_lg(a: Int) -> Int ! log
+= do
+  log("lg {a}")
+  a * 2 + 1
+
+fn p135_fl(x: F64, k: Int) -> F64
+= if k <= 0 then x else p135_fl(x * x - 2.0, k - 1)
+
+fn p135_risky(a: Int) -> Int ! fail[P135E]
+= if a % 5 == 0 then raise P135Bad{c: a} else if a % 8 == 1 then raise P135Worse else p135_gapp(p135_mkhm([a, a, a, a, 23]).len, e1 => e1 + (-39))
+
+fn p135_eff(a: Int) -> Int ! p135ask
+= p135ask(a) * p135ask((24 * a))
+
+fn p135_rec2(n: Int, acc: Int) -> Int
+  post r != 7
+= if n == 0 then p135_tsum(P135Lf) else p135_rec2(n - 2, n)
+
+fn p135_f3(a: Int, b: Int where _ < 1000, c: Int) -> Int
+  post r != 0
+= do
+  m4 = catch p135_risky(p135_gapp(c, e5 => e5 - b)) + c
+    | P135Bad{c: q6} => range(25, -3, -3).map(e7 => P135B{x: 2, y: q6}.str.len).len
+    | P135Worse => P135R{a: a, b: (-2)}.a
+  var v8 = p135_mkmap([m4, c]).keys.filter(e9 => e9 >= a).map(e10 => [(-687), 9223372036854775806, c][m4].checked_mul(c).or(-9)).len
+  c = b
+  if (p135_rec2(m4, (-9223372036854775807 - 1)) <= m4) then do
+    fn g11(k12: Int) -> Int
+    = do
+      v8 := p135_mkhm([414, 9, c, b, v8]).get("").or(5)
+      v8
+  else do
+    x13 = p135_mkhm([129, a]).put("é", p135_pick((18 < m4), a, 28)).put("Hello", c)
+  var v14 = p135_build([v8, c, a, 27, m4])
+  ((if (b > c) then a else c) - p135_gto(p135_gmap(p135_gfrom([c, 1936]), e15 => e15 * c)).sum)
+
+fn p135_f16(a: List[Int]) -> List[Int] ! div
+= do
+  (pa17, pa18, pa19) = par((-(3037000500.band((-914)))), p135_swap(P135P{fst: "zz9", snd: (-2)}).fst.to_f64, range(3, 1, 2))
+  pa19 = pa18
+  var v20 = p135_build(a)
+  m21 = handle p135_eff(p135_gto(p135_gmap(p135_gfrom(p135_pick(((-3) < 8), a, [pa17, pa17])), e22 => e22 * 4)).sum) + (if ((-4) < 28) then 23 else pa17)
+    | p135ask(q23) => q23
+  var v24 = "é"
+  var c25 = 0
+  while c25 < 4
+    if (v24 + v24).starts_with(v24) then do
+      f26 = y27 => y27 - c25
+    else do
+      (pa29, pa30, pa31) = par(p135_mkmap([m21, pa17]).remove(pa17).len, "Hello".words.join("_").upper, a.map(e28 => 8))
+    c25 := c25 + 1
+  a.push("é".replace("a", "xy").index_of("a").or(-1))
+
+fn p135_f32(a: Str) -> Map[Int, Int]
+= do
+  x33 = p135_mkmap([15, (-485), 18, 2, (-5)]).put(0, (13 - 15)).put(p135_glen(p135_gmap(p135_gfrom([3037000499, (-11), 20, 3037000500]), x => x.to_f64 * 1.5)), (if ((-1886) < 21) then (-3.25) else 2.0).fmt(2).len)
+  var acc34 = 0
+  for i35 in 0..acc34 % 8
+    (pa37, pa38) = par((P135R{a: i35, b: i35}.a / (-4)), [8].unique.sort.filter(e36 => (p135_pick((i35 < e36), 1e300, (-3.25)) > p135_pick((e36 < e36), 0.3, 7.0))))
+    acc34 := p135_rec2(pa37, pa37)
+    var v39 = P135R{a: 1.5.round, b: i35}
+  var v40 = acc34
+  f41 = y42 => y42 * acc34
+  p135_mkmap([9, acc34, acc34, v40, acc34])
+
+fn p135_main() -> Str ! fail[P135E], log
+= do
+  m43 = match p135_build(p135_pick((26 < 265), [573, 1564], [(-345)]))
+    | P135Lf => 2147483647
+    | P135Nd{l: q44, v: q45, r: q46} => [21, 6].to_set.items.get(min(q45, q45)).or(-1)
+  var acc47 = 0
+  for i48 in 0..m43 % 8
+    acc47 := p135_gapp(p135_risky(m43), e49 => i48)
+    m50 = match p135_build([acc47, acc47, m43])
+      | P135Lf => clamp(acc47, m43, 12)
+      | P135Nd{l: q51, v: q52, r: q53} => p135_glen(p135_gmap(p135_gfrom(p135_pick((q52 < (-535)), [m43, q52, (-1988), q52, q52], [30, acc47])), x => x.to_f64 * 1.5))
+  var v54 = p135_lg(m43)
+  (pa58, pa59, pa60) = par(p135_glen(p135_gmap(p135_gfrom([m43, m43, m43, m43].filter(e55 => [m43, (-7), 4611686018427387904, m43].push(e55).any(e56 => e56 >= (-2147483648)))), x => x.to_f64 * 1.5)), [m43, m43, m43, m43, (-2147483648)].map(e57 => [0].max.or(0)).unique, (1110 / clamp(m43, m43, 4611686018427387904)))
+  var v61 = range(-2, 14, -2)
+  v61 := p135_mkmap([acc47]).values.filter(e62 => v61.rotate(e62).any(e63 => "".replace("a", "xy").contains("é")))
+  p135_mkhm(v61).str.replace("a", "xy").words.join("_")
+
+test builds = p131_glen(p131_gfrom([1, 2])) == 2
+
+// case range_step_collect
+// A fused map or filter over range(a, b, step) that builds a list declared the step and the output counter with the same C name, so the whole program failed to compile natively.
+
+fn evens(n: Int) -> List[Int]
+= range(-2, n % 50, 1).filter(x => x % 2 == 0)
+
+fn down(n: Int) -> List[Int]
+= range(n % 40, 0, -3).map(x => x * 2)
+
+fn both(n: Int) -> List[Int]
+= range(0, n % 30, 2).filter(x => x > 3).map(x => x - 1)
+
+test stepped = evens(7) == [-2, 0, 2, 4, 6] and down(10) == [20, 14, 8, 2] and both(12) == [3, 5, 7, 9]
+
+// case return_statement_native
+// A return statement before more statements left its type unresolved, so the function fell back to the interpreter.
+// The optimizer produced the same shape by folding `if c then return x` under a proven condition.
+
+fn early(a: Int where _ > 0, b: Int) -> Int
+= do
+  if a >= -1 then return 1793
+  b
+
+fn plain(a: Int, b: Int) -> Int
+= do
+  return a
+  b
+
+fn folded(a: Int, b: Int) -> Int
+= do
+  if true then return a * 2
+  b
+
+test early_returns = early(3, 4) == 1793 and plain(1, 2) == 1 and folded(4, 0) == 8
+
+// case scalar_native_log
+// Log lines from a native call whose arguments were all scalars bypassed the interpreter output buffer, so tests and the differential fuzzer saw no output.
+
+fn noisy(a: Int, b: Bool) -> Int ! log
+= do
+  log("a={a}")
+  if b then log("b")
+  a % 7
+
+test quiet = noisy(3, true) == 3
+
+// case shadow_outer_capture
+fn f(b: Int) -> Int
+= do
+  g = y => y - b
+  b = 1
+  g(0)
+
+fn h(b: Int) -> Int
+= do
+  fn k(y: Int) -> Int
+  = y - b
+  b = 1
+  k(0)
+
+fn outer(b: Int) -> Int
+= do
+  x = b * 2
+  r = do
+    g = y => y + x
+    x = 100
+    g(1)
+  r + x
+
+test t1 = f(10) == -10
+test t2 = h(10) == -10
+test t3 = outer(1) == 5
+
+// case shadowed_capture
+// A binding that shadows an earlier one in the same block replaced the variable in place in the interpreter, so closures and local functions created before it saw the new value (or a value of another type).
+// Native code captured lexically.
+
+fn lam(a: Int) -> Int
+= do
+  x = a
+  f = k => x + k
+  x = a * 10
+  f(1) + x
+
+fn retyped(a: Int) -> Int
+= do
+  x = a
+  f = k => x + k
+  x = "s"
+  f(0) + x.len
+
+fn local(a: Int) -> Int
+= do
+  x = 1
+  fn g(k: Int) -> Int
+  = x + k
+  x = 5
+  fn h(k: Int) -> Int
+  = g(k) * 2
+  h(0) * 10 + x
+
+fn still_shared(a: Int) -> Int
+= do
+  var x = a
+  f = k => x + k
+  x := x + 1
+  f(0)
+
+test lexical = lam(2) == 23 and retyped(4) == 5 and local(0) == 25 and still_shared(3) == 4
+
+// case soundness_checks
+// Adversarial cases for check elimination: every removed check must be one that cannot fail.
+type T = Lf | Nd{l: T, v: Int, r: T}
+type P = {a: Int, b: Int where _ > 0}
+
+fn below_max(a: Int where _ < 9223372036854775807) -> Int
+= a + 1
+
+fn at_max(a: Int where _ <= 9223372036854775807) -> Int
+= a + 1
+
+fn neg_min(a: Int where _ <= 0) -> Int
+= -a
+
+fn shadow_param(n: Int where _ >= 0) -> Int
+= do
+  n = n - 10
+  100 / (n + 10)
+
+fn shadow_list(xs: List[Int]) -> Int
+= do
+  var s = 0
+  for i in 0..xs.len
+    xs = xs.drop(1)
+    s := s + xs[i]
+  s
+
+fn mutate_list(xs: List[Int]) -> Int
+= do
+  var ys = xs
+  var s = 0
+  for i in 0..ys.len
+    ys := ys.take(1)
+    s := s + ys[i]
+  s
+
+fn len_then_shadow(xs: List[Int]) -> Int
+= do
+  n = xs.len
+  xs = [1]
+  if n > 0 then xs[n - 1] else 0
+
+fn table_shadow(i: Int) -> Int
+= do
+  words = [1, 2, 3, 4, 5, 6, 7, 8]
+  words = words.take(2)
+  words[(i * 7) % 8]
+
+fn var_after_check(xs: List[Int], k: Int) -> Int
+= do
+  var i = 0
+  if i < xs.len then do
+    i := i + k
+    xs[i]
+  else 0
+
+fn closure_moves_index(xs: List[Int]) -> Int
+= do
+  var i = 0
+  fn bump(k: Int) -> Int
+  = do
+    i := i + k
+    k
+  if i >= 0 and i < xs.len and bump(100) > 0 then xs[i] else -1
+
+fn cond_can_trap(a: Int) -> Int
+= if a + 1 > a then 1 else 2
+
+fn cond_div(a: Int where _ >= 0) -> Int
+= if 10 / a >= 0 then 1 else 2
+
+fn odd_tail(n: Int where _ >= 0) -> Int
+= if n == 0 then 0 else odd_tail(n - 2)
+
+fn width(lo: Int, hi: Int) -> Int
+  pre lo <= hi
+= hi - lo
+
+fn swapped(a: Int, b: Int) -> Int
+= if a < b then width(b, a) else 0
+
+fn clamp_post(x: Int, lo: Int, hi: Int) -> Int
+  pre lo <= hi
+  post r >= lo and r <= hi
+= do
+  r = catch pick(x, lo, hi)
+    | Low => lo - 1
+  r
+
+type E = Low
+
+fn pick(x: Int, lo: Int, hi: Int) -> Int ! fail[E]
+= if x < lo then raise Low else min(x, hi)
+
+fn record_with(p: P, d: Int) -> Int
+= (p with b := p.b - d).b
+
+fn sum_vs_div(xs: List[Int]) -> Int
+= xs.map(x => 100 / x).sum
+
+fn mul_then_sum(xs: List[Int]) -> Int
+= xs.map(x => x * 4611686018427387904).filter(y => y != 1).sum
+
+fn div_then_index(xs: List[Int]) -> Int
+= xs.map(x => 10 / x).map(y => [1, 2, 3][y]).sum
+
+fn ins(t: T, x: Int) -> T
+= match t
+  | Lf => Nd{l: Lf, v: x, r: Lf}
+  | Nd{l, v, r} => if x < v then Nd{l: ins(l, x), v: v, r: r} else Nd{l: l, v: v, r: ins(r, x)}
+
+fn dup(t: T) -> T
+= match t
+  | Lf => Lf
+  | Nd{l, v, r} => Nd{l: dup(l), v: v + 1, r: l}
+
+fn tsum(t: T) -> Int
+= match t
+  | Lf => 0
+  | Nd{l, v, r} => tsum(l) + v + tsum(r)
+
+fn build(xs: List[Int]) -> T
+= do
+  var t = Lf
+  for x in xs
+    t := ins(t, x)
+  t
+
+fn alias_owned(xs: List[Int]) -> Int
+= do
+  var t = build(xs)
+  u = t
+  t := dup(t)
+  t := ins(t, 5)
+  tsum(u) * 1000 + tsum(t)
+
+fn alias_list(xs: List[Int]) -> Int
+= do
+  var ps = xs.map(x => x + 1)
+  qs = ps
+  ps := ps.map(x => x * 2)
+  qs.sum * 1000 + ps.sum
+
+fn overflow_in_place(xs: List[Int], d: Int) -> Int
+= do
+  var t = build(xs)
+  t := inc(t, d)
+  tsum(t)
+
+fn inc(t: T, d: Int) -> T
+= match t
+  | Lf => Lf
+  | Nd{l, v, r} => Nd{l: inc(l, d), v: v * d, r: inc(r, d)}
+
+test boundaries = below_max(1) == 2 and neg_min(-5) == 5 and shadow_param(20) == 5
+test contracts = swapped(5, 1) == 0 and width(1, 4) == 3
+
+fn probe_at_max() -> Int
+= at_max(9223372036854775807)
+
+fn probe_shadow_param() -> Int
+= shadow_param(0)
+
+fn probe_shadow_list() -> Int
+= shadow_list([1, 2, 3, 4])
+
+fn probe_mutate_list() -> Int
+= mutate_list([1, 2, 3])
+
+fn probe_len_shadow() -> Int
+= len_then_shadow([4, 5, 6])
+
+fn probe_table() -> Int
+= table_shadow(1)
+
+fn probe_var_after() -> Int
+= var_after_check([1, 2], 1) + var_after_check([1, 2], 2)
+
+fn probe_closure_index() -> Int
+= closure_moves_index([1, 2, 3])
+
+fn probe_cond_trap() -> Int
+= cond_can_trap(9223372036854775807)
+
+fn probe_cond_div() -> Int
+= cond_div(0)
+
+fn probe_odd_tail() -> Int
+= odd_tail(7)
+
+fn probe_swapped() -> Int
+= swapped(1, 5)
+
+fn probe_wide() -> Int
+= width(-9223372036854775807, 9223372036854775807)
+
+fn probe_clamp() -> Int
+= clamp_post(-5, 0, 10)
+
+fn probe_record() -> Int
+= record_with(P{a: 1, b: 3}, 3)
+
+fn probe_sum_div() -> Int
+= sum_vs_div([1, 9223372036854775807, 0])
+
+fn probe_sum_div2() -> Int
+= sum_vs_div([0, 1])
+
+fn probe_mul_sum() -> Int
+= mul_then_sum([1, 2])
+
+fn probe_div_index() -> Int
+= div_then_index([5, 0])
+
+fn probe_alias() -> Int
+= alias_owned([5, 3, 8, 1])
+
+fn probe_alias_list() -> Int
+= alias_list([1, 2, 3])
+
+fn probe_inplace_overflow() -> Int
+= overflow_in_place([5, 3, 4611686018427387904, 1], 2)
+
+fn big_div_sum(xs: List[Int]) -> Int
+= xs.map(x => 9223372036854775807 / x).sum
+
+fn probe_big_div_sum() -> Int
+= big_div_sum([1, 1, 0])
+
+fn big_div_len(xs: List[Int]) -> Int
+= xs.map(x => 9223372036854775807 / x).filter(y => y * 2 > 0).len
+
+fn probe_big_div_len() -> Int
+= big_div_len([1, 0])
+
+fn range_div_sum(n: Int) -> Int
+= (0..n % 5).map(i => 9223372036854775807 / (2 - i)).sum
+
+fn probe_range_div_sum() -> Int
+= range_div_sum(4)
+
+// case soundness_rewrites
+// Proven rewrites must keep the value, the raised error and the exact trap: unused or reordered arguments, composed maps and fused loops.
+type P = {a: Int, b: Int where _ > 0}
+
+fn first(a: Int, b: Int) -> Int
+= a
+
+fn flip(a: Int, b: Int) -> Int
+= b - a
+
+fn twice(a: Int) -> Int
+= a + a
+
+fn drops_arg(x: Int) -> Int
+= first(1, 10 / x)
+
+fn reorders(x: Int, y: Int) -> Int
+= flip(10 / x, 9223372036854775807 + y)
+
+fn dup_arg(x: Int) -> Int
+= twice(100 / x)
+
+fn ctor_map(xs: List[Int]) -> Int
+= xs.map(x => P{a: 1, b: x}).map(p => p.b).sum
+
+fn mm(xs: List[Int]) -> List[Int]
+= xs.map(x => 10 / x).map(y => 4611686018427387904 * y)
+
+fn mm_idx(xs: List[Int]) -> List[Int]
+= xs.map(x => [1, 2, 3][x]).map(y => 10 / (y - 2))
+
+fn fused_len(xs: List[Int]) -> Int
+= xs.map(x => P{a: x, b: x}.b).filter(y => y > 1).len
+
+fn fused_mixed(n: Int) -> Int
+= (0..n % 10).map(i => 10 / (i - 3)).map(j => j * 4611686018427387904).sum
+
+fn make(n: Int) -> List[Int]
+= (0..n % 8).map(i => 100 / (i - 2))
+
+fn uses_make(n: Int) -> Int
+= make(n).map(x => x * 3).sum
+
+fn fold_dead(x: Int) -> Int
+= if 2 > 3 then 10 / 0 else x
+
+fn fold_live(x: Int) -> Int
+= x * 1 + 0 + (if true then 10 / x else 0)
+
+fn probe_drops() -> Int
+= drops_arg(0)
+
+fn probe_reorders() -> Int
+= reorders(0, 1)
+
+fn probe_dup() -> Int
+= dup_arg(0)
+
+fn probe_ctor_map() -> Int
+= ctor_map([3, -1, 0])
+
+fn probe_mm() -> List[Int]
+= mm([1, 3, 0])
+
+fn probe_mm_idx() -> List[Int]
+= mm_idx([2, 1, 7])
+
+fn probe_fused_len() -> Int
+= fused_len([2, 0, -3])
+
+fn probe_fused_mixed() -> Int
+= fused_mixed(5)
+
+fn probe_uses_make() -> Int
+= uses_make(5)
+
+fn probe_fold_live() -> Int
+= fold_live(0)
+
+fn probe_ctor_sum() -> Int
+= ctor_map([9223372036854775807, 1, 0])
+
+fn probe_ctor_sum2() -> Int
+= ctor_map([9223372036854775807, 1, 2, -5])
+
+// case soundness_shadow_facts
+// Facts about a name must not survive a new binding of the same name: match arms, loop variables, lambdas, catch arms and nested lets.
+type S = A{x: Int} | B
+type E = Bad{c: Int}
+
+fn by_match(a: Int where _ > 0, s: S) -> Int
+= match s
+  | A{x: a} => 100 / a
+  | B => 100 / a
+
+fn by_for(a: Int where _ > 0, xs: List[Int]) -> Int
+= do
+  var t = 0
+  for a in xs
+    t := t + 100 / a
+  t + 100 / a
+
+fn by_lambda(a: Int where _ > 0, xs: List[Int]) -> Int
+= xs.map(a => 100 / a).sum
+
+fn by_catch(a: Int where _ > 0) -> Int
+= catch risky(a)
+  | Bad{c: a} => 100 / a
+
+fn risky(a: Int) -> Int ! fail[E]
+= if a > 3 then raise Bad{c: a - 4} else a
+
+fn nested_let(a: Int where _ > 0) -> Int
+= do
+  b = a
+  if a > 5 then do
+    b = 0 - b
+    if b > 0 then 1 else 100 / (b + 6)
+  else 3
+
+fn nested_dead(a: Int where _ > 0) -> Int
+= do
+  b = a
+  r = if a > 5 then do
+      b = 5 - b
+      if b > 0 then 1 else 2
+    else 3
+  r
+
+fn tuple_let(a: Int where _ > 0, p: (Int, Int)) -> Int
+= do
+  (a, c) = p
+  100 / a + c
+
+fn idx_match(xs: List[Int], s: S) -> Int
+= do
+  var t = 0
+  for i in 0..xs.len
+    t := t + (match s
+      | A{x: i} => xs[i]
+      | B => xs[i])
+  t
+
+fn local_fn_param(a: Int where _ > 0) -> Int
+= do
+  fn g(a: Int) -> Int
+  = 100 / a
+  g(a - 1)
+
+fn probe_match() -> Int
+= by_match(5, A{x: 0})
+
+fn probe_for() -> Int
+= by_for(5, [1, 0])
+
+fn probe_lambda() -> Int
+= by_lambda(5, [0])
+
+fn probe_catch() -> Int
+= by_catch(4)
+
+fn probe_nested() -> Int
+= nested_let(6)
+
+fn probe_dead() -> Int
+= nested_dead(10)
+
+fn probe_tuple() -> Int
+= tuple_let(3, (0, 1))
+
+fn probe_idx() -> Int
+= idx_match([1, 2], A{x: 7})
+
+fn probe_local() -> Int
+= local_fn_param(1)
+
+test shadow_facts = nested_dead(10) == 2 and nested_dead(6) == 2 and nested_dead(1) == 3
+
+// case soundness_smt
+// Adversarial cases for SMT check removal: facts after raise or return must only hold on paths that really exited.
+type E = Bad{c: Int}
+
+fn raise_in_loop(xs: List[Int], k: Int, n: Int) -> Int ! fail[E]
+= do
+  for i in 0..n
+    if k < 0 or k >= xs.len then raise Bad{c: i}
+  xs[k]
+
+fn return_in_loop(xs: List[Int], k: Int, n: Int) -> Int
+= do
+  for i in 0..n
+    if k < 0 or k >= xs.len then return -1
+  xs[k]
+
+fn return_in_while(xs: List[Int], k: Int, n: Int) -> Int ! div
+= do
+  var c = 0
+  while c < n
+    if k < 0 or k >= xs.len then return -1
+    c := c + 1
+  xs[k]
+
+fn caught(xs: List[Int], k: Int) -> Int
+= do
+  r = catch (if k < 0 or k >= xs.len then raise Bad{c: 0} else 1)
+    | Bad{c} => c
+  xs[k] + r
+
+fn mutated(xs: List[Int], k: Int) -> Int
+= do
+  var j = k
+  if j < 0 or j >= xs.len then return -1
+  j := j + 1
+  xs[j]
+
+fn in_local(xs: List[Int], k: Int) -> Int ! fail[E]
+= do
+  fn check(z: Int) -> Int ! fail[E]
+  = if k < 0 or k >= xs.len then raise Bad{c: z} else z
+  if xs.len > 100 then check(1) else 0
+  xs[k]
+
+fn inner_block_return(xs: List[Int], k: Int, b: Bool) -> Int
+= do
+  x = if b then do
+      if k < 0 or k >= xs.len then return -1
+      1
+    else 2
+  xs[k] + x
+
+fn overflow_after(a: Int, b: Int, n: Int) -> Int
+= do
+  for i in 0..n
+    if a > 1000 or b > 1000 then return 0
+  a * b
+
+fn rel_pre(lo: Int, hi: Int, xs: List[Int]) -> Int
+  pre lo <= hi and hi <= xs.len
+= do
+  var s = 0
+  for i in lo..hi
+    s := s + xs[i - lo]
+  s
+
+fn rel_pre_wrong(lo: Int, hi: Int, xs: List[Int]) -> Int
+  pre lo <= hi and hi <= xs.len
+= do
+  var s = 0
+  for i in lo..hi
+    s := s + xs[i]
+  s
+
+fn post_after_loop(xs: List[Int], n: Int) -> Int
+  post r >= 0
+= do
+  for i in 0..n
+    if xs.len > 5 then return 1
+  0 - xs.len
+
+fn probe_raise_loop() -> Int
+= catch raise_in_loop([1, 2], 5, 0)
+  | Bad{c} => -100
+
+fn probe_return_loop() -> Int
+= return_in_loop([1, 2], 5, 0)
+
+fn probe_return_while() -> Int ! div
+= return_in_while([1, 2], -1, 0)
+
+fn probe_caught() -> Int
+= caught([1, 2], 9)
+
+fn probe_mutated() -> Int
+= mutated([1, 2], 1)
+
+fn probe_local() -> Int
+= catch in_local([1, 2], 7)
+  | Bad{c} => -100
+
+fn probe_inner() -> Int
+= inner_block_return([1], 3, false)
+
+fn probe_overflow() -> Int
+= overflow_after(4294967296, 4294967296, 0)
+
+fn probe_rel_wrong() -> Int
+= rel_pre_wrong(1, 2, [1, 2])
+
+fn probe_post_loop() -> Int
+= post_after_loop([1, 2], 0)
+
+// case soundness_var_invariants
+// Var invariants and the +1 counter rule must see assignments made by local functions.
+
+fn counter_doubled(n: Int) -> Int
+= do
+  var c = 1
+  fn dbl(k: Int) -> Int
+  = do
+    c := c * 2 + k
+    c
+  for i in 0..n % 200
+    c := c + 1
+    x = dbl(0)
+  c
+
+fn invariant_escape(xs: List[Int], n: Int) -> Int
+= do
+  var i = 0
+  fn jump(k: Int) -> Int
+  = do
+    i := i + k
+    i
+  for j in 0..n % 4
+    i := 0
+    x = jump(n)
+  if i >= 0 then xs[0] + i else 0
+
+fn bounded_var(xs: List[Int], n: Int) -> Int
+= do
+  var i = 0
+  fn set(k: Int) -> Int
+  = do
+    i := k
+    k
+  for j in 0..2
+    i := j
+  x = set(n)
+  xs[i]
+
+fn probe_counter() -> Int
+= counter_doubled(100)
+
+fn probe_bounded() -> Int
+= bounded_var([1, 2], 5)
+
+// case str_find_short_haystack
+// str_find computed its end pointer as h.p + h.len - n.len + 1 before checking lengths. With an empty runtime string (null data) and a longer needle,
+// the end pointer wrapped and memchr read address 0: the native build segfaulted (or hung in a long run).
+
+type R = {a: Int, b: Int where _ != 0}
+
+fn scan(a: Int) -> Set[Int]
+= do
+  for i in 0..3
+    for j in 0..i % 8
+      if "".replace("a", "xy").contains(" x y ") then do
+        var v = R{a: 1, b: j}
+  [a].to_set
+
+fn finds(s: Str) -> Int
+= s.replace("q", "").index_of("long needle").or(-1) + (if s.replace("q", "").contains("zzzzzz") then 1 else 0)
+
+test empty_haystack = scan(2) == [2].to_set and finds("") == -1 and finds("qq") == -1

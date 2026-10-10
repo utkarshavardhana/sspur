@@ -1,2 +1,0 @@
-kernel fn k(y: &mut [F32]) @grid(gid, 64)
-= y[gid] := 1.0

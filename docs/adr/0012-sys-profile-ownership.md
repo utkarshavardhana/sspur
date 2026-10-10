@@ -68,7 +68,7 @@ fn demo(n: Int) -> Int
 
 ## Soundness suite
 
-`tests/ownership/reject` has 68 programs, each with its expected code in `tests/ownership/reject.txt`; `tests/ownership/accept` has 18 programs (RAII order, early return, raise unwinding, loops, drop flags, linear tokens, scalar and resource borrows, nested resources, raw buffers, a growable vector, a ring queue, an arena, matrices, pointer arithmetic, a resource with strings, a state machine, and channel handoff between tasks). `crates/sspur-cli/tests/ownership.rs` checks every rejection code, runs the accepted programs' tests, and requires identical `main` output and test results in the interpreter and native code with every function native. The accepted programs also match under `SSPUR_GC_STRESS`.
+`tests/ownership/reject.ssp` has 68 programs, one `// case NAME CODE` section each with its expected code; `tests/ownership/accept` has 18 programs (RAII order, early return, raise unwinding, loops, drop flags, linear tokens, scalar and resource borrows, nested resources, raw buffers, a growable vector, a ring queue, an arena, matrices, pointer arithmetic, a resource with strings, a state machine, and channel handoff between tasks). `crates/sspur-cli/tests/ownership.rs` checks every rejection code, runs the accepted programs' tests, and requires identical `main` output and test results in the interpreter and native code with every function native. The accepted programs also match under `SSPUR_GC_STRESS`.
 
 ## Not yet
 

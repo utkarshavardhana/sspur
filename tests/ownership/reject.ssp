@@ -1,0 +1,1758 @@
+// case assign_shared E_ASSIGN_SHARED
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn poke(f: &File)
+= do
+  f.fd := 0
+  ()
+
+// case bind_borrow E_BORROW_ESCAPE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn hold() -> Int
+= do
+  a = open(1)
+  r = &a
+  0
+
+// case borrow_after_move E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn late() -> Int
+= do
+  a = open(1)
+  n = consume(a)
+  n + size(&a)
+
+// case borrow_and_move E_BORROW_CONFLICT
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn look_and_take(x: &File, y: File) -> Int
+= x.fd + consume(y)
+
+fn alias() -> Int
+= do
+  a = open(1)
+  look_and_take(&a, a)
+
+// case borrow_in_list E_BORROW_ESCAPE
+profile sys
+
+fn total(xs: List[&Int]) -> Int
+= 0
+
+// case borrow_in_record E_BORROW_ESCAPE
+profile sys
+
+type Holder = {r: &Int}
+
+fn get(h: Holder) -> Int
+= 0
+
+// case borrow_mut_mut E_BORROW_CONFLICT
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn both(x: &mut File, y: &mut File)
+= ()
+
+fn alias() -> Unit
+= do
+  var a = open(1)
+  both(&mut a, &mut a)
+
+// case borrow_mut_shared E_BORROW_CONFLICT
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn mix(x: &mut File, y: &File)
+= ()
+
+fn alias() -> Unit
+= do
+  var a = open(1)
+  mix(&mut a, &a)
+
+// case borrow_scalar_conflict E_BORROW_CONFLICT
+profile sys
+
+fn add_to(x: &mut Int, y: &mut Int)
+= do
+  x := x + y
+  ()
+
+fn alias() -> Int
+= do
+  var n = 1
+  add_to(&mut n, &mut n)
+  n
+
+// case borrow_temporary E_BORROW_PLACE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn look() -> Int
+= size(&open(1))
+
+// case capture_borrow E_CAPTURE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn scan(xs: List[Int], f: &File) -> List[Int]
+= xs.map(x => x + f.fd)
+
+// case capture_res E_CAPTURE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn scan(xs: List[Int]) -> List[Int]
+= do
+  a = open(1)
+  xs.map(x => x + a.fd)
+
+// case chan_recv_res E_RES_ESCAPE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn pull(c: Chan[File]) -> Int ! conc
+= match c.recv
+  | some(f) => 1
+  | none => 0
+
+// case chan_send_linear E_RES_ESCAPE
+profile sys
+
+res type Tok = {id: Int}
+
+fn push(c: Chan[Tok]) -> Unit ! conc
+= c.send(Tok{id: 1})
+
+// case destructor_keeps_fields E_RES_LEAK
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+res type Pair = {a: File, b: File} drop close_pair
+
+fn close_pair(p: Pair)
+= ()
+
+// case destructor_moves_self E_DROP_SELF
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= do
+  n = consume(f)
+  ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= 0
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+// case destructure_droppable E_RES_DESTRUCTURE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn raw() -> Int
+= do
+  File{fd} = open(1)
+  fd
+
+// case discard_call E_RES_DISCARD
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn waste() -> Int
+= do
+  open(1)
+  0
+
+// case discard_temp_field E_RES_DISCARD
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn peek() -> Int
+= open(3).fd
+
+// case discard_wild E_RES_DISCARD
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn waste() -> Int
+= do
+  _ = open(1)
+  0
+
+// case double_drop E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn twice() -> Unit
+= do
+  a = open(1)
+  drop(a)
+  drop(a)
+
+// case drop_bad_sig E_DROP_SIG
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(n: Int)
+= ()
+
+// case drop_effect_missing E_EFFECT_MISSING
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File) -> Unit ! log
+= log("close {f.fd}")
+
+fn use_it() -> Int
+= do
+  a = File{fd: 1}
+  a.fd
+
+// case drop_fails E_DROP_SIG
+profile sys
+
+type IoErr = Broken
+
+res type File = {fd: Int} drop close
+
+fn close(f: File) -> Unit ! fail[IoErr]
+= if f.fd < 0 then raise Broken else ()
+
+// case drop_linear E_DROP_LINEAR
+profile sys
+
+res type Tok = {id: Int}
+
+fn spend(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn toss() -> Unit
+= do
+  t = Tok{id: 1}
+  drop(t)
+
+// case drop_through_borrow E_MOVE_OUT_OF_BORROW
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn kill(f: &mut File) -> Unit
+= drop(f)
+
+// case drop_unsafe_missing E_UNSAFE
+profile sys
+
+res type Buf = {p: Ptr[Int]} drop release
+
+fn release(b: Buf) -> Unit ! unsafe
+= free(b.p)
+
+fn make() -> Buf
+  unsafe "fresh allocation"
+= Buf{p: alloc(4, 0)}
+
+fn use_it() -> Int
+= do
+  b = make()
+  0
+
+// case field_after_move E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn late() -> Int
+= do
+  a = open(1)
+  n = consume(a)
+  n + a.fd
+
+// case linear_leak E_RES_LEAK
+profile sys
+
+res type Tok = {id: Int}
+
+fn spend(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn forget() -> Int
+= do
+  t = Tok{id: 1}
+  0
+
+// case linear_leak_branch E_RES_LEAK
+profile sys
+
+res type Tok = {id: Int}
+
+fn spend(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn half(c: Bool) -> Int
+= do
+  t = Tok{id: 1}
+  if c then spend(t) else 0
+
+// case linear_leak_on_raise E_RES_LEAK
+profile sys
+
+res type Tok = {id: Int}
+
+fn spend(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+type Bad = Negative
+
+fn check(n: Int) -> Int ! fail[Bad]
+= if n < 0 then raise Negative else n
+
+fn risky(n: Int) -> Int ! fail[Bad]
+= do
+  t = Tok{id: n}
+  m = check(n)
+  m + spend(t)
+
+// case linear_leak_on_return E_RES_LEAK
+profile sys
+
+res type Tok = {id: Int}
+
+fn spend(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn early(n: Int) -> Int
+= do
+  t = Tok{id: n}
+  if n > 0 then return 0
+  spend(t)
+
+// case linear_overwrite E_RES_LEAK
+profile sys
+
+res type Tok = {id: Int}
+
+fn spend(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn overwrite() -> Int
+= do
+  var t = Tok{id: 1}
+  t := Tok{id: 2}
+  spend(t)
+
+// case linear_param_leak E_RES_LEAK
+profile sys
+
+res type Tok = {id: Int}
+
+fn spend(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn ignore(t: Tok) -> Int
+= 0
+
+// case match_res E_RES_MATCH
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn inspect() -> Int
+= do
+  a = open(1)
+  match a
+  | File{fd} => fd
+
+// case maybe_moved E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn maybe(c: Bool) -> Int
+= do
+  a = open(1)
+  n = if c then consume(a) else 0
+  n + consume(a)
+
+// case missing_borrow E_BORROW_ARG
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn look() -> Int
+= do
+  a = open(1)
+  size(a)
+
+// case move_field E_MOVE_FIELD
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+res type Pair = {a: File, b: File}
+
+fn split(p: Pair) -> Int
+= consume(p.a)
+
+// case move_in_loop E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn loop_move() -> Int
+= do
+  a = open(1)
+  var s = 0
+  for i in 0..3
+    s := s + consume(a)
+  s
+
+// case move_out_of_borrow E_MOVE_OUT_OF_BORROW
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn steal(f: &File) -> Int
+= consume(f)
+
+// case move_while_loop E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn spin(n: Int) -> Int ! div
+= do
+  a = open(1)
+  var i = 0
+  while i < n
+    drop(a)
+    i := i + 1
+  i
+
+// case mut_borrow_immutable E_BORROW_IMMUTABLE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn grow() -> Int
+= do
+  a = open(1)
+  bump(&mut a)
+  size(&a)
+
+// case par_for_share E_PAR_SHARE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn fan() -> Int ! conc
+= do
+  a = File{fd: 1}
+  n = atomic(0)
+  for i in par(0..4)
+    n.add(size(&a))
+  n.load
+
+// case par_move_res E_PAR_SHARE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn both() -> Int
+= do
+  a = File{fd: 1}
+  (x, y) = par(consume(a), 2)
+  x + y
+
+// case par_share_borrow E_PAR_SHARE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn both(f: &File) -> Int
+= do
+  (x, y) = par(size(f), size(f))
+  x + y
+
+// case par_share_res E_PAR_SHARE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn both() -> Int
+= do
+  a = File{fd: 1}
+  (x, y) = par(a.fd, 2)
+  x + y
+
+// case profile_borrow E_PROFILE
+fn bump(n: &mut Int) -> Int
+= n
+
+// case profile_ptr E_PROFILE
+fn addr(p: Ptr[Int]) -> Int
+= 0
+
+// case profile_res E_PROFILE
+res type File = {fd: Int}
+
+fn f(x: Int) -> Int
+= x
+
+// case profile_unsafe_clause E_PROFILE
+fn f(x: Int) -> Int
+  unsafe "nothing"
+= x
+
+// case ptr_elem E_PTR_ELEM
+profile sys
+
+fn names(p: Ptr[Str]) -> Int
+= 0
+
+// case replace_res_field E_MOVE_FIELD
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+res type Pair = {a: File, b: File}
+
+fn swap_in(p: Pair) -> Pair
+= p with a := open(9)
+
+// case res_field_in_plain E_RES_FIELD
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+type Box = {f: File}
+
+fn unbox(b: Box) -> Int
+= 0
+
+// case res_fn_value E_RES_FN_VALUE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn apply_all(xs: List[Int]) -> Int
+= do
+  g = consume
+  0
+
+// case res_generic E_RES_GENERIC
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn ident[T](x: T) -> T
+= x
+
+fn copy() -> Int
+= do
+  a = ident(open(1))
+  consume(a)
+
+// case res_in_list_literal E_RES_ESCAPE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn pack() -> Int
+= [open(1), open(2)].len
+
+// case res_in_list_type E_RES_CONTAINER
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn count(xs: List[File]) -> Int
+= 0
+
+// case res_in_some E_RES_ESCAPE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn wrap() -> Bool
+= some(open(1)).is_some
+
+// case res_in_tuple_type E_RES_CONTAINER
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn pairing(p: (File, Int)) -> Int
+= 0
+
+// case res_sum E_RES_KIND
+profile sys
+
+res type Handle = Open{fd: Int} | Shut
+
+// case return_borrow E_BORROW_ESCAPE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn pass(f: &File) -> &File
+= f
+
+// case shared_as_mut E_BORROW_IMMUTABLE
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn grow(f: &File)
+= bump(f)
+
+// case shared_for_mut E_BORROW_ARG
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn grow() -> Unit
+= do
+  var a = open(1)
+  bump(&a)
+
+// case unsafe_alloc E_UNSAFE
+profile sys
+
+fn grab() -> Ptr[Int]
+= alloc(4, 0)
+
+// case unsafe_call E_UNSAFE
+profile sys
+
+fn raw_free(p: Ptr[Int]) -> Unit ! unsafe
+= free(p)
+
+fn tidy(p: Ptr[Int]) -> Unit
+= raw_free(p)
+
+// case unsafe_in_test E_UNSAFE
+profile sys
+
+test t = alloc(1, 0).is_null == false
+
+// case unsafe_load E_UNSAFE
+profile sys
+
+fn peek(p: Ptr[Int]) -> Int
+= p.load(0)
+
+// case use_after_move E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn twice() -> Int
+= do
+  a = open(1)
+  x = consume(a)
+  x + consume(a)
+
+// case send_then_use E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+res type Tok = {id: Int}
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn eat(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn f() -> Int ! conc
+= do
+  c = chan()
+  a = open(1)
+  c.send(a)
+  c.close
+  size(&a)
+
+// case send_in_loop E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+res type Tok = {id: Int}
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn eat(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn f() -> Int ! conc
+= do
+  c = chan()
+  a = open(1)
+  for i in 0..2
+    c.send(a)
+  c.close
+  0
+
+// case move_in_match_arm E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+res type Tok = {id: Int}
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn eat(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+type S = X | Y
+fn f(s: S) -> Int
+= do
+  a = open(1)
+  n = match s
+    | X => consume(a)
+    | Y => 0
+  n + size(&a)
+
+// case move_in_catch E_USE_MOVED
+profile sys
+
+res type File = {fd: Int} drop close
+res type Tok = {id: Int}
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn eat(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+type E = Bad
+fn r(x: Int) -> Int ! fail[E]
+= if x > 0 then raise Bad else x
+fn f(x: Int) -> Int
+= do
+  a = open(1)
+  n = catch consume(a) + r(x)
+    | Bad => 0
+  n + size(&a)
+
+// case nested_par_move E_PAR_SHARE
+profile sys
+
+res type File = {fd: Int} drop close
+res type Tok = {id: Int}
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn eat(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn f() -> Int
+= do
+  a = open(1)
+  ((x, y), z) = par(par(consume(a), 1), 2)
+  x + y + z
+
+// case par_send_parent_res E_PAR_SHARE
+profile sys
+
+res type File = {fd: Int} drop close
+res type Tok = {id: Int}
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn eat(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn f() -> Int ! conc
+= do
+  c = chan()
+  a = open(1)
+  (u, v) = par(c.send(a), 1)
+  v
+
+// case shadow_linear E_RES_LEAK
+profile sys
+
+res type File = {fd: Int} drop close
+res type Tok = {id: Int}
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn eat(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn f() -> Int
+= do
+  t = Tok{id: 1}
+  t = Tok{id: 2}
+  eat(t)
+
+// case linear_in_loop_break_return E_RES_LEAK
+profile sys
+
+res type File = {fd: Int} drop close
+res type Tok = {id: Int}
+
+fn close(f: File)
+= ()
+
+fn open(fd: Int) -> File
+= File{fd}
+
+fn consume(f: File) -> Int
+= f.fd
+
+fn eat(t: Tok) -> Int
+= do
+  Tok{id} = t
+  id
+
+fn size(f: &File) -> Int
+= f.fd
+
+fn bump(f: &mut File)
+= do
+  f.fd := f.fd + 1
+  ()
+
+fn f(x: Int) -> Int
+= do
+  t = Tok{id: 1}
+  for i in 0..3
+    if i == x then return i
+  eat(t)
+
+// case par_local_fn_race E_PAR_SHARE
+fn f() -> Int
+= do
+  var s = 0
+  fn bump(k: Int) -> Int
+  = do
+    s := s + k
+    s
+  (a, b) = par(bump(1), bump(2))
+  s
+
+// case par_nested_race E_PAR_RACE
+fn f() -> Int
+= do
+  var s = 0
+  for w in par(0..2)
+    (a, b) = par(1, 2)
+    s := a
+  s
+
+// case par_task_block_race E_PAR_RACE
+fn f() -> Int
+= do
+  var s = 0
+  (a, b) = par(do
+      s := 1
+      1, 2)
+  s
+
+// case par_nested_local_fn E_PAR_SHARE
+fn f() -> Int
+= do
+  var s = 0
+  fn bump(k: Int) -> Int
+  = do
+    s := s + k
+    s
+  fn twice(k: Int) -> Int
+  = bump(k) + bump(k)
+  (a, b) = par(twice(1), 2)
+  s
+
+// case par_fn_in_record E_PAR_SHARE
+type H = {f: Int -> Int}
+fn call(h: H, k: Int) -> Int
+= do
+  g = h.f
+  g(k)
+fn f() -> Int
+= do
+  var s = 0
+  fn bump(k: Int) -> Int
+  = do
+    s := s + k
+    s
+  h = H{f: bump}
+  (a, b) = par(call(h, 1), call(h, 2))
+  s
+
+// case par_generic_wrapper E_PAR_SHARE
+type Box[T] = {v: T}
+fn call(b: Box[Int -> Int], k: Int) -> Int
+= do
+  g = b.v
+  g(k)
+fn f() -> Int
+= do
+  var s = 0
+  fn bump(k: Int) -> Int
+  = do
+    s := s + k
+    s
+  bx = Box{v: bump}
+  (a, b) = par(call(bx, 1), call(bx, 2))
+  s
+
+// case par_for_fn_elems E_PAR_SHARE
+type H = {f: Int -> Int}
+fn call(h: H, k: Int) -> Int
+= do
+  g = h.f
+  g(k)
+fn f() -> Int
+= do
+  var s = 0
+  fn bump(k: Int) -> Int
+  = do
+    s := s + k
+    s
+  hs = [H{f: bump}, H{f: bump}]
+  for h in par(hs)
+    x = call(h, 1)
+  s

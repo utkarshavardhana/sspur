@@ -17,22 +17,33 @@ fn run(args: &[&str], path: &Path, env: &[(&str, &str)]) -> (bool, String, Strin
     (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
 }
 
+fn reject_cases() -> Vec<(String, String, String)> {
+    let text = std::fs::read_to_string(suite().join("reject.ssp")).unwrap();
+    let mut cases: Vec<(String, String, String)> = Vec::new();
+    for line in text.lines() {
+        if let Some(head) = line.strip_prefix("// case ") {
+            let (name, code) = head.split_once(' ').unwrap();
+            cases.push((name.to_string(), code.to_string(), String::new()));
+        } else if let Some(c) = cases.last_mut() {
+            c.2 += line;
+            c.2 += "\n";
+        }
+    }
+    cases
+}
+
 #[test]
 fn kernel_violations_are_rejected_with_their_codes() {
-    let expected = std::fs::read_to_string(suite().join("reject.txt")).unwrap();
-    let mut n = 0;
-    for line in expected.lines().filter(|l| !l.trim().is_empty()) {
-        let (name, code) = line.split_once(' ').unwrap();
-        let path = suite().join("reject").join(format!("{name}.ssp"));
-        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let module = parse(&src).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    let cases = reject_cases();
+    for (name, code, src) in &cases {
+        let module = parse(src).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         let out = check(&module);
         let codes: Vec<&str> = out.diags.iter().filter(|d| d.is_error()).map(|d| d.code.as_str()).collect();
-        assert!(codes.contains(&code), "{name}: expected {code}, got {codes:?}");
-        n += 1;
+        assert!(codes.contains(&code.as_str()), "{name}: expected {code}, got {codes:?}");
     }
-    let files = std::fs::read_dir(suite().join("reject")).unwrap().count();
-    assert_eq!(n, files, "every reject program needs an expected code in reject.txt");
+    let names: std::collections::HashSet<_> = cases.iter().map(|c| &c.0).collect();
+    assert_eq!(names.len(), cases.len(), "reject case names must be unique");
+    assert!(!cases.is_empty());
 }
 
 #[test]

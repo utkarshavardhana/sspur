@@ -1,4 +1,0 @@
-profile sys
-
-fn grab() -> Ptr[Int]
-= alloc(4, 0)

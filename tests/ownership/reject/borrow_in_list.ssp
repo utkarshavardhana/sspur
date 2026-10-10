@@ -1,4 +1,0 @@
-profile sys
-
-fn total(xs: List[&Int]) -> Int
-= 0

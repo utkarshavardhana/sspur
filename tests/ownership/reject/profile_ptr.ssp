@@ -1,2 +1,0 @@
-fn addr(p: Ptr[Int]) -> Int
-= 0

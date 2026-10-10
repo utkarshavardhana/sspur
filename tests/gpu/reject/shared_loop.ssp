@@ -1,9 +1,0 @@
-kernel fn k(x: &[F32], y: &mut [F32]) @grid(y.len, 256)
-= do
-  sh = shared[F32](256)
-  sh[lid] := x[gid]
-  barrier()
-  for k in 0..8
-    s = 128.shr(k)
-    if lid < s then sh[lid] := sh[lid] + sh[lid + s]
-  y[gid] := sh[lid]

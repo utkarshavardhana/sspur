@@ -1,2 +1,0 @@
-kernel fn k(y: &mut [F32], w: Int) @grid2(w, y.len / w, 32, 64)
-= y[gid.y * w + gid.x] := 1.0

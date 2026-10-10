@@ -15,11 +15,18 @@ fn has_clang() -> bool {
     Command::new("clang").arg("--version").output().is_ok()
 }
 
-fn files(dir: &str) -> Vec<PathBuf> {
-    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests").join(dir);
-    let mut out: Vec<PathBuf> = std::fs::read_dir(base).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "ssp")).collect();
-    out.sort();
-    out
+fn regressions() -> Vec<(String, String)> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fuzz/regressions.ssp");
+    let mut cases: Vec<(String, String)> = Vec::new();
+    for line in std::fs::read_to_string(path).unwrap().lines() {
+        if let Some(name) = line.strip_prefix("// case ") {
+            cases.push((name.to_string(), String::new()));
+        } else if let Some(c) = cases.last_mut() {
+            c.1 += line;
+            c.1 += "\n";
+        }
+    }
+    cases
 }
 
 #[test]
@@ -27,22 +34,26 @@ fn fuzz_regressions_match_the_interpreter_in_every_build() {
     if !has_clang() {
         return;
     }
-    let all = files("fuzz");
+    let all = regressions();
     assert!(!all.is_empty());
-    for path in all {
+    let dir = std::env::temp_dir().join(format!("sspur-fuzz-regressions-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, src) in all {
+        let path: PathBuf = dir.join(format!("{name}.ssp"));
+        std::fs::write(&path, &src).unwrap();
         let p = path.to_str().unwrap();
-        let src = std::fs::read_to_string(&path).unwrap();
         let (out, ok) = sspur(&["test", "--strict-native", p], &[]);
-        assert!(ok, "{p}: {out}");
+        assert!(ok, "{name}: {out}");
         let (out, ok) = sspur(&["native", "--release", "--strict-native", p], &[]);
-        assert!(ok && (src.contains("// interp-ok") || !out.contains("interp ")), "{p}: {out}");
+        assert!(ok && (src.contains("// interp-ok") || !out.contains("interp ")), "{name}: {out}");
         for (flags, split) in [(vec![], "1"), (vec![], "0"), (vec!["--O3"], "0")] {
             let mut args = vec!["fuzz", "--differential", "--strict-native", p, "--edge", "--cases", "60"];
             args.extend(flags.iter().copied());
             let (out, ok) = sspur(&args, &[("SSPUR_SPLIT", split)]);
-            assert!(ok && !out.contains("DIFF"), "{p} {flags:?} split={split}: {out}");
+            assert!(ok && !out.contains("DIFF"), "{name} {flags:?} split={split}: {out}");
         }
     }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

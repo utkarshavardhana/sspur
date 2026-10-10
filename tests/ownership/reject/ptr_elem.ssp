@@ -1,4 +1,0 @@
-profile sys
-
-fn names(p: Ptr[Str]) -> Int
-= 0

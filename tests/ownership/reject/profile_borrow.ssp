@@ -1,2 +1,0 @@
-fn bump(n: &mut Int) -> Int
-= n

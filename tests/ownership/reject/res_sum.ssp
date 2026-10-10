@@ -1,3 +1,0 @@
-profile sys
-
-res type Handle = Open{fd: Int} | Shut

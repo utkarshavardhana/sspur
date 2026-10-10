@@ -1,3 +1,0 @@
-profile sys
-
-test t = alloc(1, 0).is_null == false

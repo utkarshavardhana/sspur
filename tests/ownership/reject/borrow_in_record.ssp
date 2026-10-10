@@ -1,6 +1,0 @@
-profile sys
-
-type Holder = {r: &Int}
-
-fn get(h: Holder) -> Int
-= 0

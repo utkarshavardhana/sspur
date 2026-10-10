@@ -15,7 +15,7 @@ fn roundtrip(src: &str) {
 fn roundtrip_programs() {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests");
     let mut n = 0;
-    for dir in ["programs", "ownership/accept", "ownership/reject"] {
+    for dir in ["programs", "ownership/accept"] {
         for entry in std::fs::read_dir(base.join(dir)).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().is_some_and(|e| e == "ssp") {
@@ -23,6 +23,11 @@ fn roundtrip_programs() {
                 n += 1;
             }
         }
+    }
+    let rejects = std::fs::read_to_string(base.join("ownership/reject.ssp")).unwrap();
+    for case in rejects.split("// case ").skip(1) {
+        roundtrip(case.split_once('\n').unwrap().1);
+        n += 1;
     }
     assert!(n > 100);
 }

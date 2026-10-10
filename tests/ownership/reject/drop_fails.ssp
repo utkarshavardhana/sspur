@@ -1,8 +1,0 @@
-profile sys
-
-type IoErr = Broken
-
-res type File = {fd: Int} drop close
-
-fn close(f: File) -> Unit ! fail[IoErr]
-= if f.fd < 0 then raise Broken else ()

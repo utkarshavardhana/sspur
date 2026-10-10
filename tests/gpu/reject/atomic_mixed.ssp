@@ -1,4 +1,0 @@
-kernel fn k(x: &[I32], h: &mut [I32]) @grid(x.len, 64)
-= do
-  h.atomic_add(x[gid].to_int % h.len, 1)
-  h[gid] := 0

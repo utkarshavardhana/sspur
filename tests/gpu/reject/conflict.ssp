@@ -1,7 +1,0 @@
-kernel fn k(x: &[F32], y: &mut [F32]) @grid(y.len, 64)
-= y[gid] := x[gid]
-
-fn main() ! dev
-= do
-  var ys = [1.0]
-  k(&ys, &mut ys)

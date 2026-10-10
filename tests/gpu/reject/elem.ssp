@@ -1,2 +1,0 @@
-kernel fn k(y: &mut [Str]) @grid(y.len, 64)
-= ()

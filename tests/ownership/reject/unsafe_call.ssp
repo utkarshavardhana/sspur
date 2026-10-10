@@ -1,7 +1,0 @@
-profile sys
-
-fn raw_free(p: Ptr[Int]) -> Unit ! unsafe
-= free(p)
-
-fn tidy(p: Ptr[Int]) -> Unit
-= raw_free(p)

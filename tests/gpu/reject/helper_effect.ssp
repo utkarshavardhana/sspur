@@ -1,7 +1,0 @@
-fn f(x: Int) -> Int ! log
-= do
-  log("x")
-  x
-
-kernel fn k(y: &mut [Int]) @grid(y.len, 64)
-= y[gid] := f(y[gid])

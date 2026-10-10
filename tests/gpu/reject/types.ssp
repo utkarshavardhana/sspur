@@ -1,2 +1,0 @@
-kernel fn k(y: &mut [I32]) @grid(y.len, 64)
-= y[gid] := y[gid] / 2.0

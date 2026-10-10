@@ -8,8 +8,8 @@ longest chain under 100000: 350 steps
 // ANCHOR_END: tiers
 // ANCHOR: pgo
 $ sspur run --pgo build.ssp
-...
 longest chain under 100000: 350 steps
+...
 $ sspur run --lto thin build.ssp
 longest chain under 100000: 350 steps
 // ANCHOR_END: pgo

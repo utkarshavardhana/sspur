@@ -655,7 +655,7 @@ void ss_trap(int64_t c) {
 pub fn llvm_cc() -> PathBuf {
     std::env::var_os("SSPUR_LLVM_CC")
         .map(PathBuf::from)
-        .unwrap_or_else(|| ["/opt/homebrew/opt/llvm/bin/clang", "/usr/local/opt/llvm/bin/clang"].iter().map(PathBuf::from).find(|p| p.exists()).unwrap_or_else(|| PathBuf::from("clang")))
+        .unwrap_or_else(|| ["/opt/homebrew/opt/llvm/bin/clang", "/usr/local/opt/llvm/bin/clang"].iter().map(PathBuf::from).find(|p| p.exists()).unwrap_or_else(|| PathBuf::from(crate::cgen::flags::cc())))
 }
 
 pub fn build(ir: &Ir, out: &Path, opt: &str) -> R<PathBuf> {

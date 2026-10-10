@@ -27,6 +27,7 @@ mod stdfile;
 mod stdflat;
 mod stdrng;
 mod stdtz;
+pub mod win;
 mod stdview;
 use prove::{fits, raw_op, Iv, Know, FULL};
 
@@ -807,7 +808,7 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (src, mut plan) = generate(m, check, None, None, true)?;
+    let (src, mut plan) = generate(m, check, None, None, true, true)?;
     plan.skipped.retain(|n, _| lower::original_name(n) == n);
     if let Some((_, _, why)) = &lowered {
         for (n, reason) in plan.skipped.iter_mut() {
@@ -857,9 +858,17 @@ pub fn compile_release(m: &Module, check: &CheckOutput, opt: &str) -> Result<Com
         let views: Vec<[usize; 2]> = args.iter().map(|a| [a.len(), a.as_ptr() as usize]).collect();
         unsafe { set_args(views.as_ptr(), views.len() as i64) };
     }
-    let mut c = assemble_rich(defs, scalar, rich, plan.skipped, Box::new(library), Layouts::from_check(check), plan.refines.into_iter().collect(), free, plan.err_types.into_iter().collect(), fids);
+    let mut c = assemble_rich(defs, scalar, rich, plan.skipped, keep_library(library), Layouts::from_check(check), plan.refines.into_iter().collect(), free, plan.err_types.into_iter().collect(), fids);
     c.fallback = fallback;
     Ok(c)
+}
+
+fn keep_library(library: libloading::Library) -> Box<dyn std::any::Any> {
+    if cfg!(windows) {
+        std::mem::forget(library);
+        return Box::new(());
+    }
+    Box::new(library)
 }
 
 fn fn_names(fids: &HashMap<String, usize>) -> HashMap<usize, String> {
@@ -906,7 +915,7 @@ pub fn c_program(m: &Module, check: &CheckOutput) -> Result<CProgram, String> {
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (src, plan) = generate(m, check, None, None, false)?;
+    let (src, plan) = generate(m, check, None, None, false, false)?;
     let fns = plan.fns.into_iter().map(|(n, (p, r, _))| (n, (p, r))).collect();
     Ok(CProgram { src, fns, skipped: plan.skipped, err_types: plan.err_types.into_iter().map(|(_, t)| t).collect(), refines: plan.refines.into_iter().map(|(_, r)| r).collect() })
 }
@@ -917,7 +926,7 @@ pub fn c_source(m: &Module, check: &CheckOutput) -> String {
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    match generate(m, check, None, None, false) {
+    match generate(m, check, None, None, false, true) {
         Ok((src, _)) => src,
         Err(e) => format!("/* {e} */\n"),
     }
@@ -929,7 +938,7 @@ pub fn export_c(m: &Module, check: &CheckOutput, prefix: &str) -> Result<export:
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let (source, plan) = generate(m, check, Some(prefix), None, false)?;
+    let (source, plan) = generate(m, check, Some(prefix), None, false, true)?;
     let w = plan.export.ok_or("no export plan")?;
     Ok(export::Export { source, header: w.header, exported: w.exported, skipped: w.skipped, links: plan.links })
 }
@@ -951,7 +960,7 @@ pub fn bare_c(m: &Module, check: &CheckOutput, arch: &str) -> Result<String, Str
         Some((lm, lc, _)) => (lm, lc),
         None => (m, check),
     };
-    let src = generate(m, check, None, Some(arch), false).map(|(src, _)| src)?;
+    let src = generate(m, check, None, Some(arch), false, false).map(|(src, _)| src)?;
     let fpu = check.expr_types.values().chain(check.fn_types.values().flat_map(|(ps, r)| ps.iter().chain([r]))).any(uses_f64);
     if fpu && !crate::bare::has_fpu(arch) {
         return Err(format!("F64 needs a floating-point unit, and the {arch} target is built without one (rv64imac); use aarch64-qemu or thumbv7em-mps2, or scale to Int"));
@@ -971,7 +980,7 @@ fn uses_f64(t: &Type) -> bool {
     }
 }
 
-fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Option<&str>, stable: bool) -> Result<(String, Plan), String> {
+fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Option<&str>, stable: bool, host: bool) -> Result<(String, Plan), String> {
     let defs: Vec<&FnDef> = m.defs.iter().filter_map(|d| if let Def::Fn(f) = d { Some(f) } else { None }).filter(|f| !sspur_check::kernel::is_device_fn(f)).collect();
     let index: HashMap<String, usize> = if stable {
         let mut used = HashMap::new();
@@ -1026,6 +1035,7 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
         cx.sys = matches!(m.profile.as_deref(), Some("sys" | "bare"));
         cx.bare = m.profile.as_deref() == Some("bare");
         cx.target = target.map(str::to_string);
+        cx.win = host && target.is_none() && win::on();
         for d in &m.defs {
             if let Def::Static(s) = d
                 && let Some(t) = check.expr_types.get(&expr_key(&s.init))
@@ -1199,7 +1209,8 @@ fn generate(m: &Module, check: &CheckOutput, export: Option<&str>, target: Optio
             let refines = cx.refine_ids.iter().copied().zip(cx.refines.iter().cloned()).collect();
             let err_types = cx.err_ids.iter().copied().zip(cx.err_types.iter().cloned()).collect();
             let plan = Plan { fns: plan_fns, skipped, refines, err_types, links: links.unwrap_or_default(), export: exported, owned, fids: index.clone() };
-            return Ok((fix_members(&src), plan));
+            let src = fix_members(&src);
+            return Ok((if cx.win { win::adapt(&src) } else { src }, plan));
         }
         for (n, e) in failed {
             ok.remove(&n);
@@ -1249,8 +1260,8 @@ fn build(src: &str, opt: &str, links: &[String], lto: flags::Lto, names: &HashMa
     let c = dir.join(format!("{}.{uniq}.c", &key[..32]));
     std::fs::write(&c, src).map_err(|e| e.to_string())?;
     let tmp = lib.with_extension(format!("{uniq}.tmp"));
-    let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
-    let out = Command::new(&cc).args([opt, "-shared", "-fPIC", "-w"]).args(lto.flag()).args(lto.linker()).arg("-o").arg(&tmp).arg(&c).args(links).args(flags::sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    let cc = flags::cc();
+    let out = Command::new(&cc).args([opt, "-shared", "-w"]).args(flags::pic()).args(lto.flag()).args(lto.linker()).arg("-o").arg(&tmp).arg(&c).args(links).args(flags::sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
@@ -1260,6 +1271,7 @@ fn build(src: &str, opt: &str, links: &[String], lto: flags::Lto, names: &HashMa
         return Err(c_failure(&err, &|_| Some((src.to_string(), None)), names));
     }
     let _ = std::fs::rename(&c, dir.join(format!("{}.c", &key[..32])));
+    flags::drop_link_leftovers(&tmp);
     std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
     Ok(lib)
 }
@@ -1289,14 +1301,14 @@ fn split_mode(opt: &str) -> bool {
 
 fn split_units(src: &str, plan: &Plan) -> Vec<split::Tu> {
     static RUNTIME: std::sync::OnceLock<HashSet<String>> = std::sync::OnceLock::new();
-    let runtime = RUNTIME.get_or_init(|| split::fn_names(&format!("{PRELUDE}\n{}\n{}\n{}", ffi::FFI_PRELUDE, stdlib::STD_RT, gpu::HOST_PRELUDE)));
+    let runtime = RUNTIME.get_or_init(|| split::fn_names(&format!("{PRELUDE}\n{}\n{}\n{}\n{}", ffi::FFI_PRELUDE, stdlib::STD_RT, gpu::HOST_PRELUDE, win::WIN_RT)));
     split::units(src, &split::Opts { owners: &plan.owned, shared: &["enc_err"], inline_bytes: 1200, inline_max: 24, runtime, share_bytes: 400 })
 }
 
 fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashMap<usize, String>) -> Result<PathBuf, String> {
     let t0 = std::time::Instant::now();
     let links = resolve_links(&plan.links)?;
-    let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
+    let cc = flags::cc();
     let dir = cache_dir();
     let lto_tag = match lto {
         flags::Lto::Off => "false",
@@ -1313,7 +1325,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashM
     let tus = split_units(src, plan);
     let objdir = dir.join("obj");
     std::fs::create_dir_all(&objdir).map_err(|e| e.to_string())?;
-    let flags: Vec<&str> = [opt, "-c", "-fPIC", "-w"].into_iter().chain(lto.flag()).collect();
+    let flags: Vec<&str> = [opt, "-c", "-w"].into_iter().chain(flags::pic().iter().copied()).chain(lto.flag()).collect();
     let stamp = format!("{cc} {}\n", flags.join(" "));
     let keys: Vec<String> = tus.iter().map(|t| blake3::hash(format!("{stamp}{}", t.text).as_bytes()).to_hex()[..32].to_string()).collect();
     let lkey = blake3::hash(format!("{opt}{}\n{}", links.iter().map(|l| format!(" {l}")).collect::<String>(), keys.join("\n")).as_bytes()).to_hex()[..32].to_string();
@@ -1387,7 +1399,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashM
         if cfg!(target_os = "macos") {
             link.arg(format!("-Wl,-cache_path_lto,{}", cache.display()));
         } else if let Some(ld) = lto.linker() {
-            link.arg(ld).arg(format!("-Wl,--thinlto-cache-dir={}", cache.display()));
+            link.arg(ld).arg(flags::lto_cache_flag(&cache));
         }
     }
     let out = link.args(["-shared", "-o"]).arg(&tmp).args(&objs).args(&links).args(flags::sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
@@ -1397,6 +1409,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashM
     if std::env::var_os("SSPUR_SPLIT_DEBUG").is_some() {
         eprintln!("split: linked, {:?}", t0.elapsed());
     }
+    flags::drop_link_leftovers(&tmp);
     std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
     let _ = std::fs::write(&memo, format!("{lkey}.{}", std::env::consts::DLL_EXTENSION));
     Ok(lib)
@@ -1525,6 +1538,7 @@ struct Cx<'a> {
     par_heavy: HashSet<String>,
     sys: bool,
     bare: bool,
+    win: bool,
     target: Option<String>,
     flags: HashMap<String, String>,
     borrow_res: HashSet<String>,
@@ -1594,6 +1608,7 @@ impl<'a> Cx<'a> {
             par_heavy: HashSet::new(),
             sys: false,
             bare: false,
+            win: false,
             target: None,
             flags: HashMap::new(),
             borrow_res: HashSet::new(),

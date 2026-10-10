@@ -142,6 +142,7 @@ impl Cx<'_> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn export_wrappers(&mut self, prefix: &str, defs: &[&FnDef], index: &HashMap<String, usize>, fns: &BTreeMap<String, (Vec<Type>, Type, bool)>, skipped: &BTreeMap<String, String>) -> G<Wrappers> {
         let mut c = String::from(C_HOST);
+        let dx = if self.win { "__declspec(dllexport) " } else { "" };
         let mut names = vec!["\"?\"".to_string(); defs.len()];
         let mut contracts = String::new();
         for f in defs {
@@ -194,8 +195,8 @@ impl Cx<'_> {
     if (st->rbuf && code != {T_RAISE}) {{ free(st->rbuf); st->rbuf = 0; }}
     x_set_error(&b);
 }}
-const char* {prefix}_last_error(void) {{ return x_err ? x_err : ""; }}
-void {prefix}_free(void* p) {{ free(p); }}"#
+{dx}const char* {prefix}_last_error(void) {{ return x_err ? x_err : ""; }}
+{dx}void {prefix}_free(void* p) {{ free(p); }}"#
         )
         .unwrap();
         let guard = prefix.to_ascii_uppercase();
@@ -260,7 +261,7 @@ void {prefix}_free(void* p) {{ free(p); }}"#
             writeln!(h, "int32_t {cname}({sig});").unwrap();
             writeln!(
                 c,
-                "int32_t {cname}({sig}) {{\n    Status st_; memset(&st_, 0, sizeof st_); st_.limit = 10000; Status* st = &st_;\n    x_init();\n    jmp_buf jb; jmp_buf* saved = sspur_jb;\n    gc_enter(__builtin_frame_address(0), st, sizeof(Status)); sspur_jb = &jb;\n    if (setjmp(jb)) {{ sspur_jb = saved; x_error(st, st->code); gc_leave(); return (int32_t)st->code; }}\n{conv}    {rr} r = f_{name}({args}st, -st->limit);\n    sspur_jb = saved;\n    if (r.code) {{ x_error(st, r.code); gc_leave(); return (int32_t)r.code; }}\n    {store}gc_leave(); return 0;\n}}"
+                "{dx}int32_t {cname}({sig}) {{\n    Status st_; memset(&st_, 0, sizeof st_); st_.limit = 10000; Status* st = &st_;\n    x_init();\n    jmp_buf jb; jmp_buf* saved = sspur_jb;\n    gc_enter(__builtin_frame_address(0), st, sizeof(Status)); sspur_jb = &jb;\n    if (setjmp(jb)) {{ sspur_jb = saved; x_error(st, st->code); gc_leave(); return (int32_t)st->code; }}\n{conv}    {rr} r = f_{name}({args}st, -st->limit);\n    sspur_jb = saved;\n    if (r.code) {{ x_error(st, r.code); gc_leave(); return (int32_t)r.code; }}\n    {store}gc_leave(); return 0;\n}}"
             )
             .unwrap();
             exported.push(cname);

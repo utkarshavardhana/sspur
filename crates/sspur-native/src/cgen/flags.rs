@@ -33,8 +33,44 @@ impl Lto {
     }
 }
 
-pub fn sys_libs() -> &'static [&'static str] {
-    if cfg!(target_os = "macos") { &[] } else { &["-lm", "-lpthread"] }
+pub fn sys_libs() -> Vec<String> {
+    if cfg!(windows) {
+        win_builtins().into_iter().collect()
+    } else if cfg!(target_os = "macos") {
+        vec![]
+    } else {
+        vec!["-lm".into(), "-lpthread".into()]
+    }
+}
+
+pub fn pic() -> &'static [&'static str] {
+    if cfg!(windows) { &[] } else { &["-fPIC"] }
+}
+
+pub fn lto_cache_flag(dir: &Path) -> String {
+    if cfg!(windows) { format!("-Wl,/lldltocache:{}", dir.display()) } else { format!("-Wl,--thinlto-cache-dir={}", dir.display()) }
+}
+
+pub fn drop_link_leftovers(out: &Path) {
+    if cfg!(windows) {
+        for ext in ["lib", "exp"] {
+            let _ = std::fs::remove_file(out.with_extension(ext));
+        }
+    }
+}
+
+fn win_builtins() -> Option<String> {
+    static B: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    B.get_or_init(|| {
+        let ask = |args: &[&str]| Command::new(cc()).args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+        if let Some(p) = ask(&["--rtlib=compiler-rt", "-print-libgcc-file-name"]).filter(|p| Path::new(p).exists()) {
+            return Some(p);
+        }
+        let res = PathBuf::from(ask(&["-print-resource-dir"])?);
+        let arch = std::env::consts::ARCH;
+        [res.join("lib/windows").join(format!("clang_rt.builtins-{arch}.lib")), res.join("lib").join(format!("{arch}-pc-windows-msvc")).join("clang_rt.builtins.lib")].into_iter().find(|p| p.exists()).map(|p| p.display().to_string())
+    })
+    .clone()
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -75,16 +111,37 @@ pub fn pgo_paths(key_text: &str, opt: &str) -> (PathBuf, PathBuf) {
     (d.join(format!("{k}.raw")), d.join(format!("{k}.profdata")))
 }
 
-fn cc() -> String {
-    std::env::var("CC").unwrap_or_else(|_| "clang".into())
+pub fn cc() -> String {
+    if let Ok(c) = std::env::var("CC") {
+        return c;
+    }
+    if !cfg!(windows) {
+        return "clang".into();
+    }
+    static CC: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    CC.get_or_init(|| {
+        if on_path("clang").is_some() {
+            return "clang".into();
+        }
+        let llvm = std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("LLVM").join("bin"));
+        on_path("clang-cl").and_then(|p| p.parent().map(Path::to_path_buf)).into_iter().chain(llvm).map(|d| d.join("clang.exe")).find(|c| c.exists()).map_or_else(|| "clang".into(), |c| c.display().to_string())
+    })
+    .clone()
 }
 
-fn on_path(name: &str) -> Option<PathBuf> {
+pub fn on_path(name: &str) -> Option<PathBuf> {
+    let exe = |p: PathBuf| -> Option<PathBuf> {
+        if p.is_file() {
+            return Some(p);
+        }
+        let e = p.with_extension(std::env::consts::EXE_EXTENSION);
+        (cfg!(windows) && p.extension().is_none() && e.is_file()).then_some(e)
+    };
     let p = Path::new(name);
     if p.components().count() > 1 {
-        return p.exists().then(|| p.to_path_buf());
+        return exe(p.to_path_buf());
     }
-    std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join(name)).find(|c| c.exists())
+    std::env::split_paths(&std::env::var_os("PATH")?).find_map(|d| exe(d.join(name)))
 }
 
 pub fn profdata_tool() -> Result<Vec<String>, String> {
@@ -139,7 +196,7 @@ pub(super) fn build_pgo(src: &str, opt: &str, links: &[String], o: &BuildOpts) -
     std::fs::write(dir.join("prog.c"), src).map_err(|e| e.to_string())?;
     let tmp = lib.with_extension(format!("{}.tmp", super::tmp_suffix()));
     let mut cmd = Command::new(&cc);
-    cmd.current_dir(&dir).args([opt, "-shared", "-fPIC", "-w", &flag]);
+    cmd.current_dir(&dir).args([opt, "-shared", "-w", &flag]).args(pic());
     if let Some(l) = lto {
         cmd.arg(l);
     }
@@ -148,6 +205,7 @@ pub(super) fn build_pgo(src: &str, opt: &str, links: &[String], o: &BuildOpts) -
     if !out.status.success() {
         return Err(format!("{cc} failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
     }
+    drop_link_leftovers(&tmp);
     std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
     Ok(lib)
 }

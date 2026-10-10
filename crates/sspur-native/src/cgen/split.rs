@@ -111,7 +111,7 @@ struct Item {
     role: Role,
 }
 
-const ATTR: &[&str] = &["__attribute__", "__attribute", "__asm__", "__asm", "asm", "_Alignas", "__typeof__", "typeof", "sizeof"];
+const ATTR: &[&str] = &["__attribute__", "__declspec", "__attribute", "__asm__", "__asm", "asm", "_Alignas", "__typeof__", "typeof", "sizeof"];
 
 fn text<'a>(src: &'a str, t: &T) -> &'a str {
     &src[t.s..t.e]
@@ -600,7 +600,7 @@ mod tests {
             Some((lm, lc, _)) => (lm, lc),
             None => (&m, &check),
         };
-        let (c, plan) = generate(m, check, None, None, true).unwrap();
+        let (c, plan) = generate(m, check, None, None, true, true).unwrap();
         split_units(&c, &plan).into_iter().map(|t| (t.name, t.text)).collect()
     }
 

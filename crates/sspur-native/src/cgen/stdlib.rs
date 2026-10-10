@@ -4,7 +4,10 @@ pub(super) const STD_RT: &str = include_str!("std_rt.c");
 
 pub(super) const STD_CONS: &[&str] = &["#Set", "#Heap", "#StrBuf", "Res", "#Time", "#Duration", "#Bits", "#HashMap", "#HashSet", "#BigInt", "#Dec", "#Regex", "#View"];
 
-fn section(key: &str) -> (Vec<&'static str>, &'static str) {
+fn section(key: &str, win: bool) -> (Vec<&'static str>, &'static str) {
+    if let Some(s) = win.then(|| super::win::section(key)).flatten() {
+        return s;
+    }
     for part in STD_RT.split("//@ ").skip(1) {
         let (head, body) = part.split_once('\n').unwrap_or((part, ""));
         let mut words = head.split_whitespace();
@@ -42,7 +45,7 @@ impl Cx<'_> {
         if !self.helpers_done.insert(format!("std:{key}")) {
             return;
         }
-        let (deps, body) = section(key);
+        let (deps, body) = section(key, self.win);
         for d in deps {
             self.std(d);
         }
@@ -1431,30 +1434,65 @@ impl Cx<'_> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn every_runtime_section_compiles_alone() {
-        if Command::new("clang").arg("--version").output().is_err() {
-            return;
-        }
+    fn section_sources() -> Vec<(&'static str, String)> {
         let keys: Vec<&str> = STD_RT.split("//@ ").skip(1).filter_map(|p| p.split_whitespace().next()).collect();
         assert!(keys.len() >= 10);
         let m = sspur_syntax::parse("").unwrap();
-        for key in keys {
-            let check = CheckOutput::default();
-            let (eligible, alias, fields) = (HashSet::new(), HashMap::new(), HashMap::new());
-            let smt = sspur_smt::Oracle::new(&m, &check);
-            let mut cx = Cx::new(&check, &eligible, &alias, &fields, &smt);
-            cx.std_cty(&Type::con("#StrBuf"), "BU").unwrap();
-            cx.std_cty(&Type::con("#Bits"), "BI").unwrap();
-            cx.std_cty(&Type::con("#BigInt"), "BG").unwrap();
-            cx.std_cty(&Type::con("#Regex"), "RX").unwrap();
-            cx.std(key);
-            let src = format!("{PRELUDE}{}{}", cx.defs, cx.protos);
-            let path = std::env::temp_dir().join(format!("sspur_std_rt_{}_{key}.c", std::process::id()));
-            std::fs::write(&path, &src).unwrap();
-            let out = Command::new("clang").args(["-fsyntax-only", "-Werror=implicit-function-declaration", "-Werror=implicit-int"]).arg(&path).output().unwrap();
-            std::fs::remove_file(&path).ok();
-            assert!(out.status.success(), "section {key}: {}", String::from_utf8_lossy(&out.stderr));
+        keys.into_iter()
+            .map(|key| {
+                let check = CheckOutput::default();
+                let (eligible, alias, fields) = (HashSet::new(), HashMap::new(), HashMap::new());
+                let smt = sspur_smt::Oracle::new(&m, &check);
+                let mut cx = Cx::new(&check, &eligible, &alias, &fields, &smt);
+                cx.win = win::on();
+                cx.std_cty(&Type::con("#StrBuf"), "BU").unwrap();
+                cx.std_cty(&Type::con("#Bits"), "BI").unwrap();
+                cx.std_cty(&Type::con("#BigInt"), "BG").unwrap();
+                cx.std_cty(&Type::con("#Regex"), "RX").unwrap();
+                cx.std(key);
+                let src = format!("{PRELUDE}{}{}", cx.defs, cx.protos);
+                (key, if win::on() { win::adapt(&src) } else { src })
+            })
+            .collect()
+    }
+
+    fn syntax_check(cc: &[&str], key: &str, src: &str) {
+        let tag = &blake3::hash(cc.join(" ").as_bytes()).to_hex()[..8];
+        let path = std::env::temp_dir().join(format!("sspur_std_rt_{}_{tag}_{key}.c", std::process::id()));
+        std::fs::write(&path, src).unwrap();
+        let obj = path.with_extension("obj");
+        let mode: Vec<&std::ffi::OsStr> = if cc[0] == "zig" { vec!["-c".as_ref(), "-o".as_ref(), obj.as_os_str()] } else { vec!["-fsyntax-only".as_ref()] };
+        let out = Command::new(cc[0]).args(&cc[1..]).args(mode).args(["-w", "-Werror=implicit-function-declaration", "-Werror=implicit-int"]).arg(&path).output().unwrap();
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&obj).ok();
+        assert!(out.status.success(), "section {key} ({}): {}", cc.join(" "), String::from_utf8_lossy(&out.stderr));
+    }
+
+    #[test]
+    fn every_runtime_section_compiles_alone() {
+        let cc = flags::cc();
+        if Command::new(&cc).arg("--version").output().is_err() {
+            return;
+        }
+        for (key, src) in section_sources() {
+            syntax_check(&[&cc], key, &src);
+        }
+    }
+
+    #[test]
+    fn every_runtime_section_cross_compiles_for_windows() {
+        let a = win::adapt(PRELUDE);
+        assert!(!a.contains("pthread.h") && !a.contains("sys/mman.h") && a.contains("gc_take_pages0") && a.contains("__declspec(dllexport) void sspur_buf_free"));
+        if cfg!(windows) || Command::new("zig").arg("version").output().is_err() {
+            return;
+        }
+        win::FORCE.with(|f| f.set(true));
+        let srcs = section_sources();
+        win::FORCE.with(|f| f.set(false));
+        for target in ["x86_64-windows-gnu", "aarch64-windows-gnu"] {
+            for (key, src) in &srcs {
+                syntax_check(&["zig", "cc", "-target", target], key, src);
+            }
         }
     }
 }

@@ -1141,7 +1141,7 @@ pub fn shim() -> Result<PathBuf, String> {
     let src = dir.join(format!("sspur_gpu_{}.{uniq}.m", &key[..16]));
     std::fs::write(&src, SHIM_SRC).map_err(|e| e.to_string())?;
     let tmp = lib.with_extension(format!("{uniq}.tmp"));
-    let cc = std::env::var("CC").unwrap_or_else(|_| "clang".into());
+    let cc = super::flags::cc();
     let install = format!("-Wl,-install_name,{}", lib.display());
     let metal = Command::new(&cc).args(["-O2", "-fobjc-arc", "-shared", "-fPIC", "-w", &install, "-framework", "Metal", "-framework", "Foundation", "-o"]).arg(&tmp).arg(&src).output();
     if !metal.as_ref().is_ok_and(|o| o.status.success()) {

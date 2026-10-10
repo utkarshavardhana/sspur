@@ -43,6 +43,11 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
     Ok(e)
 }
 
+enum IfCond {
+    Plain(Expr),
+    Is(Expr, Pat, Option<Expr>),
+}
+
 struct Parser {
     toks: Vec<Token>,
     pos: usize,
@@ -1020,21 +1025,21 @@ impl Parser {
         }
     }
 
-    /// `e is p` or `e is p and guard` after `if` (and the foreign `let p = e`), as the
-    /// scrutinee, pattern and guard; `None` for a plain condition.
-    fn if_cond(&mut self) -> PResult<Result<(Expr, Pat, Option<Expr>), Expr>> {
+    /// The condition after `if`: an expression, or `e is p` / `e is p and guard` (and the
+    /// foreign `let p = e`).
+    fn if_cond(&mut self) -> PResult<IfCond> {
         if matches!(self.peek(), Tok::Ident(w) if w == "let") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Int(_) | Tok::Str(_) | Tok::Kw("true" | "false") | Tok::Sym("(" | "[" | "_" | "-")) {
             self.bump();
             let p = self.pat()?;
             self.expect_sym("=")?;
             let scrut = self.expr()?;
             self.note("if let p = e -> if e is p");
-            return Ok(Ok((scrut, p, None)));
+            return Ok(IfCond::Is(scrut, p, None));
         }
         let save = self.pos;
         let c = self.expr()?;
         if !matches!(self.peek(), Tok::Ident(w) if w == "is") {
-            return Ok(Err(c));
+            return Ok(IfCond::Plain(c));
         }
         let loose = match &c.kind {
             ExprKind::Binary(op, ..) => op.prec() < 4,
@@ -1047,7 +1052,7 @@ impl Parser {
         self.bump();
         let p = self.pat()?;
         let guard = if self.eat_kw("and") { Some(self.expr()?) } else { None };
-        Ok(Ok((c, p, guard)))
+        Ok(IfCond::Is(c, p, guard))
     }
 
     /// Whether the tokens `from..to` are one parenthesized group.
@@ -1094,8 +1099,8 @@ impl Parser {
         self.line_indent = if_indent;
         let span = start.to(self.prev_span());
         Ok(match c {
-            Err(c) => Expr::new(ExprKind::If(Box::new(c), Box::new(t), e), span),
-            Ok((scrut, pat, guard)) => {
+            IfCond::Plain(c) => Expr::new(ExprKind::If(Box::new(c), Box::new(t), e), span),
+            IfCond::Is(scrut, pat, guard) => {
                 let other = e.map_or_else(|| Expr::new(ExprKind::Unit, span), |e| *e);
                 let arms = vec![Arm { pat, guard, body: t }, Arm { pat: Pat::Wild, guard: None, body: other }];
                 Expr::new(ExprKind::Match(Box::new(scrut), arms, MatchForm::IfIs), span)

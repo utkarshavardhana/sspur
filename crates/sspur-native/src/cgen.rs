@@ -4183,7 +4183,7 @@ impl<'a> Cx<'a> {
                     parts.push(if c.is_empty() { "1".to_string() } else { format!("({})", c.join(" && ")) });
                 }
                 conds.push(format!("({})", parts.join(" || ")));
-                binds.extend(temps.into_iter().map(|(n, tmp, bt)| (n, tmp, bt)));
+                binds.extend(temps);
             }
             Pat::List { head, rest, tail } => {
                 let et = elem(t, "List").ok_or("bad list pattern")?;

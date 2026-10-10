@@ -30,7 +30,7 @@ fn side_or_zero(v: F64) -> F64 ! ffi
 fn main() -> Unit ! log, ffi
 = do
   log("dist {dist(0.0, 0.0, 3.0, 4.0)}")
-  log("side {side_or_zero(27.0)} {side_or_zero(-8.0)}")
+  log("side {side_or_zero(27.0).format(".1")} {side_or_zero(-8.0).format(".1")}")
   log("len {name_len("sspur")}")
 
 test dist_345 = dist(0.0, 0.0, 3.0, 4.0) == 5.0

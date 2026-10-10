@@ -140,6 +140,14 @@ const effSrc = 'fn f() -> Unit\n= log("x")\n';
 const em = call("check", effSrc).diags.find((d) => d.code === "E_EFFECT_MISSING");
 const effFixed = em && em.fixes[0] && effSrc.slice(0, em.fixes[0].from) + em.fixes[0].insert + effSrc.slice(em.fixes[0].to);
 same("fix: declare a missing effect", effFixed, 'fn f() -> Unit ! log\n= log("x")\n');
+const fixWith = (src, code) => {
+  const d = call("check", src).diags.find((x) => x.code === code);
+  const f = d && d.fixes[0];
+  return f ? src.slice(0, f.from) + f.insert + src.slice(f.to) : null;
+};
+same("fix: canonical spelling keeps the layout", fixWith('fn g(o: Opt[Int]) -> Int\n= match o\n  | None => 0\n  | some(x) => x\n', "N_FOREIGN"), 'fn g(o: Opt[Int]) -> Int\n= match o\n  | none => 0\n  | some(x) => x\n');
+same("fix: unused effect", fixWith('fn f(x: Int) -> Int ! log, fs\n= x\n', "W_EFFECT_UNUSED"), 'fn f(x: Int) -> Int ! log\n= x\n');
+same("fix: did you mean", fixWith('fn f(x: Int) -> Int\n= lenn(x)\n\nfn len2(x: Int) -> Int\n= x\n', "E_UNKNOWN_NAME"), 'fn f(x: Int) -> Int\n= len2(x)\n\nfn len2(x: Int) -> Int\n= x\n');
 const builtins = call("builtins");
 expect(builtins.globals.length > 50 && builtins.methods.length > 100 && builtins.keywords.includes("match"), "builtins: lists from the checker");
 

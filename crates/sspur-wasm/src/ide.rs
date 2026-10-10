@@ -118,34 +118,24 @@ fn fixes(src: &str, d: &Diag, module: Option<&Module>) -> Vec<Edit> {
     if let Some(m) = module {
         for f in &d.fix {
             if let Some((def, fix)) = sspur_check::fix_of_json(f)
-                && let Some(mut target) = def_named(m, &def).cloned()
-                && sspur_syntax::fixup::apply(&mut target, &fix)
+                && let Some(target) = def_named(m, &def)
             {
                 let title = match f["to"].as_str() {
                     Some(to) => format!("Change to '{to}'"),
                     None => "Rewrite in the canonical form".into(),
                 };
-                out.extend(reprint(src, &target, title));
+                let mut fixed = target.clone();
+                match text_fix(src, target, &fix) {
+                    Some(e) => out.push(Edit { title, ..e }),
+                    None if sspur_syntax::fixup::apply(&mut fixed, &fix) => out.extend(reprint(src, &fixed, title)),
+                    None => {}
+                }
             }
             if f["op"] == "refine"
                 && let (Some(name), Some(effs)) = (f["target"].as_str(), f["contract"]["effects"].as_array())
                 && let Some(Def::Fn(fd)) = def_named(m, name)
             {
-                let mut fd = fd.clone();
-                let mut title = String::new();
-                for e in effs.iter().filter_map(J::as_str) {
-                    if let Some(atom) = e.strip_prefix('+') {
-                        let Some(eff) = parse_effect(atom) else { continue };
-                        fd.effects.push(eff);
-                        title = format!("Declare '{atom}' on {name}");
-                    } else if let Some(atom) = e.strip_prefix('-') {
-                        fd.effects.retain(|x| printer::effect(x) != atom);
-                        title = format!("Remove '{atom}' from {name}");
-                    }
-                }
-                if !title.is_empty() {
-                    out.extend(reprint(src, &Def::Fn(fd), title));
-                }
+                out.extend(effect_fix(src, fd, effs));
             }
         }
     }
@@ -195,6 +185,86 @@ fn fixes(src: &str, d: &Diag, module: Option<&Module>) -> Vec<Edit> {
         }
     }
     out
+}
+
+/// A normalization as a text edit inside its definition, so the rest of the layout stays.
+fn text_fix(src: &str, def: &Def, fix: &sspur_syntax::fixup::Fix) -> Option<Edit> {
+    use sspur_syntax::fixup::Fix;
+    let word = |text: &str| text.bytes().rev().take_while(|c| is_ident(*c)).count();
+    match fix {
+        Fix::Name { span, to } | Fix::Method { span, to } => {
+            let (a, b) = (span.start as usize, span.end as usize);
+            let k = word(src.get(a..b)?);
+            (k > 0).then(|| Edit { title: String::new(), from: b - k, to: b, insert: to.clone() })
+        }
+        Fix::PatCtor { from, to } => {
+            let (a, b) = (def.span().start as usize, (def.span().end as usize).min(src.len()));
+            let text = src.get(a..b)?;
+            let mut out = String::new();
+            for line in text.split_inclusive('\n') {
+                if line.trim_start().starts_with('|') {
+                    match line.split_once("=>") {
+                        Some((p, r)) => out.push_str(&format!("{}=>{r}", replace_word(p, from, to))),
+                        None => out.push_str(&replace_word(line, from, to)),
+                    }
+                } else if let Some(i) = line.find(" is ") {
+                    let j = line[i..].find(" then").map_or(line.len(), |j| i + j);
+                    out.push_str(&format!("{}{}{}", &line[..i], replace_word(&line[i..j], from, to), &line[j..]));
+                } else {
+                    out.push_str(line);
+                }
+            }
+            (out != text).then(|| Edit { title: String::new(), from: a, to: b, insert: out })
+        }
+        _ => None,
+    }
+}
+
+fn replace_word(s: &str, from: &str, to: &str) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    let b = s.as_bytes();
+    while let Some(k) = s[i..].find(from) {
+        let at = i + k;
+        let end = at + from.len();
+        let left = at == 0 || !is_ident(b[at - 1]);
+        let right = end >= b.len() || !is_ident(b[end]);
+        out.push_str(&s[i..at]);
+        out.push_str(if left && right { to } else { from });
+        i = end;
+    }
+    out.push_str(&s[i..]);
+    out
+}
+
+/// Adds or removes effects in the signature's row, leaving the body as written.
+fn effect_fix(src: &str, fd: &FnDef, effs: &[J]) -> Option<Edit> {
+    let mut f = fd.clone();
+    let mut title = String::new();
+    for e in effs.iter().filter_map(J::as_str) {
+        if let Some(atom) = e.strip_prefix('+') {
+            f.effects.push(parse_effect(atom)?);
+            title = format!("Declare '{atom}' on {}", fd.name);
+        } else if let Some(atom) = e.strip_prefix('-') {
+            f.effects.retain(|x| printer::effect(x) != atom);
+            title = format!("Remove '{atom}' from {}", fd.name);
+        }
+    }
+    if title.is_empty() {
+        return None;
+    }
+    let (a, b) = (fd.sig_span.start as usize, (fd.sig_span.end as usize).min(src.len()));
+    let sig = src.get(a..b)?;
+    if fd.kernel.is_none() && fd.ext.is_none() {
+        let row = |es: &[sspur_syntax::Effect]| if es.is_empty() { String::new() } else { format!(" ! {}", printer::effects(es)) };
+        let old = row(&fd.effects);
+        if sig.ends_with(&old) {
+            return Some(Edit { title, from: b - old.len(), to: b, insert: row(&f.effects) });
+        }
+    }
+    let new = printer::print_sig(&f);
+    let at = sig.find(new.split('(').next().unwrap_or(""))?;
+    Some(Edit { title, from: a + at, to: b, insert: new })
 }
 
 fn parse_effect(atom: &str) -> Option<sspur_syntax::Effect> {

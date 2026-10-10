@@ -1,2 +1,0 @@
-#vzl3pvub2tbv  2026-10-03T08:41:16Z  edit    [~CfgErr +bool_bad +bool_default +bool_digits +bool_no +bool_yes +comments +first_eq_only +get_bool +get_int ~get_str +int_bad +int_bad_dash +int_missing +int_ok +is_int_text +keys_distinct +last_wins ~lookup ~lookup_host ~main ~missing ~parse ~parse_line ~parse_sample +skip_bad +trim_entries]
-#pealubsatyxi  2026-10-03T08:38:31Z  import  import start.ssp  [+CfgErr +Entry +get_str +keys +lookup +lookup_host +main +missing +parse +parse_line +parse_sample +sample_text]

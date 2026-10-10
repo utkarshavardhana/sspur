@@ -1,3 +1,0 @@
-test lookup_hit = lookup(put(new_cache(2), "a", 1), "a").0 == some(1)
-
-test lookup_miss = get_or(new_cache(2), "z", -1).0 == -1

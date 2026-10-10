@@ -1,2 +1,0 @@
-#6c7jp7ye6mdo  2026-10-09T17:24:37Z  edit    [~LedgerErr ~add_txn ~bank +dup +few +hist +hist_none +history ~main +order_unknown_before_unbalanced +overdrawn +overdrawn_after_dup +reverse +reverse_dup +reverse_ok +reverse_overdrawn +reverse_unknown ~sample ~trial_balance +trial_nonzero_sorted ~trial_sums_to_zero +tx +unbalanced ~unknown]
-#welqxjp3ezm3  2026-10-09T09:40:09Z  import  import start.ssp  [+Ledger +LedgerErr +Posting +Txn +add_txn +balance +bank +chart +main +new_ledger +p +sample +trial_balance +trial_sums_to_zero +unknown]

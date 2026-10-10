@@ -76,7 +76,7 @@ Hidden tests (`tasks/<id>/hidden.ssp`, `hidden.py`, `ts/hidden.test.ts`, `go/hid
   - Python: the agent edits `app.py` with any tool and runs pytest. Python 3.9.
   - TypeScript (run 9 on, `setup.py --langs=sspur,ts,go`): the agent edits `app.ts` and `app.test.ts` with any tool and runs `npx tsc && node --test --test-reporter=dot dist/`. Node 20.20, TypeScript 5.9 in `bench/agent/xlang/node_modules` (symlinked into each work directory), `strict: true`.
   - Go (run 9 on): the agent edits `app.go` and `app_test.go` with any tool and runs `go test`. Go 1.27, one `package main` per work directory, `GOPROXY=off`.
-- All get the same task text and the same per-language interface line (exact names and signatures the hidden tests call). `prompts.json` in the run directory has every prompt.
+- All get the same task text and the same per-language interface line (exact names and signatures the hidden tests call). `setup.py` regenerates every prompt (`prompts.json` in the work directory). Each run directory keeps only its summary: `tokens.json`, the scores files, `excluded.txt` and `agents.json` where present; prompt dumps, transcripts and final codebases are not kept.
 - Each (language, task) pair was solved by one fresh Claude Code `general-purpose` subagent on `claude-sonnet-5-5`, with no retries and no help. Runs 1 to 3 launched all 16 in parallel; run 4 ran them one at a time (a memory limit on the host).
 - Compiler binary frozen before each run: `60d188d` (run 1), `34fddc3` (run 2), `9efe082` (run 3), `a8a9de4` (run 4). Run 4's spec fixes were rebuilt from `86d3611` (8 tasks) and `69e0d69` (a9); only `docs/agent-spec.md`, which the binary embeds, changed.
 - Run 4 differences in the setup, all outside the language: `setup.py --tmo` runs `./sspur` (a wrapper script instead of a symlink) and pytest under a 300 s timeout, which adds a short clause to each prompt. The subagents inherited a worktree sandbox that refused the Edit and Write tools outside the repository checkout, so the work directories were untracked directories inside it instead of `/tmp`; every transcript was checked, and no agent touched a path outside its own directory. Subagents now finish with a hand-back tool call inside their last API call, which adds no calls. A no-op subagent now reads 26,090 tokens; `net` keeps the old 25,750 so it stays comparable.
@@ -112,7 +112,7 @@ Run 10 left SSPUR at 1.06x TypeScript's and 0.96x Go's tokens, with medians of 1
 
 ### Setup
 
-- Run: `runs/2026-10-09-r11/`, compiler frozen at `ef439aa` (`target/sspur-frozen-ef439aa`), `--tmo` prompts as in `prompts-a.json`, `prompts-b.json` and `prompts-s.json`, one fresh Sonnet 5.5 `general-purpose` subagent per cell, strictly one at a time, no retries. All 17 SSPUR cells are new; nothing in the spec, the prompt or the binary changed between the first counted cell and the last.
+- Run: `runs/2026-10-09-r11/`, compiler frozen at `ef439aa` (`target/sspur-frozen-ef439aa`), `--tmo` prompts (`setup.py` defaults), one fresh Sonnet 5.5 `general-purpose` subagent per cell, strictly one at a time, no retries. All 17 SSPUR cells are new; nothing in the spec, the prompt or the binary changed between the first counted cell and the last.
 - Python, TypeScript and Go cells are run 9's, unchanged. `xlang/report5.py runs/2026-10-09-r11` prints the table (its column header still says run 10).
 - Exclusions: b6_adventure was aborted by the API three times with "Output blocked by content filtering policy" right after `sspur start`, before any edit (the store had only its import commit each time); the fourth attempt in the same directory is the one counted. Run 5 and run 9 hit the same failure on the same cell. `excluded.txt` lists the three.
 
@@ -811,7 +811,7 @@ Runs: `runs/2026-10-04-sonnet-a9-new/` (spec at `86d3611`) and `runs/2026-10-04-
 
 ## Results, run 3
 
-Run: `runs/2026-10-03-sonnet-edit-v2/` (final code, store logs, `scores.json`, `tokens.json`, prompts).
+Run: `runs/2026-10-03-sonnet-edit-v2/` (`scores.json`, `tokens.json`).
 
 | Task | Hidden tests SSPUR / Py | API calls SSPUR / Py | Total tokens SSPUR | Total tokens Py | SSPUR / Py | Net of fixed overhead SSPUR / Py | Tool I/O SSPUR / Py |
 |---|---|---|---|---|---|---|---|
@@ -859,7 +859,7 @@ Median per task 1.07x. The gap to run 3 is almost entirely the heredoc refusals:
 
 ## Results, run 1
 
-Run: `runs/2026-10-03-sonnet/` (final code, store logs, `scores.json`, `tokens.json`, prompts).
+Run: `runs/2026-10-03-sonnet/` (`scores.json`, `tokens.json`).
 
 | Task | Hidden tests SSPUR / Py | API calls SSPUR / Py | Total tokens SSPUR | Total tokens Py | SSPUR / Py | Net of fixed overhead SSPUR / Py | Tool I/O SSPUR / Py |
 |---|---|---|---|---|---|---|---|

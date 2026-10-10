@@ -1,3 +1,0 @@
-test run_skew = catch run_requests(new_window(3, 10), [10, 4]) == []
-  | ClockSkew{last, now} => last == 10 and now == 4
-  | _ => false

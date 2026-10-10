@@ -1,3 +1,0 @@
-#wowrsksmp4be  2026-10-09T06:24:35Z  edit    [~reverse_overdrawn]
-#p3pt3iq5kzdj  2026-10-09T06:24:24Z  edit    [~LedgerErr ~add_txn ~bank +duplicate +history +history_bank +history_none ~main +order_unknown_before_unbalanced +overdrawn +reverse +reverse_memo_and_zero +reverse_ok +reverse_overdrawn +reverse_unknown ~sample +too_few ~trial_balance +trial_nonzero_sorted ~trial_sums_to_zero +unbalanced ~unknown]
-#welqxjp3ezm3  2026-10-09T04:27:19Z  import  import start.ssp  [+Ledger +LedgerErr +Posting +Txn +add_txn +balance +bank +chart +main +new_ledger +p +sample +trial_balance +trial_sums_to_zero +unknown]

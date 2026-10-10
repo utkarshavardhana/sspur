@@ -1,2 +1,0 @@
-#hyhtzahvudvn  2026-10-04T17:37:24Z  edit    [~CalcErr ~Expr +collect_vars ~eval ~main ~run +run_div +run_divzero ~run_ok +run_sub ~run_unbound ~show ~simplify +simplify_children ~simplify_ok +simplify_sub_div +var_names +var_names_none +var_names_order]
-#4rc5vf7pjyx6  2026-10-04T17:25:06Z  import  import start.ssp  [+CalcErr +Expr +eval +lookup +main +run +run_ok +run_unbound +show +simplify +simplify_ok]

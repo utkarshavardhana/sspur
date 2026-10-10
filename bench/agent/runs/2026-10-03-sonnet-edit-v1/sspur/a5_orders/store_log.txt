@@ -1,2 +1,0 @@
-#ohfapnl4wrgg  2026-10-03T08:40:51Z  edit    [+big20_high +big20_low +big_order +discount +freeship subtotal->gross subtotal_sample->gross_sample ~invoice +invoice_big ~invoice_sample ~main +net +other_coupon +save10 ~shipping ~tax ~total ~total_sample]
-#zxleddjgor6a  2026-10-03T08:38:31Z  import  import start.ssp  [+Line +Order +invoice +invoice_sample +main +money +money_pad +pad2 +sample_order +shipping +subtotal +subtotal_sample +tax +total +total_sample]

@@ -1,6 +1,0 @@
-fn require_passes(j: J, paths: List[Str]) -> Bool ! fail[ConfigErr]
-= do
-  require(j, paths)
-  true
-
-test require_ok = catch require_passes(defaults(), ["name", "db.pool"]) | MissingKey{path} => false

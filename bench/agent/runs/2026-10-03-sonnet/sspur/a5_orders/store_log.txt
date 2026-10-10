@@ -1,2 +1,0 @@
-#ep3bgmuw6ce6  2026-10-03T08:06:54Z  a1  gross rename, coupons  [+big20_low_test +big20_test +big_order +discount +freeship_test subtotal->gross subtotal_sample->gross_sample ~invoice +invoice_coupon_test ~invoice_sample ~main +net +other_coupon_test +save10_test ~shipping ~tax ~total ~total_sample]
-#zxleddjgor6a  2026-10-03T08:03:34Z  import  import start.ssp  [+Line +Order +invoice +invoice_sample +main +money +money_pad +pad2 +sample_order +shipping +subtotal +subtotal_sample +tax +total +total_sample]

@@ -1,2 +1,0 @@
-test leftassoc = catch calc("100 / 5 / 2 - 2 - 1") == 7
-| _ => false

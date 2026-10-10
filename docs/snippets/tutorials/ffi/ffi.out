@@ -23,7 +23,7 @@ export  geo_name_len
 export  geo_has_home
 export  geo_side_or_zero
 export  geo_main
-wrote libgeo.a and libgeo.h; link with -L. -lgeo -lm
+...
 $ cat libgeo.h
 ...
 int32_t geo_dist(double x1, double y1, double x2, double y2, double* out);

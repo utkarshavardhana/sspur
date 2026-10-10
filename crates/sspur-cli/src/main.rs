@@ -693,15 +693,14 @@ fn export_c(l: &Loaded, label: &str, args: &Args) -> ExitCode {
         println!("skip    {f}  ({why})");
     }
     let dir = std::path::Path::new(&out).parent().map(|p| p.display().to_string()).filter(|p| !p.is_empty()).unwrap_or_else(|| ".".into());
-    let mut link = format!("-L{dir} -l{}", base.strip_prefix("lib").unwrap_or(&base));
-    for a in &ex.links {
-        link.push(' ');
-        link.push_str(a);
+    let mut flags = vec![format!("-L{dir}"), format!("-l{}", base.strip_prefix("lib").unwrap_or(&base))];
+    let sys: &[&str] = if cfg!(target_os = "linux") { &["-lm", "-lpthread"] } else { &[] };
+    for a in ex.links.iter().map(String::as_str).chain(sys.iter().copied()) {
+        if !flags.iter().any(|f| f == a) {
+            flags.push(a.to_string());
+        }
     }
-    if cfg!(target_os = "linux") {
-        link.push_str(" -lpthread -lm");
-    }
-    println!("wrote {lib} and {header}; link with {link}");
+    println!("wrote {lib} and {header}; link with {}", flags.join(" "));
     ExitCode::SUCCESS
 }
 

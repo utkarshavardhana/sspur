@@ -46,6 +46,8 @@ Native code calls C directly, and so does the interpreter, through `dlsym`, so t
 {{#include ../snippets/tutorials/ffi/ffi.out:export}}
 ```
 
+The last line it prints is the linker flags for your platform: `-L. -lgeo -lm` on macOS, `-L. -lgeo -lm -lpthread` on Linux.
+
 Each function returns 0, or `GEO_RAISED` (100) for an unhandled error, or a trap code, and writes its result through the last pointer. `geo_last_error()` describes the failure, and `geo_free` releases returned strings:
 
 ```c

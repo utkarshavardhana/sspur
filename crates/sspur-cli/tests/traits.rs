@@ -31,17 +31,14 @@ fn builtin_operators_keep_their_traps_through_bounds() {
 fn trait_programs_are_identical_in_both_tiers_and_specialized_per_type() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs");
     let d = dir("tiers");
-    for name in ["traits"] {
-        let p = root.join(format!("{name}.ssp"));
-        let p = p.to_str().unwrap();
-        let (i, ok) = sspur(&d, &["test", "--interp", p]);
-        assert!(ok && i.ends_with(" passed, 0 failed"), "{name}: {i}");
-        assert_eq!(sspur(&d, &["test", "--strict-native", p]).0, i, "{name}");
-        assert_eq!(sspur(&d, &["test", "--strict-native", "--O3", p]).0, i, "{name} --O3");
-        let (n, ok) = sspur(&d, &["native", "--release", "--strict-native", p]);
-        assert!(ok && !n.contains("interp  "), "{name}: {n}");
-    }
-    let n = sspur(&d, &["native", "--release", root.join("traits.ssp").to_str().unwrap()]).0;
+    let path = root.join("traits.ssp");
+    let p = path.to_str().unwrap();
+    let (i, ok) = sspur(&d, &["test", "--interp", p]);
+    assert!(ok && i.ends_with(" passed, 0 failed"), "{i}");
+    assert_eq!(sspur(&d, &["test", "--strict-native", p]).0, i);
+    assert_eq!(sspur(&d, &["test", "--strict-native", "--O3", p]).0, i, "--O3");
+    let (n, ok) = sspur(&d, &["native", "--release", "--strict-native", p]);
+    assert!(ok && !n.contains("interp  "), "{n}");
     for f in ["max_of__Int", "max_of__Str", "best__Player", "best__Team", "score__Player"] {
         assert!(n.lines().any(|l| l == format!("native  {f}")), "{f} missing:\n{n}");
     }

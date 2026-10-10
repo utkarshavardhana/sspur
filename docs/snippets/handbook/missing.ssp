@@ -1,0 +1,12 @@
+type Shape = Circle{r: F64} | Rect{w: F64, h: F64} | Dot
+
+fn area(s: Shape) -> F64
+= match s
+  | Circle{r} => 3.14 * r * r
+  | Rect{w, h} => w * h
+
+type Zone = Local | Remote
+
+rule fee(kg: Int, zone: Zone) -> Int
+  | kg <= 5, Local => 5
+  | kg > 5, _ => 12

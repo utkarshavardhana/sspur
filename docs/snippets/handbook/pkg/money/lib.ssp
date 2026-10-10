@@ -1,6 +1,9 @@
 // Amounts are in cents. Only `pub` definitions are visible to other packages.
 
-pub type Money = {cents: Int}
+pub type Money = {cents: Int} derive Eq, Ord, Show
+
+pub impl Add for Money
+  fn add(a: Money, b: Money) -> Money = Money{cents: a.cents + b.cents}
 
 pub type MoneyErr = Negative{cents: Int}
 

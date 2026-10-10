@@ -1,0 +1,45 @@
+# Packages
+
+A package is a directory with an `sspur.toml`. This page builds two: a library, `money`, and an app, `shop`, that depends on it.
+
+## A library
+
+```toml
+{{#include ../snippets/handbook/pkg/money/sspur.toml}}
+```
+
+```sspur
+{{#include ../snippets/handbook/pkg/money/lib.ssp}}
+```
+
+`pub` exports a definition. A `pub` sum type exports its variants, a `pub` trait its methods, and `pub impl` makes an impl visible to packages that use the type. Everything else is private to the package.
+
+## An app that uses it
+
+```toml
+{{#include ../snippets/handbook/pkg/shop/sspur.toml}}
+```
+
+```sspur
+{{#include ../snippets/handbook/pkg/shop/main.ssp}}
+```
+
+`use money.{Money, fmt}` imports two names. Everything else is written with the package name: `money.cents`, `money.Negative{cents}`. A dependency's effects are part of its signatures, so calling `money.cents` means handling `fail[money.MoneyErr]` or declaring it. `Money`'s `+` works here because the library made its impl `pub`.
+
+## Adding the dependency
+
+```console
+{{#include ../snippets/handbook/pkg.out:add}}
+```
+
+```console
+{{#include ../snippets/handbook/pkg.out:toml}}
+```
+
+```console
+{{#include ../snippets/handbook/pkg.out:run}}
+```
+
+`sspur add` writes the dependency to `sspur.toml` and pins it in `sspur.lock` by the hash of its exports, so your build doesn't change until you run `sspur deps update`. That command prints a semantic diff of each changed export (`~ money.fmt  effects: + log`, `~ money.cents  contracts: + pre n > 0`) and refuses the upgrade if your code no longer checks. A dependency can also be a git URL with a tag: `sspur add https://example.com/money.git@v0.1.0`.
+
+The manifest and lock formats are on the [sspur.toml](../config/sspur-toml.md) and [sspur.lock](../config/sspur-lock.md) pages. That is the end of the handbook. The [tutorials](../tutorials/index.md) build real programs with what it covered, and the [cheat sheet](../cheat-sheet.md) fits the syntax on one page.

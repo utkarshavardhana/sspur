@@ -1,0 +1,12 @@
+// ANCHOR: run
+$ sspur run errors.ssp
+reserved, 3 left
+only 5 left
+no such item: cap
+checkout failed on ink
+true 0
+// ANCHOR_END: run
+$ sspur test errors.ssp
+1 passed, 0 failed
+$ sspur test generators.ssp
+2 passed, 0 failed

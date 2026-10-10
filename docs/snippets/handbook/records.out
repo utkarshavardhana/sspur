@@ -1,0 +1,8 @@
+$ sspur test records.ssp
+3 passed, 0 failed
+// ANCHOR: run
+$ sspur run records.ssp
+Rect{w: 1.0, h: 2.0}
+Suspended{reason: "late fees"}
+Pair{first: 1, second: [true]}
+// ANCHOR_END: run

@@ -1,0 +1,5 @@
+$ sspur run collections.ssp
+ana: 1000
+bo: 900
+$ sspur test collections.ssp
+4 passed, 0 failed

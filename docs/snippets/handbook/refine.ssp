@@ -1,0 +1,7 @@
+type Percent = Int where _ >= 0 and _ <= 100
+
+fn discount(price: Int where _ >= 0, pct: Percent) -> Int
+= price - price * pct / 100
+
+fn main() -> Unit ! log
+= log("{discount(200, 120)}")

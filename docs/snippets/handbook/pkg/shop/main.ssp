@@ -11,3 +11,4 @@ fn main() -> Unit ! log
 
 test shows_dollars = price(250) == "$2.50"
 test rejects_negative = price(-1) == "invalid: -1"
+test adds = Money{cents: 150} + Money{cents: 250} == Money{cents: 400}

@@ -1,0 +1,7 @@
+type Point = {x: Int, y: Int}
+
+fn largest[T: Ord + Show](xs: List[T]) -> Str
+= xs.sort.last.map(_.show).or("empty")
+
+fn main() -> Unit ! log
+= log(largest([Point{x: 1, y: 2}]))

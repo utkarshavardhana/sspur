@@ -1,0 +1,7 @@
+$ sspur test concurrency.ssp
+3 passed, 0 failed
+// ANCHOR: race
+$ sspur check race.ssp
+race.ssp:5:5 E_PAR_RACE task assigns 'hits', which is declared outside the task; tasks run concurrently, so this is a data race
+  hint: return the value from the task, or use an Atomic[Int] or a Chan
+// ANCHOR_END: race

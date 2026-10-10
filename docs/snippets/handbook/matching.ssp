@@ -1,0 +1,41 @@
+type Shape = Circle{r: F64} | Rect{w: F64, h: F64} | Dot
+
+// ANCHOR: guards
+fn label(s: Shape) -> Str
+= match s
+  | Circle{r} if r > 10.0 => "big circle"
+  | Circle => "circle"
+  | Rect{w, h} if w == h => "square"
+  | Rect{w: width} => "rect {width} wide"
+  | Dot => "dot"
+// ANCHOR_END: guards
+
+// ANCHOR: values
+fn fizz(n: Int) -> Str
+= match (n % 3, n % 5)
+  | (0, 0) => "FizzBuzz"
+  | (0, _) => "Fizz"
+  | (_, 0) => "Buzz"
+  | _ => n.str
+
+fn parse_port(s: Str) -> Str
+= match s.to_int
+  | some(p) if p > 0 and p < 65536 => "port {p}"
+  | some(p) => "{p} is out of range"
+  | none => "not a number"
+// ANCHOR_END: values
+
+// ANCHOR: rule
+type Zone = Local | Remote
+
+rule fee(kg: Int, zone: Zone, prime: Bool) -> Int
+  | kg <= 1, _, true => 0
+  | kg <= 5, Local, _ => 5
+  | _, Remote, _ => 12
+  | _, _, _ => 8
+// ANCHOR_END: rule
+
+test labels = label(Circle{r: 20.0}) == "big circle" and label(Rect{w: 2.0, h: 2.0}) == "square" and label(Rect{w: 3.0, h: 1.0}) == "rect 3.0 wide"
+test fizzbuzz = (1..16).map(fizz).take(5) == ["1", "2", "Fizz", "4", "Buzz"] and fizz(15) == "FizzBuzz"
+test ports = parse_port("8080") == "port 8080" and parse_port("0") == "0 is out of range" and parse_port("x") == "not a number"
+test fees = fee(1, Remote, true) == 0 and fee(3, Local, false) == 5 and fee(9, Local, true) == 8

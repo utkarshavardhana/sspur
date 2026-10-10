@@ -1,0 +1,6 @@
+$ sspur test types.ssp
+7 passed, 0 failed
+// ANCHOR: refine
+$ sspur run refine.ssp
+runtime error: contract violated: type Percent in parameter 'pct' of discount where _ >= 0 and _ <= 100 (value = 120)
+// ANCHOR_END: refine

@@ -1,0 +1,39 @@
+// ANCHOR: prim
+fn describe(n: Int, ratio: F64, ok: Bool, label: Str) -> Str
+= "{label}: {n} items, {(ratio * 100.0).round}% done, ok={ok}"
+
+test prim = describe(3, 0.25, true, "build") == "build: 3 items, 25% done, ok=true"
+test convert = 3.to_f64 / 2.0 == 1.5 and 2.7.floor == 2 and "42".to_int == some(42)
+// ANCHOR_END: prim
+
+// ANCHOR: list
+test lists = do
+  xs = [3, 1, 2]
+  xs.len == 3 and xs.sort == [1, 2, 3] and xs.push(4) == [3, 1, 2, 4] and xs[0] == 3
+
+test tuples = do
+  pair = ("pen", 3)
+  (name, qty) = pair
+  pair.0 == "pen" and name.len == qty
+// ANCHOR_END: list
+
+// ANCHOR: opt
+fn first_even(xs: List[Int]) -> Opt[Int]
+= xs.find(_ % 2 == 0)
+
+test opt = first_even([1, 4, 6]) == some(4) and first_even([1, 3]) == none and first_even([]).or(0) == 0
+test res = json.decode[Int]("12") == ok(12) and json.decode[Int]("twelve").is_err
+// ANCHOR_END: opt
+
+// ANCHOR: alias
+type Percent = Int where _ >= 0 and _ <= 100
+type Sku = new Str
+
+fn discount(price: Int where _ >= 0, pct: Percent) -> Int
+= price - price * pct / 100
+
+fn sku_label(s: Sku) -> Str
+= "SKU-{s.raw}"
+
+test alias = discount(200, 25) == 150 and sku_label(Sku("a7")) == "SKU-a7"
+// ANCHOR_END: alias

@@ -1,0 +1,2 @@
+fn half(n: Int) -> F64
+= n / 2.0

@@ -1,0 +1,32 @@
+// ANCHOR: gen
+fn evens(limit: Int) -> Unit ! yield[Int]
+= do
+  for i in 0..limit
+    if i % 2 == 0 then yield(i)
+
+fn sum_evens(limit: Int) -> Int
+= do
+  var s = 0
+  for x in evens(limit)
+    s := s + x
+  s
+// ANCHOR_END: gen
+
+// ANCHOR: logs
+fn noisy(n: Int) -> Int ! log
+= do
+  log("doubling {n}")
+  n * 2
+
+fn quiet(n: Int) -> (Int, List[Str])
+= do
+  var lines = []
+  r = handle noisy(n)
+    | log(m) => do
+      lines := lines.push(m)
+      resume()
+  (r, lines)
+// ANCHOR_END: logs
+
+test gen = sum_evens(10) == 20
+test logs = quiet(4) == (8, ["doubling 4"])

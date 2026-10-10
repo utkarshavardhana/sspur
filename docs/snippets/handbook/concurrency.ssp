@@ -1,0 +1,41 @@
+// ANCHOR: par
+fn slow_square(n: Int) -> Int
+= (0..n).map(i => n).sum
+
+fn both() -> (Int, Int)
+= par(slow_square(300), slow_square(400))
+// ANCHOR_END: par
+
+// ANCHOR: atomic
+fn count_multiples(n: Int, k: Int) -> Int ! conc
+= do
+  hits = atomic(0)
+  for w in par(0..4)
+    hits.add((w * n / 4..(w + 1) * n / 4).filter(_ % k == 0).len)
+  hits.load
+// ANCHOR_END: atomic
+
+// ANCHOR: chan
+fn produce(out: Chan[Int], n: Int) -> Unit ! conc
+= do
+  for i in 1..n + 1
+    out.send(i)
+  out.close
+
+fn consume(c: Chan[Int]) -> Int ! conc
+= do
+  var s = 0
+  for x in c
+    s := s + x
+  s
+
+fn pipeline(n: Int) -> Int ! conc
+= do
+  c = chan()
+  (_, total) = par(produce(c, n), consume(c))
+  total
+// ANCHOR_END: chan
+
+test par_tuple = both() == (90000, 160000)
+test atomics = count_multiples(100, 7) == 15
+test channels = pipeline(10) == 55

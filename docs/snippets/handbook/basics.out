@@ -1,0 +1,15 @@
+// ANCHOR: run
+$ sspur run basics.ssp
+1. SSPUR checks types
+2. SSPUR checks effects
+3. SSPUR checks contracts
+good morning
+$ sspur test basics.ssp
+3 passed, 0 failed
+// ANCHOR_END: run
+// ANCHOR: check
+$ sspur check mixed.ssp
+mixed.ssp:2:7 E_TYPE_MISMATCH expected Int, found F64
+mixed.ssp:2:3 E_TYPE_MISMATCH expected F64, found Int
+  hint: convert with '.to_f64'
+// ANCHOR_END: check

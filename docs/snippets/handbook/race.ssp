@@ -1,0 +1,6 @@
+fn count_multiples(n: Int, k: Int) -> Int
+= do
+  var hits = 0
+  for w in par(0..4)
+    hits := hits + (w * n / 4..(w + 1) * n / 4).filter(_ % k == 0).len
+  hits

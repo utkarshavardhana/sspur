@@ -1,0 +1,48 @@
+// ANCHOR: generic
+fn last_or[T](xs: List[T], fallback: T) -> T
+= xs.last.or(fallback)
+
+test generic = last_or([1, 2], 0) == 2 and last_or([], "none") == "none"
+// ANCHOR_END: generic
+
+// ANCHOR: trait
+trait Shape
+  fn area(s: Self) -> F64
+  fn name(s: Self) -> Str = "shape"
+  fn describe(s: Self) -> Str = "{s.name} with area {s.area}"
+
+type Circle = {r: F64}
+type Square = {side: F64}
+
+impl Shape for Circle
+  fn area(c: Circle) -> F64 = 3.0 * c.r * c.r
+  fn name(c: Circle) -> Str = "circle"
+
+impl Shape for Square
+  fn area(s: Square) -> F64 = s.side * s.side
+
+test traits = Circle{r: 1.0}.describe == "circle with area 3.0" and Square{side: 2.0}.describe == "shape with area 4.0"
+// ANCHOR_END: trait
+
+// ANCHOR: bound
+fn total_area[T: Shape](xs: List[T]) -> F64
+= xs.map(area).sum
+
+fn largest[T: Ord + Show](xs: List[T]) -> Str
+= xs.sort.last.map(_.show).or("empty")
+
+test bounds = total_area([Square{side: 1.0}, Square{side: 2.0}]) == 5.0 and largest([3, 9, 4]) == "9"
+// ANCHOR_END: bound
+
+// ANCHOR: ops
+type Money = {cents: Int} derive Eq, Ord, Show
+
+impl Add for Money
+  fn add(a: Money, b: Money) -> Money = Money{cents: a.cents + b.cents}
+
+type Version = {major: Int, minor: Int} derive Eq, Ord, Show
+
+test ops = Money{cents: 150} + Money{cents: 75} == Money{cents: 225} and Money{cents: 1} < Money{cents: 2}
+test derived = [Version{major: 1, minor: 9}, Version{major: 1, minor: 10}].sort.last == some(Version{major: 1, minor: 10})
+test shown = largest([Version{major: 2, minor: 0}, Version{major: 1, minor: 5}]) == "Version{major: 2, minor: 0}"
+// ANCHOR_END: ops

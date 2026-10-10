@@ -1,0 +1,9 @@
+$ sspur test traits.ssp
+6 passed, 0 failed
+// ANCHOR: missing
+$ sspur check unbounded.ssp
+unbounded.ssp:7:7 E_TRAIT_MISSING largest needs T: Ord, but Point does not implement Ord
+  hint: add 'derive Ord' to type Point, or write 'impl Ord for Point'
+unbounded.ssp:7:7 E_TRAIT_MISSING largest needs T: Show, but Point does not implement Show
+  hint: add 'derive Show' to type Point, or write 'impl Show for Point'
+// ANCHOR_END: missing

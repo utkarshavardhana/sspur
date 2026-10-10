@@ -1,3 +1,5 @@
+// ownership
+
 type Tree = Leaf | Node{left: Tree, value: Int, right: Tree}
 type Q = E | N{l: Tree, k: Int}
 

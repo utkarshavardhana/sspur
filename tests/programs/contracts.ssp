@@ -1,3 +1,5 @@
+// contracts
+
 type Percent = Int where _ >= 0 and _ <= 100
 type Range = {lo: Int where _ >= 0, hi: Int where _ >= 0}
 

@@ -73,7 +73,7 @@ fn pgo_and_lto_builds_give_identical_output() {
     assert!(ok, "{err}");
     assert_eq!(got, want);
     assert!(!err.contains("training run"), "the profile is reused: {err}");
-    let (got, err, ok) = sspur(&["test", "--pgo", "--retrain", "tests/programs/simd.ssp"], &d);
+    let (got, err, ok) = sspur(&["test", "--pgo", "--retrain", "tests/programs/pipelines.ssp"], &d);
     assert!(ok, "{got}{err}");
     let _ = std::fs::remove_dir_all(&d);
 }

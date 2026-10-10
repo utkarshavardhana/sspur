@@ -140,7 +140,7 @@ fn spec_runs_queries_after_the_spec() {
 #[test]
 fn explain_opt_lists_proven_rewrites() {
     let d = fresh("explain");
-    let prog = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/rewrites.ssp");
+    let prog = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/pipelines.ssp");
     let (out, ok) = sspur(&d, &["explain-opt", prog.to_str().unwrap()], "");
     assert!(ok, "{out}");
     for want in ["proof: intervals: condition 'n < 0' is always false", "spread  map-map", "total  loop-fusion", "sum_sq  inline", "scaled  fold"] {

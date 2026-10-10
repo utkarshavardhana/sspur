@@ -1,3 +1,5 @@
+// std_collections
+
 type Edge = {to: Int, w: Int}
 
 fn dijkstra(adj: Map[Int, List[Edge]], src: Int) -> Map[Int, Int] ! div
@@ -106,3 +108,358 @@ test search_miss = searches([9, 3, 7, 1], 4) == (none, 2, none, some(0))
 test comparator_sort = by_len_desc(["bb", "a", "ccc", "aa", "c"]) == ["ccc", "aa", "bb", "a", "c"]
 test list_shapes = shapes([1, 2, 3, 4, 5, 6, 7]) == "[[1, 2, 3], [4, 5, 6], [7]] [6, 9, 12, 15, 18] [(1, [1, 4, 7]), (2, [2, 5]), (0, [3, 6])] ([2, 4, 6], [1, 3, 5, 7]) [1, 3, 6, 10, 15, 21, 28] true [3, 4] []"
 test stepped_ranges = ranges() == [[0, 3, 6, 9], [10, 6, 2], [], [-3, -1, 1]]
+
+
+// std_flat
+
+type Cell = {row: Int, col: Int}
+
+fn index(words: List[Str]) -> FlatMap[Str, Int]
+= words.fold(empty_flat_map(), (m, w) => m.put(w, m.get(w).or(0) + 1))
+
+fn prices() -> FlatMap[Int, Str]
+= [(30, "c"), (10, "a"), (20, "b"), (10, "z")].to_flat_map
+
+fn window(m: FlatMap[Int, Str], lo: Int, hi: Int) -> List[Int]
+= m.between(lo, hi).keys
+
+fn churn(xs: List[Int]) -> FlatMap[Int, Int]
+= xs.fold(empty_flat_map(), (m, x) => if m.has(x) then m.remove(x) else m.put(x, x * x))
+
+fn as_map(xs: List[Int]) -> Map[Int, Int]
+= xs.fold(empty_map(), (m, x) => if m.has(x) then m.remove(x) else m.put(x, x * x))
+
+fn cells(n: Int) -> FlatMap[Cell, Str]
+= (0..n).map(i => (Cell{row: i % 3, col: i}, "v{i}")).to_flat_map
+
+fn grid(r: Int, c: Int) -> MdSpan[Int]
+= mdspan((0..r * c), [r, c])
+
+fn matmul(a: MdSpan[F64], b: MdSpan[F64]) -> MdSpan[F64]
+= do
+  (n, k, m) = (a.shape[0], a.shape[1], b.shape[1])
+  mdspan((0..n * m).map(p => (0..k).map(j => a.get([p / m, j]) * b.get([j, p % m])).sum), [n, m])
+
+fn trace(s: MdSpan[Int]) -> Int
+= (0..s.shape[0]).map(i => s.get([i, i])).sum
+
+fn column(s: MdSpan[Int], j: Int) -> List[Int]
+= s.transpose.sub(j).to_list
+
+fn block(s: MdSpan[Int], r0: Int, r1: Int, c0: Int, c1: Int) -> List[Int]
+= s.slice(0, r0, r1).slice(1, c0, c1).to_list
+
+fn cube_sum(n: Int) -> Int
+= do
+  c = mdspan((0..n * n * n), [n, n, n])
+  (0..n).map(i => c.sub(i).sub(i).get([i])).sum
+
+fn poke(s: MdSpan[Int], i: Int, j: Int, v: Int) -> List[Int]
+= s.set([i, j], v).to_list
+
+test flat_counts = do
+  m = index(["b", "a", "c", "a", "b", "a"])
+  m.keys == ["a", "b", "c"] and m.values == [3, 2, 1] and m.get("a") == some(3) and m.get("q") == none and m.len == 3
+test flat_build = prices().keys == [10, 20, 30] and prices().get(10) == some("z") and prices().items == [(10, "z"), (20, "b"), (30, "c")]
+test flat_bounds = prices().lower_bound(15) == 1 and prices().lower_bound(99) == 3 and window(prices(), 15, 31) == [20, 30] and window(prices(), 30, 10) == []
+test flat_matches_map = do
+  xs = [5, 3, 9, 3, 1, 5, 7, 9, 2, 8, 1]
+  churn(xs).items == as_map(xs).items and churn(xs).remove(100).len == churn(xs).len
+test flat_records = cells(7).keys.map(_.row) == [0, 0, 0, 1, 1, 2, 2] and cells(7).get(Cell{row: 1, col: 4}) == some("v4")
+test flat_empty = empty_flat_map().is_empty and empty_flat_map().put(1, 2).len == 1 and "{prices()}" == "FlatMap\{keys: [10, 20, 30], values: [\"z\", \"b\", \"c\"]}"
+test md_basics = do
+  g = grid(3, 4)
+  g.rank == 2 and g.size == 12 and g.get([1, 2]) == 6 and g.strides == [4, 1] and g.shape == [3, 4]
+test md_views = column(grid(3, 4), 1) == [1, 5, 9] and block(grid(4, 4), 1, 3, 2, 4) == [6, 7, 10, 11] and grid(2, 3).transpose.to_list == [0, 3, 1, 4, 2, 5]
+test md_rank3 = cube_sum(3) == 0 + 13 + 26 and mdspan([7], []).get([]) == 7 and mdspan([7], []).rank == 0
+test md_matmul = do
+  a = mdspan([1.0, 2.0, 3.0, 4.0], [2, 2])
+  b = mdspan([5.0, 6.0, 7.0, 8.0], [2, 2])
+  matmul(a, b).to_list == [19.0, 22.0, 43.0, 50.0]
+test md_trace = trace(grid(4, 4)) == 30 and poke(grid(2, 2), 1, 0, 9) == [0, 1, 9, 3] and grid(2, 2).to_list == [0, 1, 2, 3]
+test md_empty = mdspan([], [0, 5]).size == 0 and mdspan([], [0, 5]).to_list == [] and grid(3, 3).slice(0, 1, 1).to_list == []
+test md_json = json.decode[MdSpan[Int]](json.encode(grid(2, 2))) == ok(grid(2, 2))
+
+
+// std_views
+
+type Pipe = {name: Str, src: View[Int]}
+
+fn evens(v: View[Int]) -> View[Int]
+= v.filter(x => x % 2 == 0)
+
+fn squares(n: Int) -> View[Int]
+= iota(0, n).map(x => x * x)
+
+fn stored(p: Pipe) -> List[Int]
+= evens(p.src).take(3).to_list
+
+fn first_big(xs: List[Int], k: Int) -> Opt[Int]
+= xs.view.map(x => x * 3).find(x => x > k)
+
+fn lazy_div(xs: List[Int]) -> Int
+= xs.view.map(x => 100 / x).take(2).sum
+
+fn trap_order(xs: List[Int]) -> Int
+= xs.view.map(x => 100 / x).filter(x => 10 / (x - 50) > -100).len
+
+fn pairs(xs: List[Str], n: Int) -> List[(Int, Str)]
+= xs.view.enumerate.drop(1).take(n % 10).to_list
+
+fn zipped(a: List[Int], b: List[Str]) -> List[(Int, Str)]
+= a.view.zip(b.view).to_list
+
+fn joined(a: List[Int], b: List[Int]) -> List[Int]
+= a.view.chain(b.view.map(x => -x)).to_list
+
+fn collatz(n: Int) -> List[Int]
+= iterate(n, x => if x % 2 == 0 then x / 2 else 3 * x + 1, 30).take_while(x => x != 1).to_list
+
+fn runs(xs: List[Int]) -> List[Int]
+= xs.view.drop_while(x => x < 5).take_while(x => x >= 5).to_list
+
+fn checks(xs: List[Int]) -> (Bool, Bool, Opt[Int], Int)
+= do
+  v = xs.view.map(x => x - 1)
+  (v.any(x => x > 3), v.all(x => x >= 0), v.first, v.fold(0, (acc, x) => acc * 2 + x))
+
+fn loop_sum(xs: List[Int]) -> Int
+= do
+  var s = 0
+  for x in xs.view.filter(x => x > 0).map(x => x * 10)
+    s := s + x
+  s
+
+fn loop_stored(v: View[Int]) -> Int
+= do
+  var s = 0
+  for (i, x) in v.enumerate
+    s := s + i * x
+  s
+
+fn total(v: View[Int]) -> Int
+= v.sum
+
+fn pick(n: Int) -> List[Int]
+= squares(n % 50).drop(2).filter(x => x % 3 == 1).to_list
+
+fn layered(xs: List[Int], k: Int) -> List[(Int, Int)]
+= do
+  v = xs.view.map(x => x * 2 + 1)
+  w = v.filter(x => x % 3 != 0).drop(1).take(k % 7)
+  e = w.enumerate.map(p => p.0 + p.1)
+  e.zip(v.take_while(x => x < 50).drop_while(x => x < 5)).to_list
+
+fn chained(xs: List[Int], n: Int) -> Int
+= do
+  a = iterate(1, x => x * 3 % 1000003, n % 40)
+  b = xs.view.map(x => 1000 / (x % 7 + 1))
+  c = a.chain(b)
+  c.fold(0, (s, x) => s * 7 % 1000000007 + x)
+
+fn runtime_traps(xs: List[Int]) -> Int
+= do
+  v = xs.view.map(x => 100 / x)
+  w = v.filter(x => 10 / (x - 50) > -100)
+  w.len
+
+fn lens(xs: List[Int]) -> (Int, Int, Opt[Int], Bool, Bool)
+= do
+  v = xs.view.filter(x => x > 2)
+  (v.len, v.sum, v.find(x => x % 2 == 0), v.any(x => x > 100), v.all(x => x > 2))
+
+test runtime_nodes = layered([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 4) == [(7, 5), (12, 7), (15, 9), (20, 11)] and chained([1, 2], 3) == 7704 and lens([1, 3, 4, 8]) == (3, 15, some(4), false, true)
+test filter_map = squares(10).filter(x => x % 2 == 1).to_list == [1, 9, 25, 49, 81] and squares(0).to_list == []
+test stored_views = stored(Pipe{name: "p", src: iota(1, 100)}) == [2, 4, 6] and "{iota(0, 3)}" == "<view>"
+test early_exit = first_big([1, 2, 3, 4, 5], 7) == some(9) and first_big([1], 7) == none
+test laziness = lazy_div([5, 10, 0, 1]) == 30 and iota(0, 1000000000).map(x => x * 2).take(3).to_list == [0, 2, 4]
+test enumerated = pairs(["a", "b", "c", "d"], 2) == [(1, "b"), (2, "c")]
+test zip_chain = zipped([1, 2, 3], ["x", "y"]) == [(1, "x"), (2, "y")] and joined([1, 2], [3]) == [1, 2, -3]
+test iterate_while = collatz(6) == [6, 3, 10, 5, 16, 8, 4, 2] and runs([1, 9, 5, 7, 2, 8]) == [9, 5, 7]
+test consumers = checks([1, 2, 5]) == (true, true, some(0), 6) and checks([]) == (false, true, none, 0)
+test loops = loop_sum([3, -1, 4]) == 70 and loop_stored(iota(5, 8)) == 0 * 5 + 1 * 6 + 2 * 7
+test sums = total(iota(1, 101)) == 5050 and total([1, 2].view) == 3 and pick(10) == [4, 16, 25, 49, 64]
+
+
+// std_ranges
+
+fn evens_sum(n: Int) -> Int
+= range(0, n, 2).map(x => x * x).sum
+
+fn countdown(n: Int) -> List[Int]
+= range(n, 0, -3).filter(x => x % 2 == 0).map(x => x + 1)
+
+fn stepped_len(a: Int, b: Int, k: Int) -> Int
+= range(a, b, k).filter(x => x % 3 == 0).len
+
+fn plain_sum(a: Int, b: Int, k: Int) -> Int
+= range(a, b, k).sum
+
+fn loop_sum_ranges(a: Int, b: Int, k: Int) -> Int
+= do
+  var s = 0
+  for i in range(a, b, k)
+    s := s + i % 1000
+  s
+
+fn big_loop(n: Int) -> Int
+= do
+  var c = 0
+  for i in range(0, n, 7)
+    c := c + 1
+  c
+
+fn huge_count() -> Int
+= range(-9223372036854775807 - 1, 9223372036854775807, 4611686018427387904).len
+
+fn first_words(s: Str) -> List[Str]
+= s.words.take_while(w => w != "stop")
+
+fn after_header(lines: List[Str]) -> List[Str]
+= lines.drop_while(l => l.starts_with("#"))
+
+fn bounds(xs: List[Int], x: Int) -> (Int, Int)
+= (xs.sort.lower_bound(x), xs.sort.upper_bound(x))
+
+fn spin(xs: List[Int], k: Int) -> List[Int]
+= xs.rotate(k)
+
+fn merged(a: List[Int], b: List[Int]) -> List[Int]
+= a.sort.merge(b.sort)
+
+fn perms(xs: List[Int]) -> List[List[Int]] ! div
+= do
+  var out = [xs.sort]
+  var cur = xs.sort.next_perm
+  while cur.is_some
+    out := out.push(cur.get)
+    cur := cur.get.next_perm
+  out
+
+fn nth_perm(xs: List[Int]) -> Opt[List[Int]]
+= xs.next_perm
+
+test sums_ranges = evens_sum(10) == 120 and plain_sum(10, 0, -2) == 30 and plain_sum(0, 0, 1) == 0
+test down = countdown(12) == [13, 7] and countdown(13) == [11, 5]
+test lengths = stepped_len(0, 100, 7) == 5 and stepped_len(100, 0, -7) == 5
+test loops_ranges = loop_sum_ranges(0, 10, 3) == 18 and loop_sum_ranges(10, 0, -4) == 18 and loop_sum_ranges(5, 5, 1) == 0
+test lazy_loop = big_loop(100000000) == 14285715
+test extreme = huge_count() == 4
+test while_ops = first_words("go left stop right") == ["go", "left"] and first_words("") == [] and after_header(["# a", "#b", "x", "# c"]) == ["x", "# c"]
+test binary = bounds([5, 1, 3, 3, 3, 9], 3) == (1, 4) and bounds([], 1) == (0, 0) and bounds([1, 2], 5) == (2, 2)
+test rotation = spin([1, 2, 3, 4, 5], 2) == [3, 4, 5, 1, 2] and spin([1, 2, 3], -1) == [3, 1, 2] and spin([], 5) == [] and spin([1, 2, 3], 9) == [1, 2, 3]
+test merging = merged([5, 1, 9], [2, 8, 1]) == [1, 1, 2, 5, 8, 9] and merged([], [3]) == [3]
+test permutations = perms([3, 1, 2]) == [[1, 2, 3], [1, 3, 2], [2, 1, 3], [2, 3, 1], [3, 1, 2], [3, 2, 1]] and perms([1, 1, 2]).len == 3 and nth_perm([3, 2, 1]) == none and nth_perm([]) == none
+
+
+// std_valarray
+
+fn add(xs: List[F64], ys: List[F64]) -> List[F64]
+= xs.view.zip(ys.view).map(p => p.0 + p.1).to_list
+
+fn mul(xs: List[F64], ys: List[F64]) -> List[F64]
+= xs.view.zip(ys.view).map(p => p.0 * p.1).to_list
+
+fn axpy(a: F64, xs: List[F64], ys: List[F64]) -> List[F64]
+= xs.view.zip(ys.view).map(p => a * p.0 + p.1).to_list
+
+fn scale(k: Int, xs: List[Int]) -> List[Int]
+= xs.map(x => k * x)
+
+fn dot(xs: List[F64], ys: List[F64]) -> F64
+= xs.view.zip(ys.view).map(p => p.0 * p.1).fold(0.0, (acc, x) => acc + x)
+
+fn norm2(xs: List[F64]) -> F64
+= xs.map(x => x * x).sum.sqrt
+
+fn mask(xs: List[Int], keep: List[Bool]) -> List[Int]
+= xs.view.zip(keep.view).filter(p => p.1).map(p => p.0).to_list
+
+fn gather(xs: List[Int], idx: List[Int]) -> List[Int]
+= idx.map(i => xs[i])
+
+fn shift(xs: List[Int], k: Int) -> List[Int]
+= xs.drop(k).concat(range(0, k, 1).map(i => 0 * i))
+
+fn stride(xs: List[Int], start: Int, size: Int, step: Int) -> List[Int]
+= range(0, size, 1).map(i => xs[start + i * step])
+
+fn column_valarray(xs: List[Int], cols: Int, c: Int) -> List[Int]
+= mdspan(xs, [xs.len / cols, cols]).transpose.sub(c).to_list
+
+fn apply_abs(xs: List[F64]) -> List[F64]
+= xs.map(x => x.abs)
+
+fn compare(xs: List[Int], ys: List[Int]) -> List[Bool]
+= xs.view.zip(ys.view).map(p => p.0 < p.1).to_list
+
+test elementwise = add([1.0, 2.0, 3.0], [0.5, 0.25, 0.125]) == [1.5, 2.25, 3.125] and mul([1.0, 2.0, 3.0], [2.0, 2.0, 0.5]) == [2.0, 4.0, 1.5] and axpy(2.0, [1.0, 2.0], [10.0, 20.0]) == [12.0, 24.0]
+test broadcast = scale(3, [1, -2, 5]) == [3, -6, 15] and [1, 2, 3].map(x => x + 10) == [11, 12, 13]
+test reductions = [3, 9, -4, 2].sum == 10 and [3, 9, -4, 2].min == some(-4) and [3, 9, -4, 2].max == some(9) and dot([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]) == 32.0 and norm2([3.0, 4.0]) == 5.0
+test masks = mask([1, 2, 3, 4, 5], [true, false, true, false, true]) == [1, 3, 5] and [1, 2, 3, 4, 5].filter(x => x % 2 == 0) == [2, 4]
+test indirect = gather([10, 20, 30, 40], [3, 0, 0, 2]) == [40, 10, 10, 30]
+test shifts = shift([1, 2, 3, 4], 1) == [2, 3, 4, 0] and [1, 2, 3, 4].rotate(1) == [2, 3, 4, 1]
+test slices = stride([0, 1, 2, 3, 4, 5, 6, 7, 8], 1, 3, 3) == [1, 4, 7] and column_valarray([1, 2, 3, 4, 5, 6], 3, 1) == [2, 5] and [0, 1, 2, 3, 4].slice(1, 4) == [1, 2, 3]
+test apply = apply_abs([-1.5, 2.0, -0.0]) == [1.5, 2.0, 0.0] and compare([1, 5, 3], [2, 4, 3]) == [true, false, false]
+
+
+// std_hash
+
+type Pt = {x: Int, y: Int}
+
+fn word_index(text: Str) -> HashMap[Str, List[Int]]
+= text.words.enumerate.fold(hash_map(), (m, p) => m.put(p.1, m.get(p.1).or([]).push(p.0)))
+
+fn visited(path: List[Pt]) -> HashSet[Pt]
+= path.fold(hash_set(), (s, p) => s.add(p))
+
+fn two_sum(xs: List[Int], target: Int) -> Opt[(Int, Int)]
+= do
+  seen = xs.enumerate.map(p => (p.1, p.0)).to_hash_map
+  hits = xs.enumerate.filter(p => seen.get(target - p.1).is_some_and_not(p.0, seen.get(target - p.1).or(-1)))
+  hits.first.map(p => (p.0, seen.get(target - p.1).get))
+
+fn is_some_and_not(o: Opt[Int], i: Int, j: Int) -> Bool
+= o.is_some and i != j
+
+fn churn_hash(n: Int) -> (Int, Int, Bool)
+= do
+  m = (0..n).fold(hash_map(), (m, i) => m.put(i * 7919 % 1000, i))
+  gone = (0..500).fold(m, (m, i) => m.remove(i * 2))
+  (m.len, gone.len, gone.has(1) and not gone.has(2))
+
+fn set_ops_hash(a: List[Int], b: List[Int]) -> List[List[Int]]
+= do
+  x = a.to_hash_set
+  y = b.to_hash_set
+  [x.union(y).items, x.inter(y).items, x.diff(y).items, y.diff(x).items]
+
+fn counts(xs: List[Str]) -> List[(Str, Int)]
+= xs.fold(hash_map(), (m, w) => m.put(w, m.get(w).or(0) + 1)).items
+
+fn rebuild(m: HashMap[Int, Str]) -> HashMap[Int, Str]
+= m.items.to_hash_map
+
+fn drop_all(s: HashSet[Int], xs: List[Int]) -> HashSet[Int]
+= xs.fold(s, (acc, x) => acc.remove(x))
+
+fn insert_all(s: HashSet[Int], xs: List[Int]) -> (Int, List[Int])
+= do
+  t = xs.fold(s, (acc, x) => acc.add(x))
+  (t.len, t.items)
+
+fn show(m: HashMap[Str, Int], s: HashSet[Int]) -> Str
+= "{m} {s} {m.keys} {m.values} {s.len}"
+
+test index_hash = word_index("a b a c b a").get("a") == some([0, 2, 5]) and word_index("").is_empty and word_index("x y").keys == ["x", "y"]
+test points = visited([Pt{x: 1, y: 2}, Pt{x: 1, y: 2}, Pt{x: 0, y: 0}]).len == 2 and visited([]).items == []
+test pairs_hash = two_sum([2, 7, 11, 15], 9) == some((0, 1)) and two_sum([1, 2], 10) == none
+test churning = churn_hash(5000) == (1000, 500, true)
+test algebra = set_ops_hash([1, 2, 3, 4], [3, 4, 5]) == [[1, 2, 3, 4, 5], [3, 4], [1, 2], [5]]
+test counted = counts(["b", "a", "b", "c", "b"]) == [("a", 1), ("b", 3), ("c", 1)]
+test equality = [1, 2, 3].to_hash_set == [3, 2, 1, 2].to_hash_set and hash_map().put(1, "a") != hash_map().put(1, "b") and rebuild(hash_map().put(2, "x").put(1, "y")) == hash_map().put(1, "y").put(2, "x")
+test removal = drop_all([1, 2, 3].to_hash_set, [2, 9, 2]).items == [1, 3] and drop_all(hash_set(), [1]).len == 0
+test display = show(hash_map().put("b", 2).put("a", 1), [3, 1, 2].to_hash_set) == "{\"a\": 1, \"b\": 2} {1, 2, 3} [\"a\", \"b\"] [1, 2] 3"
+test json_form = json.encode(hash_map().put("k", [1])) == "{\"k\":[1]}" and json.decode[HashMap[Str, Int]]("{\"b\":2,\"a\":1}") == ok(hash_map().put("a", 1).put("b", 2)) and json.decode[HashSet[Int]]("[3,1,3]").map(_.len) == ok(2) and json.encode(hash_map().put(2, true)) == "[[2,true]]"
+test nested = hash_map().put([1, 2], hash_set().add("x")).get([1, 2]).map(_.has("x")) == some(true)
+test big = insert_all(hash_set(), (0..3000).map(_ * 3)).0 == 3000 and drop_all((0..3000).to_hash_set, (0..3000)).is_empty

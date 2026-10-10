@@ -59,7 +59,7 @@ type Vec2 = {x: Int, y: Int} derive Eq, Ord, Show, Hash, Json
 | Elaboration into a trait-free program, specialization per instantiation, `__cmp` and `__hash` built-ins in both tiers | `sspur-check/src/elab.rs`, `sspur-eval`, `sspur-native` |
 | Every run, test, fuzz, verify and native build uses the elaborated program; `check` reports elaboration errors | `sspur-store` (`Loaded::executable`), `sspur-cli` |
 | Codebase names for impls, `remove impl` lines | `sspur-store/src/crdt.rs`, `sspur-cli/src/agent.rs` |
-| Tests: `tests/programs/{traits,constraints,operators,derive}.ssp` in both tiers, `sspur-check/tests/traits.rs` (every new error with its hint), `sspur-cli/tests/traits.rs` (tier parity at `-O2` and `-O3`, traps, codebase edits), `sspur-cli/tests/packages.rs` (traits across packages), and traits in the program generator | |
+| Tests: `tests/programs/traits.ssp` in both tiers, `sspur-check/tests/traits.rs` (every new error with its hint), `sspur-cli/tests/traits.rs` (tier parity at `-O2` and `-O3`, traps, codebase edits), `sspur-cli/tests/packages.rs` (traits across packages), and traits in the program generator | |
 
 ## Not done
 

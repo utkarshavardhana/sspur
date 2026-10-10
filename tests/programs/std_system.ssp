@@ -1,0 +1,375 @@
+// std_files
+
+fn scratch(tag: Str) -> Str ! env, time
+= "{trim_end_slash(env_var("TMPDIR").or("/tmp"))}/sspur_files_{tag}_{mono_ns()}"
+
+fn trim_end_slash(p: Str) -> Str
+= if p.ends_with("/") then p.take(p.len - 1) else p
+
+fn reason(r: Res[Unit, Str], p: Str) -> Str
+= match r
+  | ok(_) => "ok"
+  | err(e) => e.drop(p.len + 2)
+
+fn bytes_round_trip(tag: Str, bs: List[Int]) -> Res[List[Int], Str] ! fs, env, time
+= do
+  p = scratch(tag)
+  w = write_bytes(p, bs)
+  r = if w.is_err then err("write failed") else read_bytes(p)
+  gone = remove_file(p)
+  r
+
+fn bad_byte(tag: Str) -> Str ! fs, env, time
+= do
+  p = scratch(tag)
+  r = reason(write_bytes(p, [1, 256]), p)
+  "{r} {exists(p)}"
+
+fn tree(tag: Str) -> List[Str] ! fs, env, time
+= do
+  root = scratch(tag)
+  made = mkdir_all(root + "/a/b/c")
+  again = mkdir_all(root + "/a/b")
+  w = write_file(root + "/a/b/c/f.txt", "hello")
+  size = file_size(root + "/a/b/c/f.txt").or(-1)
+  kinds = [exists(root + "/a/b/c/f.txt"), is_dir(root + "/a/b/c/f.txt"), is_dir(root + "/a/b"), exists(root + "/zz")]
+  moved = rename(root + "/a/b/c/f.txt", root + "/a/g.txt")
+  listing = list_dir(root + "/a").or([])
+  busy = reason(remove_dir(root + "/a"), root + "/a")
+  clean = [remove_file(root + "/a/g.txt"), remove_dir(root + "/a/b/c"), remove_dir(root + "/a/b"), remove_dir(root + "/a"), remove_dir(root)].all(_.is_ok)
+  [reason(made, root), reason(again, root), size.str, kinds.str, reason(moved, root), listing.join(","), busy, clean.str]
+
+fn dir_errors(tag: Str) -> List[Str] ! fs, env, time
+= do
+  root = scratch(tag)
+  first = mkdir(root)
+  twice = reason(mkdir(root), root)
+  w = write_file(root + "/f", "x")
+  under_file = reason(mkdir_all(root + "/f/g"), root + "/f/g")
+  missing = reason(mkdir(root + "/x/y"), root + "/x/y")
+  gone = remove_file(root + "/f")
+  rd = remove_dir(root)
+  [reason(first, root), twice, under_file, missing, reason(mkdir_all(""), "")]
+
+fn fresh_mtime(tag: Str) -> Bool ! fs, env, time
+= do
+  p = scratch(tag)
+  before = now_ms()
+  w = write_file(p, "t")
+  m = modified_ms(p).or(0)
+  gone = remove_file(p)
+  m > before - 5000 and m < before + 5000
+
+fn warn(s: Str) -> Int ! io
+= do
+  eprint("warning: " + s)
+  s.len
+
+test round_trip = bytes_round_trip("rt", [0, 1, 127, 128, 254, 255]) == ok([0, 1, 127, 128, 254, 255]) and bytes_round_trip("empty", []) == ok([])
+test binary_not_utf8 = bytes_round_trip("bin", [255, 254, 0]).is_ok
+test out_of_range = bad_byte("bad") == "byte out of range false"
+test directories = tree("tree") == ["ok", "ok", "5", "[true, false, true, false]", "ok", "b,g.txt", "directory not empty", "true"]
+test dir_failures = dir_errors("errs") == ["ok", "already exists", "already exists", "not found", "not found"]
+test mtime = fresh_mtime("mt")
+test missing_meta = file_size("/definitely/not/here").is_err and not exists("/definitely/not/here") and is_dir("/")
+test stderr = warn("low disk") == 8
+
+
+// std_io
+
+fn scratch_io(tag: Str) -> Str ! env, time
+= "{trim_end_slash_io(env_var("TMPDIR").or("/tmp"))}/sspur_std_{tag}_{mono_ns()}"
+
+fn trim_end_slash_io(p: Str) -> Str
+= if p.ends_with("/") then p.take(p.len - 1) else p
+
+fn write_read(tag: Str, text: Str) -> Res[Str, Str] ! fs, env, time
+= do
+  p = scratch_io(tag)
+  w = write_file(p, text)
+  a = append_file(p, "!")
+  r = if w.is_err or a.is_err then err("write failed") else read_file(p)
+  gone = remove_file(p)
+  r
+
+fn log_lines(tag: Str, lines: List[Str]) -> List[Str] ! fs, env, time
+= do
+  p = scratch_io(tag)
+  for l in lines
+    r = append_file(p, l + "\n")
+  out = read_file(p).or("").split("\n").filter(l => not l.is_empty)
+  gone = remove_file(p)
+  out
+
+fn listing(tag: Str) -> Res[List[Str], Str] ! fs, env, time
+= do
+  dir = scratch_io(tag)
+  made = write_file(dir, "x")
+  r = match list_dir(dir)
+    | ok(names) => ok(names)
+    | err(e) => err(e.drop(dir.len))
+  gone = remove_file(dir)
+  r
+
+fn missing(tag: Str) -> Str ! fs, env, time
+= do
+  p = scratch_io(tag) + "_nope"
+  match read_file(p)
+  | ok(_) => "found"
+  | err(e) => e.drop(p.len) + remove_file(p).map(u => "").or(" twice")
+
+fn tmp_sorted() -> Bool ! fs, env
+= match list_dir(env_var("TMPDIR").or("/tmp"))
+  | ok(names) => names == names.sort
+  | err(_) => false
+
+fn elapsed() -> Bool ! time
+= do
+  a = mono_ns()
+  sleep_ms(2)
+  b = mono_ns()
+  b - a >= 1000000 and now_ms() > 1600000000000
+
+fn env_ok() -> Bool ! env
+= env_var("PATH").is_some and env_var("SSPUR_SURELY_UNSET_VAR").is_none and env_var("A=B").is_none
+
+fn arg_count() -> Int ! env
+= args().len
+
+test round_trip_io = write_read("rt", "héllo\nworld") == ok("héllo\nworld!")
+test appends = log_lines("log", ["one", "two", "three"]) == ["one", "two", "three"]
+test dir_is_file = listing("dir") == err(": not a directory")
+test not_found = missing("miss") == ": not found twice"
+test sorted_listing = tmp_sorted()
+test clocks = elapsed()
+test env_vars = env_ok()
+test no_args = arg_count() == 0
+
+
+// std_proc
+
+fn sh(script: Str) -> Res[(Int, Str, Str), Str] ! proc
+= run_cmd("/bin/sh", ["-c", script], "")
+
+fn word_count(text: Str) -> Int ! proc
+= match run_cmd("wc", ["-w"], text)
+  | ok((0, out, _)) => out.trim.to_int.or(-1)
+  | _ => -1
+
+fn status_of(code: Int) -> Int ! proc
+= sh("exit {code}").map(_.0).or(-1)
+
+fn missing_proc() -> Str ! proc
+= match run_cmd("/no/such/program", [], "")
+  | ok(_) => "ran"
+  | err(e) => e
+
+fn big_echo(n: Int) -> Int ! proc
+= match run_cmd("cat", [], "x".repeat(n))
+  | ok((_, out, _)) => out.len
+  | err(_) => -1
+
+test stdout_capture = sh("echo hello; echo world") == ok((0, "hello\nworld\n", ""))
+test stderr_capture = sh("echo oops >&2; exit 2") == ok((2, "", "oops\n"))
+test stdin_feed = word_count("the quick brown fox") == 4
+test exit_codes = [0, 1, 7, 255].map(status_of) == [0, 1, 7, 255]
+test signal_code = sh("kill -9 $$").map(_.0).or(0) == 137
+test not_found_proc = missing_proc() == "/no/such/program: not found"
+test large_pipe = big_echo(300000) == 300000
+
+
+// std_handles
+
+fn scratch_handles(tag: Str) -> Str ! env, time
+= "{trim_end_slash_handles(env_var("TMPDIR").or("/tmp"))}/sspur_handles_{tag}_{mono_ns()}"
+
+fn trim_end_slash_handles(p: Str) -> Str
+= if p.ends_with("/") then p.take(p.len - 1) else p
+
+fn short(r: Res[Unit, Str], p: Str) -> Str
+= match r
+  | ok(_) => "ok"
+  | err(e) => e.drop(p.len + 2)
+
+fn writer(p: Str, xs: List[Str]) -> Res[Int, Str] ! fs
+= with_file(p, "w", f => xs.fold(0, (n, x) => if f.write(x + "\n").is_ok then n + 1 else n))
+
+fn line_lengths(p: Str) -> Res[Res[List[Int], Str], Str] ! fs
+= with_file(p, "r", f => f.fold_lines([], (acc, l) => acc.push(l.len)))
+
+fn streaming(tag: Str) -> List[Str] ! fs, env, time
+= do
+  p = scratch_handles(tag)
+  w = writer(p, ["alpha", "", "gamma delta", "ünïcödé", "last"])
+  ls = line_lengths(p)
+  all = with_file(p, "r", f => f.lines)
+  gone = remove_file(p)
+  ["{w}", "{ls}", "{all}"]
+
+fn seeking(tag: Str) -> List[Str] ! fs, env, time
+= do
+  p = scratch_handles(tag)
+  r = with_file(p, "w+", f => do
+    a = f.write("0123456789")
+    b = f.seek(3)
+    c = f.read(4)
+    d = f.tell
+    e = f.seek(8)
+    g = f.write("XYZ")
+    h = f.size
+    i = f.seek(0)
+    j = f.read_all
+    k = f.read_line
+    "{c} {d} {h} {j} {k}")
+  gone = remove_file(p)
+  [r.or("")]
+
+fn lines_crlf(tag: Str) -> List[Str] ! fs, env, time
+= do
+  p = scratch_handles(tag)
+  w = write_file(p, "one" + from_codes([13]).get + "\ntwo\n\nthree")
+  r = with_file(p, "r", f => do
+    a = f.read_line
+    b = f.read_line
+    c = f.read_line
+    d = f.read_line
+    e = f.read_line
+    [a, b, c, d, e].map(x => "{x}"))
+  gone = remove_file(p)
+  r.or([])
+
+fn closing(tag: Str) -> List[Str] ! fs, env, time
+= do
+  p = scratch_handles(tag)
+  r = match open_file(p, "a")
+    | err(e) => [e]
+    | ok(f) => do
+      a = f.write("x")
+      b = f.close
+      c = f.close
+      d = f.write("y")
+      [short(a, p), short(b, p), short(c, p), short(d, p)]
+  t = read_file(p)
+  gone = remove_file(p)
+  r.push("{t}")
+
+fn failures(tag: Str) -> List[Str] ! fs, env, time
+= do
+  p = scratch_handles(tag)
+  missing = match open_file(p, "r")
+    | ok(_) => "opened"
+    | err(e) => e.drop(p.len + 2)
+  wrote = write_file(p, "abc")
+  ro = with_file(p, "r", f => short(f.write("no"), p))
+  bin = with_file(p, "a", f => short(f.write_bytes([1, 300]), p))
+  bytes = with_file(p, "a+", f => do
+    w = f.write_bytes([0, 255])
+    s = f.seek(0)
+    f.read(100))
+  gone = remove_file(p)
+  [missing, "{ro}", "{bin}", "{bytes}"]
+
+type Leak = Leak{f: File}
+
+fn leak(p: Str) -> Res[Int, Str] ! fs, fail[Leak]
+= with_file(p, "r", f => if f.size.or(0) > 0 then raise Leak{f} else 0)
+
+fn raised(tag: Str) -> Str ! fs, env, time
+= do
+  p = scratch_handles(tag)
+  w = write_file(p, "data")
+  r = catch "{leak(p)}"
+    | Leak{f} => short(f.seek(1), p)
+  gone = remove_file(p)
+  "{r}"
+
+fn escape(tag: Str) -> Str ! fs, env, time
+= do
+  p = scratch_handles(tag)
+  w = write_file(p, "data")
+  h = with_file(p, "r", f => f)
+  r = match h
+    | ok(f) => short(f.read(2).map(x => ()), p)
+    | err(e) => e
+  gone = remove_file(p)
+  r
+
+test streams = streaming("s") == ["ok(5)", "ok(ok([5, 0, 11, 7, 4]))", "ok(ok([\"alpha\", \"\", \"gamma delta\", \"ünïcödé\", \"last\"]))"]
+test seeks = seeking("k") == ["ok([51, 52, 53, 54]) ok(7) ok(11) ok(\"01234567XYZ\") ok(none)"]
+test crlf = lines_crlf("c") == ["ok(some(\"one\"))", "ok(some(\"two\"))", "ok(some(\"\"))", "ok(some(\"three\"))", "ok(none)"]
+test closes = closing("x") == ["ok", "ok", "file is closed", "file is closed", "ok(\"x\")"]
+test fails = failures("f") == ["not found", "ok(\"not open for this operation\")", "ok(\"byte out of range\")", "ok(ok([97, 98, 99, 0, 255]))"]
+test scoped = escape("e") == "file is closed"
+test raise_closes = raised("r") == "file is closed"
+
+
+// std_links
+
+fn scratch_links(tag: Str) -> Str ! fs, env, time
+= do
+  root = "{trim_end_slash_links(env_var("TMPDIR").or("/tmp"))}/sspur_links_{tag}_{mono_ns()}"
+  made = mkdir_all(root)
+  root
+
+fn trim_end_slash_links(p: Str) -> Str
+= if p.ends_with("/") then p.take(p.len - 1) else p
+
+fn why[T](r: Res[T, Str]) -> Str
+= match r
+  | ok(_) => "ok"
+  | err(e) => e.split_once(": ").map(p => p.1).or(e)
+
+fn cleanup(root: Str, names: List[Str]) -> Bool ! fs
+= do
+  gone = names.map(n => remove_file(root + "/" + n))
+  remove_dir(root).is_ok
+
+fn copying(tag: Str) -> List[Str] ! fs, env, time
+= do
+  d = scratch_links(tag)
+  w = write_file(d + "/a.txt", "héllo\nworld\n")
+  m = set_mode(d + "/a.txt", 416)
+  c = copy_file(d + "/a.txt", d + "/b.txt")
+  text = read_file(d + "/b.txt").or("?")
+  mode = file_mode(d + "/b.txt").or(-1)
+  over = write_file(d + "/c.txt", "a much longer previous content")
+  c2 = copy_file(d + "/a.txt", d + "/c.txt")
+  same = copy_file(d + "/a.txt", d + "/a.txt")
+  missing = copy_file(d + "/nope", d + "/x.txt")
+  dir = copy_file(d, d + "/y.txt")
+  into = copy_file(d + "/a.txt", d + "/no/such/dir")
+  res = [why(c), "{text == "héllo\nworld\n"}", "{mode}", why(c2), "{read_file(d + "/c.txt").or("?").len}", why(same), why(missing), why(dir), "{exists(d + "/y.txt")}", why(into)]
+  ok = cleanup(d, ["a.txt", "b.txt", "c.txt"])
+  res.push("{ok}")
+
+fn linking(tag: Str) -> List[Str] ! fs, env, time
+= do
+  d = scratch_links(tag)
+  w = write_file(d + "/t.txt", "target")
+  l = symlink("t.txt", d + "/l")
+  dangling = symlink("missing.txt", d + "/dang")
+  again = symlink("t.txt", d + "/l")
+  res = [why(l), why(again), read_link(d + "/l").or("?"), "{is_symlink(d + "/l")} {is_symlink(d + "/t.txt")} {is_symlink(d + "/nope")} {is_symlink(d + "/dang")}", "{exists(d + "/dang")} {exists(d + "/l")}", read_file(d + "/l").or("?"), why(read_link(d + "/t.txt")), why(read_link(d + "/nope")), read_link(d + "/dang").or("?"), "{file_mode(d + "/l") == file_mode(d + "/t.txt")}"]
+  ok = cleanup(d, ["t.txt", "l", "dang"])
+  res.push("{ok}")
+
+fn modes(tag: Str) -> List[Str] ! fs, env, time
+= do
+  d = scratch_links(tag)
+  p = d + "/m.sh"
+  w = write_file(p, "#!/bin/sh\n")
+  a = set_mode(p, 493)
+  m1 = file_mode(p).or(-1)
+  b = set_mode(p, 256)
+  m2 = file_mode(p).or(-1)
+  bad = set_mode(p, 4096 * 2)
+  neg = set_mode(p, -1)
+  gone = set_mode(d + "/none", 420)
+  nul = set_mode(from_codes([97, 0, 98]).or(""), 420)
+  res = [why(a), "{m1.format("o")}", "{m2.format("o")}", why(bad), why(neg), why(gone), why(nul), why(file_mode(d + "/none"))]
+  ok = cleanup(d, ["m.sh"])
+  res.push("{ok}")
+
+test copy_files = copying("cp") == ["ok", "true", "416", "ok", "12", "same file", "not found", "is a directory", "false", "not found", "true"]
+test symlinks = linking("ln") == ["ok", "already exists", "t.txt", "true false false true", "false true", "target", "not a symlink", "not found", "missing.txt", "true", "true"]
+test permissions = modes("mode") == ["ok", "755", "400", "mode out of range", "mode out of range", "not found", "invalid path", "not found", "true"]

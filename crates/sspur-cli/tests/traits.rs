@@ -31,7 +31,7 @@ fn builtin_operators_keep_their_traps_through_bounds() {
 fn trait_programs_are_identical_in_both_tiers_and_specialized_per_type() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs");
     let d = dir("tiers");
-    for name in ["traits", "constraints", "operators", "derive"] {
+    for name in ["traits"] {
         let p = root.join(format!("{name}.ssp"));
         let p = p.to_str().unwrap();
         let (i, ok) = sspur(&d, &["test", "--interp", p]);
@@ -41,7 +41,7 @@ fn trait_programs_are_identical_in_both_tiers_and_specialized_per_type() {
         let (n, ok) = sspur(&d, &["native", "--release", "--strict-native", p]);
         assert!(ok && !n.contains("interp  "), "{name}: {n}");
     }
-    let n = sspur(&d, &["native", "--release", root.join("constraints.ssp").to_str().unwrap()]).0;
+    let n = sspur(&d, &["native", "--release", root.join("traits.ssp").to_str().unwrap()]).0;
     for f in ["max_of__Int", "max_of__Str", "best__Player", "best__Team", "score__Player"] {
         assert!(n.lines().any(|l| l == format!("native  {f}")), "{f} missing:\n{n}");
     }

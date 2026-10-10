@@ -1,3 +1,5 @@
+// std_json
+
 type Sku = new Str
 type Line = {sku: Sku, qty: Int, note: Opt[Str]}
 type Status = Draft | Paid{at: Int} | Shipped{at: Int, carrier: Str}

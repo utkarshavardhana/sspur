@@ -120,7 +120,7 @@ fn parallel_pipelines_report_the_sequential_trap_at_any_thread_count() {
     if std::process::Command::new("clang").arg("--version").output().is_err() {
         return;
     }
-    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/parallel.ssp")).unwrap();
+    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/concurrency.ssp")).unwrap();
     let extra = "
 fn combo(i: Int, a: Int, b: Int) -> Int
 = if i == a or i == a + 1 then 9000000000000000000 else if i == b then 1 / (i - i) else 1
@@ -229,7 +229,7 @@ fn vectorized_pipelines_trap_exactly_like_the_interpreter() {
     if std::process::Command::new("clang").arg("--version").output().is_err() {
         return;
     }
-    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/simd.ssp")).unwrap();
+    let base = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/programs/pipelines.ssp")).unwrap();
     let extra = "
 fn mixed_fault(xs: List[Int], n: Int, a: Int) -> Int
 = (0..n).map(i => xs[i] * 0 + (if i == a then 9223372036854775807 else 1)).sum

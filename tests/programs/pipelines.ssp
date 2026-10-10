@@ -1,3 +1,5 @@
+// simd
+
 fn ints(n: Int) -> List[Int]
 = (0..n).map(i => (i * 7919) % 10007 - 5000)
 
@@ -76,3 +78,63 @@ test negs_ok = negs(200, -1) == 200
 test tripled_ok = tripled(200, 127, -3074457345618258602) == -9223372036854775806 + (0..200).filter(i => i != 127).map(i => i * 3).sum
 test idx_ok = idx_sum(ints(300), 300) == ints(300).sum + 300
 test plain = plain_sum(ints(1000)) == ints(1000).sum and plain_sum([9223372036854775807, -1, 1]) == 9223372036854775807
+
+
+// rewrites
+
+type P = {x: Int, y: Int}
+type Item = {sku: Int, qty: Int where _ > 0, price: Int where _ >= 0}
+
+fn scaled(x: Int) -> Int
+= x * (2 + 3) + 0
+
+fn wraps(x: Int) -> Int
+= if x > 0 then x + (9223372036854775807 + 1) else x
+
+fn doubled_pos(n: Int where _ >= 0) -> Int
+= if n < 0 then 0 - n else n * 2
+
+fn width(lo: Int, hi: Int) -> Int
+  pre lo <= hi
+= if lo > hi then -1 else hi - lo
+
+fn bounded(k: Int) -> Int
+= if k >= 0 and k < 100 then (if k * k > 10000 then -1 else k * k) else 0
+
+fn sq(x: Int) -> Int
+= x * x
+
+fn sum_sq(n: Int) -> Int
+= (0..n).map(i => sq(i) + 1).sum
+
+fn to_points(xs: List[Int]) -> List[P]
+= xs.map(x => P{x: x % 1000, y: x % 1000 * 2})
+
+fn spread(xs: List[Int]) -> List[Int]
+= to_points(xs).map(p => p.y - p.x)
+
+fn items(n: Int) -> List[Item]
+= (0..n).map(i => Item{sku: i, qty: i % 7 + 1, price: i % 13})
+
+fn revenue(xs: List[Item]) -> Int
+= xs.filter(_.price > 3).map(_.price * _.qty).sum
+
+fn total(n: Int) -> Int
+= revenue(items(n))
+
+fn shaky(xs: List[Int]) -> List[Int]
+= xs.map(x => 100 / x).map(y => [1, 2, 3][y % 3])
+
+fn first_trap(xs: List[Int]) -> Int
+= xs.map(x => x * 4611686018427387904).filter(y => y > 0).map(y => 10 / (y - y + 1)).sum
+
+test fold = scaled(3) == 15
+test wraps_neg = wraps(-4) == -4
+test dead_iv = doubled_pos(21) == 42
+test dead_z3 = width(3, 10) == 7
+test nested = bounded(50) == 2500 and bounded(150) == 0
+test inlined = sum_sq(4) == 18
+test across = spread([1, 2, 3]) == [1, 2, 3]
+test pipeline = total(100) == revenue(items(100))
+test shaky_ok = shaky([1, 2, 50]) == [2, 3, 3]
+test traps_kept = first_trap([0, 1]) == 10

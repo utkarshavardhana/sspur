@@ -1,0 +1,563 @@
+// std_math
+
+type Pt = {x: F64, y: F64}
+
+fn dist(a: Pt, b: Pt) -> F64
+= (a.x - b.x).hypot(a.y - b.y)
+
+fn angle_deg(p: Pt) -> Int
+= (p.y.atan2(p.x) * 180.0 / 3.141592653589793).round
+
+fn compound(principal: F64, rate: F64, years: Int) -> Str
+= (principal * (1.0 + rate).pow(years.to_f64)).fmt(2)
+
+fn half_life(n0: F64, k: F64, t: F64) -> F64
+= n0 * (0.0 - k * t).exp
+
+fn trig_ok(x: F64) -> Bool
+= ((x.sin.pow(2.0) + x.cos.pow(2.0)) - 1.0).abs < 0.000000001 and (x.tan - x.sin / x.cos).abs < 0.000001
+
+fn logs() -> List[Int]
+= [1024.0.log2.round, 1000.0.log10.round, 1.0.exp.ln.round, 2.7.ceil, -2.7.ceil, -2.7.trunc, 0.5.asin.cos.fmt(4).len]
+
+fn fraction(a: Int, b: Int) -> (Int, Int)
+= do
+  g = a.gcd(b)
+  (a / g, b / g)
+
+fn lcm_all(xs: List[Int]) -> Int
+= xs.fold(1, (acc, x) => acc.lcm(x))
+
+fn hash(s: Str) -> Int
+= s.bytes.fold(-3750763034362895579, (h, b) => h.bxor(b).wrapping_mul(1099511628211))
+
+fn safe_mul(a: Int, b: Int) -> Opt[Int]
+= a.checked_mul(b)
+
+fn bits_math(n: Int) -> List[Int]
+= [n.popcount, n.clz, n.ctz, n.bnot, n.band(255), n.shr(4)]
+
+fn clamps() -> List[Int]
+= [clamp(15, 0, 10), clamp(-3, 0, 10), clamp(5, 0, 10), max(2, 9), min(2, 9)]
+
+fn dice(seed: Int, n: Int) -> List[Int] ! div
+= do
+  var s = seed
+  var out = []
+  while out.len < n
+    (v, next) = rand_int(s, 1, 7)
+    out := out.push(v)
+    s := next
+  out
+
+fn mean_rand(seed: Int, n: Int) -> F64
+= do
+  pick = (0..n).fold((0.0, seed), (acc, k) => do
+    (v, s) = rand_f64(acc.1)
+    (acc.0 + v, s))
+  pick.0 / n.to_f64
+
+test euclid = dist(Pt{x: 0.0, y: 0.0}, Pt{x: 3.0, y: 4.0}) == 5.0
+test angles = [Pt{x: 1.0, y: 1.0}, Pt{x: -1.0, y: 0.0}, Pt{x: 0.0, y: -2.0}].map(angle_deg) == [45, 180, -90]
+test interest = compound(1000.0, 0.05, 10) == "1628.89"
+test decay = (half_life(100.0, 0.693147, 1.0) - 50.0).abs < 0.001
+test trig = [0.1, 0.7, 1.3, 2.9].all(trig_ok)
+test log_values = logs() == [10, 3, 1, 3, -3, -2, 6]
+test nan_checks = (0.0 / 0.0).is_nan and not (1.0 / 0.0).is_finite and 1.5.is_finite
+test reduce = fraction(84, 36) == (7, 3)
+test lcm_list = lcm_all([4, 6, 10]) == 60
+test fnv = hash("sspur") == hash("sspur") and hash("a") != hash("b")
+test wrap = 9223372036854775807.wrapping_add(1) == -9223372036854775807 - 1 and 0.wrapping_sub(1) == -1
+test checked = safe_mul(4611686018427387904, 2) == none and safe_mul(3, 4) == some(12) and 7.checked_div(0) == none and 7.checked_add(1) == some(8)
+test bit_ops = bits_math(1000) == [6, 54, 3, -1001, 232, 62]
+test zero_bits = [0.clz, 0.ctz, (0 - 1).popcount, (0.0 - 2.7).ceil] == [64, 64, 64, -2]
+test clamp_values = clamps() == [10, 0, 5, 9, 2]
+test dice_range = dice(42, 200).all(d => d >= 1 and d <= 6) and dice(42, 20) == dice(42, 20) and dice(42, 20) != dice(43, 20)
+test dice_cover = dice(7, 300).to_set.len == 6
+test uniform = (mean_rand(1, 4000) - 0.5).abs < 0.05
+test rand_pure = rand(5) == rand(5) and rand(5).1 != 5
+
+
+// std_cmath
+
+fn hyper(x: F64) -> List[F64]
+= [x.sinh, x.cosh, x.tanh, x.asinh, x.acosh, x.atanh, x.cbrt, x.exp2, x.expm1, x.log1p]
+
+fn special(x: F64) -> List[F64]
+= [x.erf, x.erfc, x.gamma, x.lgamma]
+
+fn pairs(x: F64, y: F64) -> List[F64]
+= [x.fmod(y), x.remainder(y), x.copysign(y), x.nextafter(y), x.fdim(y), x.fma(y, 1.0)]
+
+fn int_bits(a: Int, k: Int) -> List[Int]
+= [a.rotl(k), a.rotr(k), a.byteswap, a.saturating_add(k), a.saturating_sub(k), a.saturating_mul(k)]
+
+fn close(a: F64, b: F64) -> Bool
+= (a - b).abs < 0.000000001
+
+fn normal_pdf(x: F64) -> F64
+= (0.0 - x * x / 2.0).exp / (2.0 * pi()).sqrt
+
+fn std_normal_cdf(x: F64) -> F64
+= 0.5 * (1.0 + (x / 2.0.sqrt).erf)
+
+fn factorial(n: Int) -> Int
+= (n.to_f64 + 1.0).gamma.round
+
+fn angle_wrap(deg: F64) -> F64
+= deg.remainder(360.0)
+
+test hyperbolic = close(1.0.sinh, 1.1752011936438014) and close(0.0.cosh, 1.0) and close(0.5.tanh.atanh, 0.5) and close(2.0.asinh.sinh, 2.0) and close(3.0.acosh.cosh, 3.0)
+test roots = 27.0.cbrt == 3.0 and (0.0 - 8.0).cbrt == -2.0 and 10.0.exp2 == 1024.0
+test small = close(0.000001.expm1, 0.0000010000005) and close(0.000001.log1p, 0.0000009999995)
+test gamma_values = [1, 2, 3, 4, 5, 6].map(factorial) == [1, 2, 6, 24, 120, 720] and close(0.5.gamma, pi().sqrt) and close(10.0.lgamma, 362880.0.ln)
+test cdf = close(std_normal_cdf(0.0), 0.5) and std_normal_cdf(1.96) > 0.975 and std_normal_cdf(1.96) < 0.9751 and close(normal_pdf(0.0), 0.3989422804014327)
+test erfs = close(0.5.erf + 0.5.erfc, 1.0) and 0.0.erf == 0.0
+test modulo = 7.5.fmod(2.0) == 1.5 and (0.0 - 7.5).fmod(2.0) == -1.5 and angle_wrap(370.0) == 10.0 and angle_wrap(190.0) == -170.0
+test signs = 3.0.copysign(0.0 - 1.0) == -3.0 and 5.0.fdim(3.0) == 2.0 and 3.0.fdim(5.0) == 0.0
+test next_up = 1.0.nextafter(2.0) > 1.0 and 1.0.nextafter(2.0) - 1.0 < 0.000000000000001
+test fused = 2.0.fma(3.0, 4.0) == 10.0
+test constants = close(pi(), 3.141592653589793) and close(euler().ln, 1.0) and inf().is_inf and nan().is_nan and not 1.0.is_inf and (0.0 - inf()) < 0.0
+test rotations = 1.rotl(1) == 2 and 1.rotr(1) == -9223372036854775807 - 1 and 1.rotl(64) == 1 and 1.rotl(-1) == -9223372036854775807 - 1
+test swap = 1.byteswap == 72057594037927936 and 72057594037927936.byteswap == 1
+test saturate = 9223372036854775807.saturating_add(1) == 9223372036854775807 and (-9223372036854775807 - 1).saturating_sub(1) == -9223372036854775807 - 1 and 4611686018427387904.saturating_mul(-4) == -9223372036854775807 - 1 and 5.saturating_mul(6) == 30
+test listed = int_bits(255, 8).len == 6 and hyper(0.5).len == 10 and special(1.5).len == 4 and pairs(5.0, 3.0).len == 6
+
+
+// std_bignum
+
+type Line = {item: Str, qty: Int, price: Dec}
+
+fn factorial_bignum(n: Int) -> BigInt
+= (1..n + 1).fold(big(1), (acc, k) => acc.mul(big(k)))
+
+fn fib(n: Int) -> BigInt ! div
+= do
+  var a = big(0)
+  var b = big(1)
+  var i = 0
+  while i < n
+    t = a.add(b)
+    a := b
+    b := t
+    i := i + 1
+  a
+
+fn digit_sum(x: BigInt) -> Int
+= x.str.chars.map(c => c.to_int.or(0)).sum
+
+fn modpow(b: BigInt, e: Int, m: BigInt) -> BigInt ! div
+= do
+  var result = big(1)
+  var base = b.rem(m)
+  var k = e
+  while k > 0
+    if k % 2 == 1 then result := result.mul(base).rem(m)
+    base := base.mul(base).rem(m)
+    k := k / 2
+  result
+
+fn total(lines: List[Line]) -> Dec
+= lines.fold(decimal("0").get, (acc, l) => acc.add(l.price.mul(big(l.qty).to_dec)))
+
+fn with_tax(amount: Dec, rate: Str) -> Dec
+= amount.add(amount.mul(decimal(rate).get)).round(2)
+
+fn split_bill(amount: Dec, people: Int) -> Dec
+= amount.div(big(people).to_dec, 2)
+
+fn arith(a: BigInt, b: BigInt) -> List[Str]
+= [a.add(b).str, a.sub(b).str, a.mul(b).str, a.neg.str, a.abs.str, a.sign.str]
+
+fn division(a: BigInt, b: BigInt) -> (BigInt, BigInt)
+= a.divmod(b)
+
+fn powers(a: BigInt, e: Int) -> BigInt
+= a.pow(e.abs % 40)
+
+fn dec_ops(a: Dec, b: Dec) -> List[Str]
+= [a.add(b).str, a.sub(b).str, a.mul(b).str, a.round(1).str, a.round(4).str, a.neg.str, a.scale.str]
+
+fn dec_div(a: Dec, b: Dec, k: Int) -> Dec
+= a.div(b, k.abs % 12)
+
+fn parsed(s: Str) -> List[Str]
+= [parse_big(s).map(_.str).or("none"), decimal(s).map(_.str).or("none")]
+
+fn conversions(x: BigInt) -> (Opt[Int], F64, Str)
+= (x.to_int, x.to_f64, json.encode([x]))
+
+test fact = factorial_bignum(25).str == "15511210043330985984000000" and digit_sum(factorial_bignum(100)) == 648
+test fibonacci = fib(100).str == "354224848179261915075" and fib(1) == big(1)
+test rsa_like = modpow(big(4), 13, big(497)) == big(445) and modpow(parse_big("123456789012345678901234567890").get, 65537, parse_big("1000000007").get).str == "921051386"
+test divide = division(parse_big("-100000000000000000000007").get, big(10)) == (parse_big("-10000000000000000000000").get, big(-7)) and division(big(7), big(-2)) == (big(-3), big(1))
+test big_division = factorial_bignum(30).div(factorial_bignum(28)) == big(870) and factorial_bignum(40).rem(factorial_bignum(20).add(big(1))).sign == 1 and factorial_bignum(50).divmod(factorial_bignum(25).add(big(7))).0.mul(factorial_bignum(25).add(big(7))).add(factorial_bignum(50).divmod(factorial_bignum(25).add(big(7))).1) == factorial_bignum(50)
+test pow_values = big(2).pow(100).str == "1267650600228229401496703205376" and big(-3).pow(3) == big(-27) and big(-1).pow(10) == big(1) and big(0).pow(0) == big(1)
+test ints = big(9223372036854775807).to_int == some(9223372036854775807) and big(-9223372036854775807 - 1).to_int == some(-9223372036854775807 - 1) and big(9223372036854775807).add(big(1)).to_int == none
+test order = big(-5) < big(3) and factorial_bignum(30) > factorial_bignum(29) and [big(3), big(-10), big(0)].sort == [big(-10), big(0), big(3)]
+test parsing = parsed(" -00123 ") == ["-123", "-123"] and parsed("12.50") == ["none", "12.50"] and parsed("1e5") == ["none", "none"] and parsed("+7") == ["7", "7"] and parsed(".5") == ["none", "none"] and parsed("5.") == ["none", "none"]
+test invoice = total([Line{item: "pen", qty: 3, price: decimal("1.25").get}, Line{item: "pad", qty: 2, price: decimal("0.10").get}]).str == "3.95"
+test taxes = with_tax(decimal("19.99").get, "0.0825").str == "21.64" and with_tax(decimal("100").get, "0.07").str == "107.00"
+test bankers = [decimal("2.5").get.round(0).str, decimal("3.5").get.round(0).str, decimal("-2.5").get.round(0).str, decimal("2.51").get.round(0).str, decimal("0.125").get.round(2).str] == ["2", "4", "-2", "3", "0.12"]
+test split = split_bill(decimal("100.00").get, 3).str == "33.33" and decimal("1").get.div(decimal("8").get, 3).str == "0.125" and decimal("-7").get.div(decimal("2").get, 0).str == "-4"
+test dec_compare = decimal("1.50").get != decimal("1.5").get and decimal("1.5").get < decimal("1.50").get and decimal("0.3").get > decimal("0.29").get and decimal("-0.001").get.sign == -1
+test small_values = decimal("0.05").get.str == "0.05" and decimal("-0.05").get.mul(decimal("2").get).str == "-0.10" and decimal("123").get.scale == 0
+test floats = big(10).pow(30).to_f64 == 1.0e30 and decimal("0.1").get.to_f64 == 0.1 and conversions(big(5)).2 == "[5]"
+test json_forms = json.decode[BigInt]("123456789012345678901234567890") == ok(parse_big("123456789012345678901234567890").get) and json.encode(decimal("1.20").get) == "\"1.20\"" and json.decode[Dec]("\"1.20\"") == ok(decimal("1.20").get) and json.decode[Dec]("2.5") == ok(decimal("2.5").get) and json.decode[BigInt]("1.5").is_err
+test fuzz_shapes = arith(big(3), big(4)).len == 6 and powers(big(2), 3) == big(8) and dec_ops(decimal("1.25").get, decimal("2").get).len == 7 and dec_div(decimal("1").get, decimal("3").get, 4).str == "0.3333"
+
+fn knuth(a: BigInt, b: BigInt, c: BigInt) -> Str
+= do
+  n = a.mul(b).mul(c).add(a)
+  d = b.mul(c).add(big(3))
+  (q, r) = n.divmod(d)
+  "{q} {r} {q.mul(d).add(r) == n}"
+
+test knuth_ok = knuth(big(5), big(7), big(9)).ends_with("true")
+
+
+// std_complex
+
+fn near(a: Complex, b: Complex) -> Bool
+= a.sub(b).abs < 0.000000001
+
+fn close_complex(x: F64, y: F64) -> Bool
+= (x - y).abs < 0.000000001
+
+fn i() -> Complex
+= complex(0.0, 1.0)
+
+fn root_of_unity(n: Int, k: Int) -> Complex
+= polar(1.0, 2.0 * pi() * k.to_f64 / n.to_f64)
+
+fn dft(xs: List[F64]) -> List[Complex]
+= do
+  n = xs.len
+  (0..n).map(k => (0..n).fold(complex(0.0, 0.0), (acc, j) => acc.add(root_of_unity(n, -(j * k)).scale(xs[j]))))
+
+fn horner(cs: List[Complex], z: Complex) -> Complex
+= cs.fold(complex(0.0, 0.0), (acc, c) => acc.mul(z).add(c))
+
+fn mandel(c: Complex, limit: Int) -> Int ! div
+= do
+  var z = complex(0.0, 0.0)
+  var n = 0
+  while n < limit and z.norm <= 4.0
+    z := z.mul(z).add(c)
+    n := n + 1
+  n
+
+fn all_unary(z: Complex) -> List[Complex]
+= [z.neg, z.conj, z.exp, z.ln, z.sqrt, z.sin, z.cos, z.tan, z.sinh, z.cosh, z.tanh, z.asin, z.acos, z.atan, z.asinh, z.acosh, z.atanh]
+
+fn all_binary(z: Complex, w: Complex) -> List[Complex]
+= [z.add(w), z.sub(w), z.mul(w), z.div(w), z.pow(w), z.scale(w.re)]
+
+fn reals(z: Complex) -> (F64, F64, F64)
+= (z.abs, z.arg, z.norm)
+
+test arithmetic = complex(1.0, 2.0).mul(complex(3.0, -1.0)) == complex(5.0, 5.0) and near(complex(5.0, 5.0).div(complex(3.0, -1.0)), complex(1.0, 2.0)) and complex(4.0, 2.0).div(complex(2.0, 0.0)) == complex(2.0, 1.0) and complex(1.0, 2.0).add(complex(1.0, 1.0)).re == 2.0
+test i_squared = i().mul(i()) == complex(-1.0, 0.0) and i().pow(complex(2.0, 0.0)).sub(complex(-1.0, 0.0)).abs < 0.000000000001
+test euler = near(i().scale(pi()).exp, complex(-1.0, 0.0))
+test polar_form = close_complex(polar(2.0, 0.5).abs, 2.0) and close_complex(polar(2.0, 0.5).arg, 0.5) and complex(3.0, 4.0).abs == 5.0 and complex(3.0, 4.0).norm == 25.0
+test sqrt_branch = complex(-4.0, 0.0).sqrt == complex(0.0, 2.0) and complex(-4.0, -0.0).sqrt.im == -2.0 and near(complex(3.0, 4.0).sqrt, complex(2.0, 1.0))
+test ln_exp = near(complex(1.5, -0.7).exp.ln, complex(1.5, -0.7))
+test trig_identity = do
+  z = complex(0.3, 0.8)
+  near(z.sin.mul(z.sin).add(z.cos.mul(z.cos)), complex(1.0, 0.0)) and near(z.sin.asin, z) and near(z.cos.acos, z) and near(z.tan.atan, z)
+test hyperbolic_complex = do
+  z = complex(0.4, -0.2)
+  near(z.cosh.mul(z.cosh).sub(z.sinh.mul(z.sinh)), complex(1.0, 0.0)) and near(z.sinh.asinh, z) and near(z.cosh.acosh, z) and near(z.tanh.atanh, z)
+test transform = do
+  f = dft([1.0, 0.0, 0.0, 0.0])
+  f.all(c => near(c, complex(1.0, 0.0))) and near(dft([1.0, 2.0, 3.0, 4.0])[0], complex(10.0, 0.0))
+test polynomial = horner([complex(1.0, 0.0), complex(0.0, 0.0), complex(1.0, 0.0)], i()).abs < 0.000000000001
+test fractal = mandel(complex(0.0, 0.0), 50) == 50 and mandel(complex(1.0, 1.0), 50) < 5
+test show = "{complex(1.5, -2.0)}" == "Complex\{re: 1.5, im: -2.0}" and complex(0.0, 0.0).pow(complex(0.0, 0.0)) == complex(1.0, 0.0)
+test fields = complex(1.0, 2.0).conj.im == -2.0 and complex(1.0, 2.0).neg.re == -1.0 and reals(complex(0.0, -1.0)).1 == -pi() / 2.0
+test json_round = json.decode[Complex](json.encode(complex(1.25, -3.0))) == ok(complex(1.25, -3.0))
+
+
+// std_ratio
+
+fn r(n: Int, d: Int) -> Ratio
+= ratio(n, d)
+
+fn harmonic(n: Int) -> Ratio
+= (1..n % 64 + 1).fold(ratio(0, 1), (acc, k) => acc.add(ratio(1, k)))
+
+fn egyptian(x: Ratio, limit: Int) -> List[Int] ! div
+= do
+  var rest = x
+  var out = []
+  var k = 0
+  while rest.sign > 0 and k < min(limit, 6)
+    d = rest.inv.ceil
+    out := out.push(d.to_int.or(0))
+    rest := rest.sub(ratio_big(big(1), d))
+    k := k + 1
+  out
+
+fn continued(x: Ratio, limit: Int) -> List[Int] ! div
+= do
+  var v = x
+  var out = []
+  var k = 0
+  while k < limit
+    f = v.floor
+    out := out.push(f.to_int.or(0))
+    frac = v.sub(ratio_big(f, big(1)))
+    if frac.sign == 0 then k := limit else do
+      v := frac.inv
+      k := k + 1
+  out
+
+fn rounding(x: Ratio) -> (Int, Int, Int, Int)
+= (x.floor.to_int.or(0), x.ceil.to_int.or(0), x.trunc.to_int.or(0), x.round.to_int.or(0))
+
+fn show_all(xs: List[Ratio]) -> Str
+= xs.map(x => x.str).join(" ")
+
+test normalized = r(6, -8) == r(-3, 4) and r(6, -8).num == big(-3) and r(6, -8).den == big(4) and r(0, -5) == r(0, 1) and r(0, -5).den == big(1)
+test arithmetic_ratio = r(1, 2).add(r(1, 3)) == r(5, 6) and r(1, 2).sub(r(3, 4)) == r(-1, 4) and r(2, 3).mul(r(9, 4)) == r(3, 2) and r(2, 3).div(r(4, 9)) == r(3, 2)
+test unary = r(-3, 4).neg == r(3, 4) and r(-3, 4).abs == r(3, 4) and r(-3, 4).inv == r(-4, 3) and r(-3, 4).sign == -1 and r(0, 1).sign == 0 and r(8, 4).is_int and not r(1, 4).is_int
+test powers_ratio = r(2, 3).pow(3) == r(8, 27) and r(-2, 3).pow(-3) == r(-27, 8) and r(5, 7).pow(0) == r(1, 1) and r(-1, 1).pow(-9223372036854775807 - 1) == r(1, 1)
+test ordering = r(1, 3) < r(1, 2) and r(-1, 2) < r(-1, 3) and r(2, 4) <= r(1, 2) and r(7, 3) > r(2, 1) and [r(1, 2), r(1, 3), r(-1, 5), r(2, 3)].sort == [r(-1, 5), r(1, 3), r(1, 2), r(2, 3)] and min(r(1, 7), r(1, 8)) == r(1, 8)
+test round_modes = rounding(r(7, 2)) == (3, 4, 3, 4) and rounding(r(5, 2)) == (2, 3, 2, 2) and rounding(r(-5, 2)) == (-3, -2, -2, -2) and rounding(r(-7, 3)) == (-3, -2, -2, -2) and rounding(r(4, 1)) == (4, 4, 4, 4)
+test harmonic_sum = harmonic(10) == r(7381, 2520) and harmonic(30).den.str == "2329089562800"
+test egyptian_fractions = egyptian(r(4, 13), 10) == [4, 18, 468] and egyptian(r(5, 121), 4) == [25, 757, 763309, 873960180913]
+test continued_fraction = continued(r(415, 93), 10) == [4, 2, 6, 7] and continued(r(-7, 3), 10) == [-3, 1, 2]
+test floats_ratio = r(1, 3).to_f64 == 1.0 / 3.0 and r(-2, 3).to_f64 == -2.0 / 3.0 and r(1, 10).to_f64 == 0.1 and r(0, 1).to_f64 == 0.0 and ratio_big(big(10).pow(400), big(3)).to_f64 == inf() and ratio_big(big(1), big(10).pow(400)).to_f64 == 0.0 and ratio_big(big(10).pow(300), big(7).pow(200)).to_f64 > 0.0
+test decimals = r(1, 3).to_dec(5).str == "0.33333" and r(-5, 8).to_dec(2).str == "-0.62" and r(7, 1).to_dec(0).str == "7"
+test display = show_all([r(3, 4), r(-6, 3), r(0, 9), r(10, -4)]) == "3/4 -2 0 -5/2" and "{r(1, 2)}" == "1/2" and [r(1, 2)].str == "[1/2]"
+test parsing_ratio = parse_ratio(" -6/8 ") == some(r(-3, 4)) and parse_ratio("+12") == some(r(12, 1)) and parse_ratio("1/0") == none and parse_ratio("1/-2") == none and parse_ratio("a/2") == none and parse_ratio("") == none and parse_ratio("3/") == none and parse_ratio("1/2/3") == none
+test collections = [r(1, 2), r(2, 4), r(1, 3)].to_set.len == 2 and empty_map().put(r(1, 2), "half").get(r(2, 4)) == some("half") and [r(1, 2), r(2, 4)].unique.len == 1
+test encode = json.encode(r(-3, 4)) == "\{\"num\":-3,\"den\":4}"
+test big_parts = ratio_big(big(10).pow(30), big(10).pow(28)) == r(100, 1) and ratio_big(big(2).pow(70), big(6)).num.str == "590295810358705651712"
+
+
+// std_random
+
+fn normals(seed: Int, n: Int, mean: F64, sd: F64) -> List[F64]
+= (0..n).fold(([], seed), (acc, k) => do
+    (v, s) = rand_normal(acc.1, mean, sd)
+    (acc.0.push(v), s)).0
+
+fn uniforms(seed: Int, n: Int, lo: F64, hi: F64) -> List[F64]
+= (0..n).fold(([], seed), (acc, k) => do
+    (v, s) = rand_uniform(acc.1, lo, hi)
+    (acc.0.push(v), s)).0
+
+fn waits(seed: Int, n: Int, rate: F64) -> List[F64]
+= (0..n).fold(([], seed), (acc, k) => do
+    (v, s) = rand_exp(acc.1, rate)
+    (acc.0.push(v), s)).0
+
+fn coins(seed: Int, n: Int, p: F64) -> Int
+= (0..n).fold((0, seed), (acc, k) => do
+    (v, s) = rand_bool(acc.1, p)
+    (acc.0 + (if v then 1 else 0), s)).0
+
+fn mean(xs: List[F64]) -> F64
+= xs.sum / xs.len.to_f64
+
+fn variance(xs: List[F64]) -> F64
+= do
+  m = mean(xs)
+  xs.map(x => (x - m) * (x - m)).sum / xs.len.to_f64
+
+fn deal(seed: Int) -> List[Int]
+= (1..53).shuffle(seed).take(5)
+
+fn pick(xs: List[Str], seed: Int) -> Opt[Str]
+= xs.choice(seed)
+
+fn shuffled(xs: List[Int], seed: Int) -> List[Int]
+= xs.shuffle(seed)
+
+test normal_moments = do
+  xs = normals(11, 4000, 10.0, 2.0)
+  (mean(xs) - 10.0).abs < 0.1 and (variance(xs).sqrt - 2.0).abs < 0.1
+test uniform_range = do
+  xs = uniforms(3, 2000, -5.0, 5.0)
+  xs.all(x => x >= -5.0 and x < 5.0) and mean(xs).abs < 0.3
+test exp_mean = (mean(waits(9, 4000, 2.0)) - 0.5).abs < 0.03 and waits(9, 100, 2.0).all(_ >= 0.0)
+test coin_rate = (coins(5, 4000, 0.3) - 1200).abs < 100 and coins(5, 50, 0.0) == 0 and coins(5, 50, 1.0) == 50
+test shuffle_perm = deal(42).len == 5 and (1..53).shuffle(42).sort == (1..53) and deal(42) == deal(42) and deal(42) != deal(43)
+test shuffle_small = shuffled([], 1) == [] and shuffled([7], 1) == [7]
+test choices = pick([], 3) == none and pick(["a", "b", "c"], 3).is_some and (0..60).map(s => pick(["a", "b", "c"], s).get).to_set.len == 3
+test pure_seeds = rand_normal(1, 0.0, 1.0) == rand_normal(1, 0.0, 1.0) and rand_normal(1, 0.0, 1.0).1 == rand_f64(rand_f64(1).1).1
+
+
+// std_distributions
+
+fn draws(seed: Int, n: Int, f: Int -> (Int, Int)) -> List[Int]
+= (0..n).fold(([], seed), (acc, k) => do
+    (v, s) = f(acc.1)
+    (acc.0.push(v), s)).0
+
+fn fdraws(seed: Int, n: Int, f: Int -> (F64, Int)) -> List[F64]
+= (0..n).fold(([], seed), (acc, k) => do
+    (v, s) = f(acc.1)
+    (acc.0.push(v), s)).0
+
+fn mean_distributions(xs: List[Int]) -> F64
+= xs.sum.to_f64 / xs.len.to_f64
+
+fn fmean(xs: List[F64]) -> F64
+= xs.sum / xs.len.to_f64
+
+fn fvar(xs: List[F64]) -> F64
+= do
+  m = fmean(xs)
+  xs.map(x => (x - m) * (x - m)).sum / xs.len.to_f64
+
+fn binomials(seed: Int, k: Int, n: Int, p: F64) -> List[Int]
+= draws(seed, k, s => rand_binomial(s, n, p))
+
+fn poissons(seed: Int, k: Int, mu: F64) -> List[Int]
+= draws(seed, k, s => rand_poisson(s, mu))
+
+fn geometrics(seed: Int, k: Int, p: F64) -> List[Int]
+= draws(seed, k, s => rand_geometric(s, p))
+
+fn gammas(seed: Int, k: Int, shape: F64, scale: F64) -> List[F64]
+= fdraws(seed, k, s => rand_gamma(s, shape, scale))
+
+fn betas(seed: Int, k: Int, a: F64, b: F64) -> List[F64]
+= fdraws(seed, k, s => rand_beta(s, a, b))
+
+fn picks(seed: Int, k: Int, ws: List[F64]) -> List[Int]
+= draws(seed, k, s => rand_weighted(s, ws))
+
+fn one_binomial(seed: Int, n: Int, p: F64) -> (Int, Int)
+= rand_binomial(seed, n, p)
+
+fn one_poisson(seed: Int, mu: F64) -> (Int, Int)
+= rand_poisson(seed, mu)
+
+fn one_geometric(seed: Int, p: F64) -> (Int, Int)
+= rand_geometric(seed, p)
+
+fn one_gamma(seed: Int, shape: F64, scale: F64) -> (F64, Int)
+= rand_gamma(seed, shape, scale)
+
+fn one_beta(seed: Int, a: F64, b: F64) -> (F64, Int)
+= rand_beta(seed, a, b)
+
+fn one_weighted(seed: Int, ws: List[F64]) -> (Int, Int)
+= rand_weighted(seed, ws)
+
+fn rolls(r: Rng, n: Int) -> (List[Int], Rng)
+= (0..n).fold(([], r), (acc, k) => do
+    (v, q) = acc.1.int(1, 7)
+    (acc.0.push(v), q))
+
+fn mixed(r: Rng) -> (List[F64], Rng)
+= do
+  (a, r1) = r.f64
+  (b, r2) = r1.normal(0.0, 1.0)
+  (c, r3) = r2.gamma(2.0, 1.5)
+  (d, r4) = r3.beta(2.0, 3.0)
+  (e, r5) = r4.uniform(-1.0, 1.0)
+  (f, r6) = r5.exp(3.0)
+  (g, r7) = r6.poisson(4.5)
+  (h, r8) = r7.binomial(40, 0.25)
+  (i, r9) = r8.geometric(0.2)
+  (j, r10) = r9.weighted([1.0, 0.0, 2.0])
+  (k, r11) = r10.bool(0.5)
+  (l, r12) = r11.next
+  ([a, b, c, d, e, f, g.to_f64, h.to_f64, i.to_f64, j.to_f64, if k then 1.0 else 0.0, (l % 1000).to_f64], r12)
+
+fn streams(r: Rng, n: Int) -> List[Int]
+= (0..n).map(k => r.stream(k).int(0, 1000000).0)
+
+fn split_draws(r: Rng) -> (Int, Int, Int)
+= do
+  (a, b) = r.split
+  (x, _) = a.int(0, 1000000)
+  (y, _) = b.int(0, 1000000)
+  (z, _) = r.int(0, 1000000)
+  (x, y, z)
+
+test binomial_moments = do
+  xs = binomials(7, 3000, 50, 0.3)
+  (mean_distributions(xs) - 15.0).abs < 0.3 and xs.all(x => x >= 0 and x <= 50)
+test binomial_large = do
+  xs = binomials(8, 400, 1000000, 0.4)
+  (mean_distributions(xs) - 400000.0).abs < 100.0 and xs.all(x => x >= 0 and x <= 1000000)
+test binomial_edges = binomials(1, 20, 30, 0.0).all(_ == 0) and binomials(1, 20, 30, 1.0).all(_ == 30) and binomials(1, 5, 0, 0.5).all(_ == 0)
+test poisson_small = (mean_distributions(poissons(3, 4000, 3.5)) - 3.5).abs < 0.1
+test poisson_large = (mean_distributions(poissons(4, 2000, 250.0)) - 250.0).abs < 1.5 and (mean_distributions(poissons(4, 300, 1000000.0)) - 1000000.0).abs < 150.0
+test poisson_zero = poissons(4, 10, 0.0).all(_ == 0)
+test geometric_mean = (mean_distributions(geometrics(5, 4000, 0.25)) - 3.0).abs < 0.2 and geometrics(5, 10, 1.0).all(_ == 0)
+test gamma_moments = do
+  xs = gammas(6, 4000, 3.0, 2.0)
+  (fmean(xs) - 6.0).abs < 0.2 and (fvar(xs) - 12.0).abs < 1.2 and xs.all(_ > 0.0)
+test gamma_small_shape = (fmean(gammas(9, 4000, 0.5, 1.0)) - 0.5).abs < 0.05
+test beta_mean = do
+  xs = betas(10, 4000, 2.0, 5.0)
+  (fmean(xs) - 2.0 / 7.0).abs < 0.01 and xs.all(x => x >= 0.0 and x <= 1.0)
+test weighted_rates = do
+  xs = picks(12, 6000, [1.0, 0.0, 3.0])
+  xs.all(_ != 1) and (xs.filter(_ == 2).len - 4500).abs < 150
+test pure = one_poisson(1, 2.0) == one_poisson(1, 2.0) and one_gamma(2, 1.0, 1.0).1 != 2
+test rng_matches_seed_fns = rng(5).int(0, 10).0 == rand_int(5, 0, 10).0 and rng(5).f64.0 == rand_f64(5).0 and rng(5).poisson(9.0).0 == rand_poisson(5, 9.0).0
+test rng_dice = do
+  (xs, r) = rolls(rng(1), 6000)
+  xs.all(x => x >= 1 and x <= 6) and xs.to_set.len == 6 and (mean_distributions(xs) - 3.5).abs < 0.1 and r != rng(1)
+test rng_mixed = mixed(rng(77)).0 == mixed(rng(77)).0 and mixed(rng(77)).0 != mixed(rng(78)).0
+test rng_streams = do
+  xs = streams(rng(3), 50)
+  xs.to_set.len == 50 and streams(rng(3), 50) == xs
+test rng_split = do
+  (x, y, z) = split_draws(rng(9))
+  x != y and y != z and split_draws(rng(9)) == (x, y, z)
+test rng_show = "{rng(1)}" == "Rng\{state: 1, gamma: -7046029254386353131}"
+
+
+// std_bits
+
+fn sieve(n: Int) -> List[Int] ! div
+= do
+  var composite = bits(n + 1)
+  var p = 2
+  while p * p <= n
+    if not composite.has(p) then do
+      var m = p * p
+      while m <= n
+        composite := composite.set(m)
+        m := m + p
+    p := p + 1
+  (2..n + 1).filter(i => not composite.has(i))
+
+fn seats(taken: List[Int]) -> Bits
+= taken.to_bits(16)
+
+fn free_seats(b: Bits) -> List[Int]
+= b.flip_all.items
+
+fn ops(a: List[Int], b: List[Int]) -> List[List[Int]]
+= do
+  x = a.to_bits(70)
+  y = b.to_bits(70)
+  [x.union(y).items, x.inter(y).items, x.diff(y).items, x.xor(y).items, x.flip_all.flip_all.items]
+
+fn toggled(b: Bits, i: Int) -> Bits
+= b.flip(i.abs % (b.len + 1))
+
+fn summary(b: Bits) -> (Int, Int, Str)
+= (b.len, b.count, b.str)
+
+fn mixed_bits(a: Bits, b: Bits) -> Bits
+= a.xor(b)
+
+test primes = sieve(50) == [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47]
+test cinema = free_seats(seats([0, 1, 2, 5, 15])) == [3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14] and seats([3]).count == 1 and seats([]).count == 0
+test algebra = ops([1, 64, 65, 69], [0, 64, 69]) == [[0, 1, 64, 65, 69], [64, 69], [1, 65], [0, 1, 65], [1, 64, 65, 69]]
+test edits = bits(8).set(3).set(3).clear(3).count == 0 and bits(8).flip(7).has(7) and not bits(8).set(1).clear(1).has(1)
+test display_bits = bits(8).set(0).set(3).str == "bits(8){0, 3}" and bits(0).str == "bits(0){}" and bits(3).flip_all.str == "bits(3){0, 1, 2}"
+test sizes = bits(130).len == 130 and bits(130).flip_all.count == 130 and bits(64).flip_all.count == 64
+test equality = [5, 1].to_bits(10) == [1, 5].to_bits(10) and bits(10) != bits(11) and [bits(10).set(0), bits(10)].sort.first == some(bits(10))
+test json_form = json.encode(bits(5).set(0).set(3)) == "\"01001\"" and json.decode[Bits]("\"01001\"") == ok(bits(5).set(0).set(3)) and json.decode[Bits]("\"012\"").is_err
+test fuzz_shapes_bits = summary(toggled(bits(9), 4)).1 == 1 and mixed_bits(bits(4), bits(4).set(2)).count == 1

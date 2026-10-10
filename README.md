@@ -147,24 +147,24 @@ On macOS: `brew install z3 qemu llvm lld`. On Ubuntu: `sudo apt install z3 qemu-
 Run, test, and check a file:
 
 ```
-sspur run   tests/programs/orders.ssp
-sspur test  tests/programs/orders.ssp
-sspur check tests/programs/orders.ssp      # add --json for machine-readable diagnostics
-sspur fmt   tests/programs/orders.ssp
+sspur run   tests/programs/core.ssp
+sspur test  tests/programs/core.ssp
+sspur check tests/programs/core.ssp      # add --json for machine-readable diagnostics
+sspur fmt   tests/programs/core.ssp
 ```
 
 Find bugs and prove properties:
 
 ```
-sspur fuzz tests/programs/orders.ssp                    # contracts become property tests
-sspur fuzz --differential tests/programs/sorting.ssp    # native code versus the interpreter
+sspur fuzz tests/programs/core.ssp                      # contracts become property tests
+sspur fuzz --differential tests/programs/core.ssp       # native code versus the interpreter
 sspur verify tests/programs/contracts.ssp               # prove pre/post/where with Z3
 ```
 
 Work on a codebase the way an agent does:
 
 ```
-sspur init tests/programs/orders.ssp       # import into a .sspur/ codebase
+sspur init tests/programs/core.ssp         # import into a .sspur/ codebase
 sspur q pack try_place --budget 400        # smallest context needed to edit a function
 sspur edit --test -e 'fn total(items: List[Item]) -> Int = items.map(_.price * _.qty).sum'
 sspur log
@@ -191,7 +191,7 @@ More examples:
 | [`examples/ffi/`](examples/ffi) | Calling libc and libm, and calling SSPUR from C |
 | [`examples/packages/`](examples/packages) | A text library and an app that depends on it by path, with its lockfile |
 | [`examples/bare/`](examples/bare) | Bare-metal hello world, a timer interrupt, inline asm, statics shared with an interrupt handler, floats and two cores on QEMU riscv64 and aarch64 and a Cortex-M4 (MPS2 AN386) |
-| [`tests/programs/`](tests/programs) | 47 runnable programs covering every language feature and library area |
+| [`tests/programs/`](tests/programs) | 15 runnable programs, one per area, covering every language feature and library area |
 
 ## Using SSPUR with AI agents
 

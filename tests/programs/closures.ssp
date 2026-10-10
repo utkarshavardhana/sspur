@@ -1,3 +1,5 @@
+// captures
+
 fn reads(xs: List[Int]) -> Int
 = do
   var k = 1

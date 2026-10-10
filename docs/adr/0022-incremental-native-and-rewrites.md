@@ -88,7 +88,7 @@ An AST optimizer (`sspur-native/src/cgen/opt.rs`) runs before lowering and C gen
 
 ### Verification
 
-- `tests/programs/rewrites.ssp` exercises every rule, including the rejected cases: `shaky` (a division trap and an index trap, not fused) and `first_trap` (overflow plus division by zero in one stage, not fused). `sspur fuzz --differential` is clean on it, also with `--edge`, and on all 48 `tests/programs` files.
+- `tests/programs/pipelines.ssp` exercises every rule, including the rejected cases: `shaky` (a division trap and an index trap, not fused) and `first_trap` (overflow plus division by zero in one stage, not fused). `sspur fuzz --differential` is clean on it, also with `--edge`, and on all 48 `tests/programs` files.
 - The 199-program corpus is identical (258/258 functions native); 16 corpus programs get rewrites (inlining and loop fusion).
 - `explain_opt_lists_proven_rewrites` checks the command output, including a Z3 proof of `lo > hi` being false under `pre lo <= hi`.
 

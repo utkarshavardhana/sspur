@@ -240,14 +240,36 @@ fn pages() -> Vec<PathBuf> {
     all
 }
 
+fn normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+// A .ssp snippet is exercised when a transcript names it in a command (following `cd`),
+// or when it is a package's source, which `sspur run` and `sspur test` in the package use.
 fn exercised(ssp: &Path, outs: &[PathBuf]) -> bool {
     if ssp.parent().unwrap().join("sspur.toml").is_file() {
         return true;
     }
     outs.iter().any(|o| {
-        let Ok(rel) = ssp.strip_prefix(o.parent().unwrap()) else { return false };
-        let rel = rel.display().to_string();
-        std::fs::read_to_string(o).unwrap().lines().filter_map(|l| l.strip_prefix("$ ")).any(|l| split(l).iter().any(|a| *a == rel))
+        let mut cwd = o.parent().unwrap().to_path_buf();
+        std::fs::read_to_string(o).unwrap().lines().filter_map(|l| l.strip_prefix("$ ")).any(|l| {
+            let args = split(l);
+            if args[0] == "cd" {
+                cwd = normalize(&cwd.join(&args[1]));
+                return false;
+            }
+            args.iter().any(|a| normalize(&cwd.join(a)) == ssp)
+        })
     })
 }
 

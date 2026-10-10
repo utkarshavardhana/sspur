@@ -1,0 +1,49 @@
+type NoteId = new Str
+
+// ANCHOR: types
+type Note = {id: NoteId, text: Str where _.len > 0, tags: List[Str]}
+
+type NoteV1 = {id: NoteId, text: Str where _.len > 0}
+
+fn migrate_Notes(old: NoteV1) -> Note
+= Note{id: old.id, text: old.text, tags: []}
+
+fn unmigrate_Notes(n: Note) -> NoteV1
+= NoteV1{id: n.id, text: n.text}
+// ANCHOR_END: types
+
+type NoteErr = NotFound{id: Str} | Conflict{id: Str}
+
+store Notes = table[NoteId, Note]
+
+// ANCHOR: create
+type NewNote = {id: NoteId, text: Str where _.len > 0}
+
+fn create(n: NewNote) -> Note ! db.read[Notes], db.write[Notes], fail[NoteErr]
+= do
+  if db.get(Notes, n.id).is_some then raise Conflict{id: n.id.raw}
+  note = Note{id: n.id, text: n.text, tags: []}
+  db.put(Notes, n.id, note)
+  note
+
+fn tag(id: Str, t: Str) -> Note ! db.read[Notes], db.write[Notes], fail[NoteErr]
+= do
+  old = db.get(Notes, NoteId(id)).ok_or(NotFound{id})
+  note = old with tags := old.tags.push(t)
+  db.put(Notes, NoteId(id), note)
+  note
+// ANCHOR_END: create
+
+fn read(id: Str) -> Opt[Note] ! db.read[Notes]
+= db.get(Notes, NoteId(id))
+
+// ANCHOR: tagged
+fn tagged(name: Str) -> List[Note] ! db.read[Notes]
+= db.scan(Notes).filter(_.tags.contains(name)).sort_by(_.id.raw)
+// ANCHOR_END: tagged
+
+svc notes
+  ep post "/notes" = create
+  ep get "/notes/{id}" = read
+  ep post "/notes/{id}/tags" = tag
+  ep get "/tags/{name}" = tagged

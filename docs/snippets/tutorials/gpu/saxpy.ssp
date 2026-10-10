@@ -1,0 +1,40 @@
+// ANCHOR: saxpy
+kernel fn saxpy(a: F32, x: &[F32], y: &mut [F32]) @grid(y.len, 256)
+  pre x.len == y.len
+= y[gid] := a * x[gid] + y[gid]
+// ANCHOR_END: saxpy
+
+// ANCHOR: reduce
+kernel fn block_sums(x: &[F32], out: &mut [F32]) @grid(x.len, 256)
+= do
+  sh = shared[F32](256)
+  sh[lid] := x[gid]
+  barrier()
+  for k in 0..8
+    s = 128.shr(k)
+    if lid < s then sh[lid] := sh[lid] + sh[lid + s]
+    barrier()
+  if lid == 0 then out[group_id] := sh[0]
+// ANCHOR_END: reduce
+
+// ANCHOR: host
+fn sum_on_gpu(n: Int) -> F64 ! dev
+= do
+  x = dev_f32((0..n).map(i => (i % 10).to_f64))
+  parts = dev_f32((0..n / 256).map(i => 0.0))
+  block_sums(&x, &mut parts)
+  parts.to_list.sum
+
+fn scaled(a: F64) -> List[F64] ! dev
+= do
+  var ys = [1.0, 2.0, 3.0]
+  saxpy(a, &[10.0, 20.0, 30.0], &mut ys)
+  ys
+// ANCHOR_END: host
+
+fn main() -> Unit ! log, dev
+= do
+  log("saxpy: {scaled(0.5)}")
+  log("sum: {sum_on_gpu(65536)}")
+
+test saxpy_small = scaled(2.0) == [21.0, 42.0, 63.0]

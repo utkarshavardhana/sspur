@@ -1,0 +1,20 @@
+type NoteId = new Str
+
+type Note = {id: NoteId, text: Str where _.len > 0}
+
+type NoteErr = NotFound{id: Str} | Conflict{id: Str}
+
+store Notes = table[NoteId, Note]
+
+fn create(n: Note) -> Note ! db.read[Notes], db.write[Notes], fail[NoteErr]
+= do
+  if db.get(Notes, n.id).is_some then raise Conflict{id: n.id.raw}
+  db.put(Notes, n.id, n)
+  n
+
+fn read(id: Str) -> Opt[Note] ! db.read[Notes]
+= db.get(Notes, NoteId(id))
+
+svc notes
+  ep post "/notes" = create
+  ep get "/notes/{id}" = read

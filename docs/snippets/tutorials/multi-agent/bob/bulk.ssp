@@ -1,0 +1,6 @@
+fn total(items: List[Item]) -> Int
+= do
+  s = items.map(_.price * _.qty).sum
+  if s >= 50 then s * 9 / 10 else s
+
+test bulk = total([Item{name: "box", price: 25, qty: 2}]) == 45

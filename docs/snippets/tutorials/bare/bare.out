@@ -1,0 +1,16 @@
+// ANCHOR: test
+$ sspur test hello.ssp
+1 passed, 0 failed
+$ sspur run hello.ssp
+runtime error: mmio needs a bare target: build with 'sspur build --target riscv64-qemu|aarch64-qemu'
+// ANCHOR_END: test
+// ANCHOR: build
+$ sspur build --target aarch64-qemu hello.ssp -o kernel.elf
+built kernel.elf (aarch64-qemu; sources in kernel.elf.build)
+boot: qemu-system-aarch64 -machine virt -cpu cortex-a53 -smp 2 -m 64M -semihosting -nographic -monitor none -no-reboot -kernel kernel.elf
+// ANCHOR_END: build
+// ANCHOR: m4
+$ sspur build --target thumbv7em-mps2 hello.ssp -o fw.elf
+built fw.elf (thumbv7em-mps2; sources in fw.elf.build)
+boot: qemu-system-arm -machine mps2-an386 -cpu cortex-m4 -semihosting -nographic -monitor none -no-reboot -kernel fw.elf
+// ANCHOR_END: m4

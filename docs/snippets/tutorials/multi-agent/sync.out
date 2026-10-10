@@ -1,0 +1,51 @@
+// ANCHOR: setup
+$ cd alice
+$ sspur init shop.ssp
+ok 4 definitions
+$ cd ../bob
+$ sspur init
+...
+$ sspur sync pull ../alice
+ok pulled 1 commits, HEAD #na5tm3mr3ex5 [Item empty main total]
+// ANCHOR_END: setup
+// ANCHOR: edits
+$ sspur edit --test bulk.ssp
+ok +bulk ~total
+2 passed, 0 failed
+$ cd ../alice
+$ sspur edit --test shipping.ssp
+ok +shipping ~total
+2 passed, 0 failed
+// ANCHOR_END: edits
+// ANCHOR: conflict
+$ sspur sync pull ../bob
+pulled 1 commits not merged, HEAD unchanged
+E_CONFLICT 'total' was changed on both sides
+  hint: resolve with ops {"op": "resolve", "path": P, "pick": "ours"|"theirs"} or 'sspur sync resolve ours|theirs'; fix type errors with a transaction that has "merge": true
+...
+  ours:
+    fn total(items: List[Item]) -> Int
+    = if items.is_empty then 0 else items.map(_.price * _.qty).sum + 5
+  theirs:
+    fn total(items: List[Item]) -> Int
+    = do
+      s = items.map(_.price * _.qty).sum
+      if s >= 50 then s * 9 / 10 else s
+// ANCHOR_END: conflict
+// ANCHOR: resolve
+$ sspur sync resolve theirs
+ok merge, HEAD #uf27ruzq5s5n [bulk empty main shipping total]
+$ sspur edit --test both.ssp
+ok ~bulk ~shipping ~total
+3 passed, 0 failed
+$ sspur sync push ../bob
+ok pushed 3 commits, HEAD #bocb4esnxu4z [bulk empty main shipping total]
+// ANCHOR_END: resolve
+// ANCHOR: check
+$ cd ../bob
+$ sspur test
+3 passed, 0 failed
+$ sspur sync status
+HEAD bocb4esnxu4z6tx72s6ohxaitbntmoy3zjruy3tace2lybassdga
+...
+// ANCHOR_END: check

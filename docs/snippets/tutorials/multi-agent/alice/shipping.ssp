@@ -1,0 +1,4 @@
+fn total(items: List[Item]) -> Int
+= if items.is_empty then 0 else items.map(_.price * _.qty).sum + 5
+
+test shipping = total([Item{name: "pen", price: 3, qty: 1}]) == 8

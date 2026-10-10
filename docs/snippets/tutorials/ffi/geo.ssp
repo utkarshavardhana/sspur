@@ -1,0 +1,38 @@
+// ANCHOR: extern
+extern fn hypot(x: F64, y: F64) -> F64 ! ffi from "m"
+extern fn cbrt(x: F64) -> F64 ! ffi from "m"
+extern fn strlen(s: Str) -> U64 ! ffi
+extern fn getenv(name: Str) -> Opt[Str] ! ffi
+// ANCHOR_END: extern
+
+// ANCHOR: wrap
+type GeoErr = BadInput{what: Str}
+
+fn dist(x1: F64, y1: F64, x2: F64, y2: F64) -> F64 ! ffi
+= hypot(x2 - x1, y2 - y1)
+
+fn cube_side(volume: F64) -> F64 ! ffi, fail[GeoErr]
+= do
+  if volume < 0.0 then raise BadInput{what: "negative volume {volume}"}
+  cbrt(volume)
+
+fn name_len(name: Str) -> Int ! ffi
+= strlen(name)
+
+fn has_home() -> Bool ! ffi
+= getenv("HOME").is_some
+// ANCHOR_END: wrap
+
+fn side_or_zero(v: F64) -> F64 ! ffi
+= catch cube_side(v)
+  | BadInput => 0.0
+
+fn main() -> Unit ! log, ffi
+= do
+  log("dist {dist(0.0, 0.0, 3.0, 4.0)}")
+  log("side {side_or_zero(27.0)} {side_or_zero(-8.0)}")
+  log("len {name_len("sspur")}")
+
+test dist_345 = dist(0.0, 0.0, 3.0, 4.0) == 5.0
+test negative = catch cube_side(-1.0) == 0.0
+  | BadInput{what} => what == "negative volume -1.0"

@@ -1,0 +1,55 @@
+// ANCHOR: migrate
+$ sspur deploy migrate notes_v1.ssp notes_v2.ssp --out mig
+migrate svc notes #1d67e631ca7fd732 -> #7cd30b84fad22a9a
+  Notes migration schema ltijs64nicnc -> 2rjv4w4gfn3f via migrate_Notes, reverse unmigrate_Notes
+    ! field tags: List[Str] added (required)
+    note: writes keep a v_ltijs64nicnc copy made by unmigrate_Notes, so the old version reads new items
+  backfill: backfill_Notes (dynamodb:Scan, dynamodb:PutItem on Notes); reads migrate lazily until it has run
+  ok: old and new versions can run side by side
+// ANCHOR_END: migrate
+// ANCHOR: serve
+$ sspur deploy local notes_v1.ssp --port 8080 --record traffic.jsonl
+listening on http://127.0.0.1:8080
+...
+// ANCHOR_END: serve
+// ANCHOR: v1
+$ curl -s -w ' %{http_code}\n' -X POST localhost:8080/notes -d '{"id":"n1","text":"buy milk"}'
+{"id":"n1","text":"buy milk"} 201
+$ curl -s -w ' %{http_code}\n' localhost:8080/notes/n1
+{"id":"n1","text":"buy milk"} 200
+$ curl -s -w ' %{http_code}\n' localhost:8080/notes/n9
+{"error":"not found"} 404
+// ANCHOR_END: v1
+// ANCHOR: replay
+$ sspur deploy replay traffic.jsonl notes_v2.ssp
+replayed 3 requests: 1 identical, 0 extended (only new null fields), 2 differ
+  local-00000001 POST /notes response
+    recorded: {"id":"n1","text":"buy milk"}
+    new:      {"id":"n1","tags":[],"text":"buy milk"}
+  local-00000001 POST /notes writes
+    recorded: [{"key":{"S":"n1"},"op":"put","store":"Notes","value":{"id":"n1","text":"buy milk"}}]
+    new:      [{"key":{"S":"n1"},"op":"put","store":"Notes","value":{"id":"n1","tags":[],"text":"buy milk"}}]
+  local-00000002 GET /notes/n1 response
+    recorded: {"id":"n1","text":"buy milk"}
+    new:      {"id":"n1","tags":[],"text":"buy milk"}
+// ANCHOR_END: replay
+// ANCHOR: swap
+$ sspur deploy swap notes_v2.ssp --port 8080
+...
+$ sspur deploy status --port 8080
+{"canary":null,"previous":{"inflight":0,"version":"1d67e631ca7fd732"},"stable":{"inflight":0,"version":"7cd30b84fad22a9a"},"svc":"notes"}
+// ANCHOR_END: swap
+// ANCHOR: v2
+$ curl -s -w ' %{http_code}\n' localhost:8080/notes/n1
+{"id":"n1","text":"buy milk","tags":[]} 200
+$ curl -s -w ' %{http_code}\n' -X POST localhost:8080/notes/n1/tags -d '"home"'
+{"id":"n1","text":"buy milk","tags":["home"]} 201
+$ curl -s -w ' %{http_code}\n' localhost:8080/tags/home
+[{"id":"n1","text":"buy milk","tags":["home"]}] 200
+// ANCHOR_END: v2
+// ANCHOR: rollback
+$ sspur deploy rollback --port 8080
+{"canary":null,"previous":{"inflight":0,"version":"7cd30b84fad22a9a"},"stable":{"inflight":0,"version":"1d67e631ca7fd732"},"svc":"notes"}
+$ curl -s -w ' %{http_code}\n' localhost:8080/notes/n1
+{"id":"n1","text":"buy milk"} 200
+// ANCHOR_END: rollback

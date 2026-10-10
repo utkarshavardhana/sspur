@@ -1,0 +1,30 @@
+profile bare
+
+// ANCHOR: putc
+fn putc(c: Int) ! mmio, div
+= if arch() == "riscv64" then do
+    lsr = mmio[U8](0x10000005)
+    while lsr.read.band(0x20) == 0
+      ()
+    mmio[U8](0x10000000).write(c)
+  else if arch() == "thumbv7em" then do
+    mmio[U32](0x40004008).write(1)
+    while mmio[U32](0x40004004).read.band(1) != 0
+      ()
+    mmio[U32](0x40004000).write(c)
+  else do
+    fr = mmio[U32](0x09000018)
+    while fr.read.band(0x20) != 0
+      ()
+    mmio[U32](0x09000000).write(c)
+// ANCHOR_END: putc
+
+fn puts(s: Str) ! mmio, div
+= do
+  for i in 0..s.byte_len
+    putc(s.byte(i))
+
+fn main() ! mmio, div
+= puts("hello from sspur\n")
+
+test bytes = "hi".byte(1) == 105 and "hi".byte_len == 2

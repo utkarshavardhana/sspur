@@ -1,0 +1,18 @@
+// ANCHOR: run
+$ sspur run saxpy.ssp
+saxpy: [6.0, 12.0, 18.0]
+sum: 294900.0
+$ sspur run --interp saxpy.ssp
+saxpy: [6.0, 12.0, 18.0]
+sum: 294900.0
+$ sspur test saxpy.ssp
+1 passed, 0 failed
+// ANCHOR_END: run
+// ANCHOR: emit
+$ sspur gpu saxpy.ssp --emit metal
+...
+kernel void k_saxpy(constant float& p0 [[buffer(0)]], device const float* p1 [[buffer(1)]], constant long& l1 [[buffer(2)]], device float* p2 [[buffer(3)]], constant long& l2 [[buffer(4)]], constant long& ss_n [[buffer(5)]], device atomic_uint* ss_flag [[buffer(6)]], device atomic_uint* ss_mask [[buffer(7)]], uint ss_t [[thread_position_in_grid]]) {
+  long gid = (long)ss_t;
+  if (gid >= ss_n) return;
+...
+// ANCHOR_END: emit

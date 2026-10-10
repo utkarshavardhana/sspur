@@ -1,0 +1,16 @@
+// ANCHOR: ts
+$ sspur test from-typescript.ssp
+2 passed, 0 failed
+// ANCHOR_END: ts
+// ANCHOR: py
+$ sspur run from-python.ssp
+the 3
+and 2
+error: missing.txt: not found
+$ sspur test from-python.ssp
+1 passed, 0 failed
+// ANCHOR_END: py
+// ANCHOR: go
+$ sspur test from-go-rust.ssp
+3 passed, 0 failed
+// ANCHOR_END: go

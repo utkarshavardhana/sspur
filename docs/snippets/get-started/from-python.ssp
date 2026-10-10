@@ -1,0 +1,29 @@
+// ANCHOR: words
+fn top_words(text: Str, n: Int) -> List[(Str, Int)]
+= text.lower.words.counts.sort_by((-_.1, _.0)).take(n)
+// ANCHOR_END: words
+
+// ANCHOR: data
+type Item = {sku: Str, qty: Int where _ > 0, cents: Int where _ >= 0}
+
+fn order_total(items: List[Item]) -> Int
+= items.map(_.qty * _.cents).sum
+
+fn restock(it: Item, extra: Int where _ > 0) -> Item
+= it with qty := it.qty + extra
+// ANCHOR_END: data
+
+// ANCHOR: io
+fn first_line(path: Str) -> Str ! fs
+= match read_file(path)
+  | ok(text) => text.split("\n").first.or("")
+  | err(e) => "error: {e}"
+// ANCHOR_END: io
+
+fn main() -> Unit ! log, fs
+= do
+  for (w, c) in top_words("the cat and the hat and the bat", 2)
+    log("{w} {c}")
+  log(first_line("missing.txt"))
+
+test totals = order_total([Item{sku: "a", qty: 2, cents: 150}]) == 300 and restock(Item{sku: "a", qty: 1, cents: 5}, 2).qty == 3

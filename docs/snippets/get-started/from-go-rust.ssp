@@ -1,0 +1,43 @@
+// ANCHOR: errors
+type ParseErr = Empty | BadNumber{text: Str}
+
+fn parse_port(s: Str) -> Int ! fail[ParseErr]
+= do
+  t = s.trim
+  if t.is_empty then raise Empty
+  n = t.to_int.ok_or(BadNumber{text: t})
+  if n < 1 or n > 65535 then raise BadNumber{text: t}
+  n
+
+fn port_or_default(s: Str) -> Int
+= catch parse_port(s)
+  | Empty => 8080
+  | BadNumber => 0
+// ANCHOR_END: errors
+
+// ANCHOR: traits
+trait Area
+  fn area(s: Self) -> Int
+
+type Square = {side: Int} derive Eq, Show
+
+impl Area for Square
+  fn area(s: Square) -> Int = s.side * s.side
+
+fn total[T: Area](xs: List[T]) -> Int
+= xs.map(area).sum
+// ANCHOR_END: traits
+
+// ANCHOR: conc
+fn sum_range(lo: Int, hi: Int) -> Int
+= (lo..hi).sum
+
+fn parallel_sum(n: Int) -> Int
+= do
+  (a, b) = par(sum_range(0, n / 2), sum_range(n / 2, n))
+  a + b
+// ANCHOR_END: conc
+
+test ports = port_or_default(" 443 ") == 443 and port_or_default("") == 8080 and port_or_default("http") == 0 and port_or_default("70000") == 0
+test areas = total([Square{side: 2}, Square{side: 3}]) == 13
+test sums = parallel_sum(1000) == 499500

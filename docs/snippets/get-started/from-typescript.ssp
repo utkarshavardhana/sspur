@@ -1,0 +1,36 @@
+// ANCHOR: types
+type Shape = Circle{r: F64} | Rect{w: F64, h: F64}
+
+fn area(s: Shape) -> F64
+= match s
+  | Circle{r} => 3.14 * r * r
+  | Rect{w, h} => w * h
+// ANCHOR_END: types
+
+// ANCHOR: errors
+type User = {id: Str, name: Str, email: Opt[Str]}
+type LookupErr = NotFound{id: Str}
+
+fn find_user(users: List[User], id: Str) -> User ! fail[LookupErr]
+= users.find(_.id == id).ok_or(NotFound{id})
+
+fn contact(users: List[User], id: Str) -> Str
+= catch find_user(users, id).email.or("no email")
+  | NotFound{id} => "no user {id}"
+// ANCHOR_END: errors
+
+// ANCHOR: iface
+trait Named
+  fn label(x: Self) -> Str
+
+impl Named for User
+  fn label(u: User) -> Str = "{u.name} <{u.id}>"
+
+fn labels[T: Named](xs: List[T]) -> Str
+= xs.map(label).join(", ")
+// ANCHOR_END: iface
+
+test areas = area(Rect{w: 2.0, h: 3.0}) == 6.0
+test contacts = do
+  users = [User{id: "u1", name: "Ana", email: some("ana@example.com")}, User{id: "u2", name: "Bo", email: none}]
+  contact(users, "u1") == "ana@example.com" and contact(users, "u2") == "no email" and contact(users, "u9") == "no user u9" and labels(users) == "Ana <u1>, Bo <u2>"

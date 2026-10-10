@@ -10,14 +10,14 @@ An agent working on an SSPUR codebase needs three steps:
 2. **`sspur q ...`** only if the agent needs more: names, text matches, bodies or a context pack.
 3. **`sspur edit --test change.ssp`** after writing every definition the change touches to `change.ssp` with the agent's file tool, in the same turn. It typechecks the whole codebase, runs every test, and either applies everything or nothing.
 
-The examples below run on a small codebase. They are checked by CI like the [tutorial](tutorial.md), so the output is what the current build prints. First the codebase is imported into a `.sspur/` store, which is what agents work on:
+The examples below run on a small codebase. They are checked by CI like the rest of these docs, so the output is what the current build prints. First the codebase is imported into a `.sspur/` store, which is what agents work on:
 
 ```sspur
-{{#include ../tutorial/agents/cart.ssp}}
+{{#include ../snippets/get-started/agents/cart.ssp}}
 ```
 
 ```console
-{{#include ../tutorial/agents/session.out:start}}
+{{#include ../snippets/get-started/agents/session.out:start}}
 ```
 
 When the source is at most 12,000 bytes, `start` prints all of it. For a larger codebase it prints the counts per kind, then `q pack` of every argument that names a definition and `q find` of the other arguments. So the right first call is `sspur start` followed by the names that appear in the task: on the 1,117-definition benchmark codebase, `start` with six names printed 2,407 tokens, and that was everything the change needed.
@@ -27,29 +27,29 @@ When the source is at most 12,000 bytes, `start` prints all of it. For a larger 
 `q pack` gives the definitions to change with everything around them: the types and signatures they use, their tests and their callers, each printed once. The last line says whether the list of callers and tests is complete, so the agent does not spend a call checking:
 
 ```console
-{{#include ../tutorial/agents/session.out:pack}}
+{{#include ../snippets/get-started/agents/session.out:pack}}
 ```
 
-The other queries agents use: `q find 'ship|tax_*'` for names and signatures, `q grep TEXT` for definitions whose source contains TEXT, `q body A,B` for several bodies, and `q callers NAME`. On a large codebase `find` and `grep` print the first 25 and 12 matches in full and only the names of the rest, so a broad pattern can't flood the context. The [command line](cli.md#queries) page lists them.
+The other queries agents use: `q find 'ship|tax_*'` for names and signatures, `q grep TEXT` for definitions whose source contains TEXT, `q body A,B` for several bodies, and `q callers NAME`. On a large codebase `find` and `grep` print the first 25 and 12 matches in full and only the names of the rest, so a broad pattern can't flood the context. The [command line](../reference/cli.md#queries) page lists them.
 
 ### Edits
 
 `edit` takes plain SSPUR definitions. Each one replaces the definition with the same name or adds a new one. Leading `rename OLD NEW` and `remove NAME` lines rename (scope-aware, callers included) or delete. `--test` runs every test in the same call:
 
 ```console
-{{#include ../tutorial/agents/session.out:edit}}
+{{#include ../snippets/get-started/agents/session.out:edit}}
 ```
 
 `~total` was replaced, `+bulk` was added, and all three tests pass. A rejected edit changes nothing and prints each error as `definition:line:col CODE message`, with a hint when the mistake is a habit from another language:
 
 ```console
-{{#include ../tutorial/agents/session.out:rejected}}
+{{#include ../snippets/get-started/agents/session.out:rejected}}
 ```
 
 A spelling from another language that has exactly one meaning is not rejected: `edit` stores the SSPUR form and says what it rewrote. This covers `&& || !`, `elif`, `let`, `+=`, `len(x)`, `.length`, `.toLowerCase` and similar method names, `None`/`Some`/`True`, `s.slice(a, b)` on a `Str`, `_` in a call that takes no function, and a function that now performs an effect it does not declare:
 
 ```console
-{{#include ../tutorial/agents/session.out:normalized}}
+{{#include ../snippets/get-started/agents/session.out:normalized}}
 ```
 
 Put every change in one edit. Agents should write the definitions to a file with their file tool and run `sspur edit --test FILE`: agent sandboxes refuse long quoted arguments and heredocs, which cost run 9 a call or two in four cells. When two agents edit the same definition, the second gets `E_CONFLICT`, merges the other change and resends.
@@ -70,13 +70,13 @@ in the file and run it again. Do not edit `.sspur/` directly.
 
 ## MCP
 
-`sspur mcp` is a Model Context Protocol server over stdio. It serves the codebase in the directory it starts in, or the nearest parent with a `.sspur/`. In Claude Code, from the project directory:
+`sspur mcp` is a Model Context Protocol server over stdio. It serves the codebase in the directory it starts in, or the nearest parent with a `.sspur/`. In Claude Code:
 
 ```console
-claude mcp add sspur -- sspur mcp
+{{#include ../snippets/get-started/agents/setup.sh:mcp}}
 ```
 
-`--scope project` writes a `.mcp.json` you can commit, so everyone on the repository gets the server:
+The committed `.mcp.json` looks like this, so everyone on the repository gets the server:
 
 ```json
 {
@@ -101,62 +101,20 @@ Claude Desktop starts servers from its own directory and does not read your shel
 }
 ```
 
-[MCP setup](docs/agent/mcp.md) has the details, other clients and a one-line check from a shell.
+[MCP setup](../agent/mcp.md) has the details, other clients and a one-line check from a shell.
 
 ## Claude Code plugin
 
 The plugin bundles the MCP server with a skill that teaches the workflow above. The skill loads when you work with `.ssp` files or a `.sspur/` codebase, or ask about SSPUR. It needs `sspur` on your `PATH`.
 
 ```console
-claude plugin marketplace add utkarshavardhana/sspur
-claude plugin install sspur@sspur
+{{#include ../snippets/get-started/agents/setup.sh:plugin}}
 ```
 
-From a local clone, use the path instead: `claude plugin marketplace add /path/to/sspur`. To try it for one session without installing anything: `claude --plugin-dir /path/to/sspur/packaging/claude-code`.
+From a local clone, `claude plugin marketplace add /path/to/sspur` works too.
 
-## The token benchmark
+## What the benchmark measured
 
-The benchmark asks whether an agent finishes multi-step feature work in SSPUR with fewer total tokens than the same agent in another language. Each task starts from a small codebase that exists in every language with the same names, behavior and visible tests, and has 4 to 7 steps: bug fixes, new functions and error variants, signature changes that ripple through callers, renames. Each (language, task) pair is solved by one fresh Claude Code subagent with no retries, and scored on hidden tests it never sees. Total tokens are exact API input plus estimated output, summed over every call. The [full report](agent-bench.md) has the method, every run and every cell.
+The [agent benchmark](../design/agent-benchmarks.md) gives the same multi-step feature tasks to fresh Claude Code agents in SSPUR, Python, TypeScript and Go, and scores them on hidden tests. In run 11, Sonnet 5.5 used **0.65x** Python's total tokens, and **0.95x** TypeScript's and **0.86x** Go's, with every language passing 246/246 hidden tests. Per cell, the medians against TypeScript and Go are 1.01x and 1.00x: that is parity, not an advantage. On a 1,117-definition codebase, `sspur start NAME...` finished the change in 3 or 4 calls, ahead of Python and Go and level with or ahead of TypeScript.
 
-The original comparison was against Python. Run 9 added TypeScript (Node 20, strict `tsc`, `node:test`) and Go (`go test`) as controls, and they changed the conclusion: SSPUR used 0.83x Python's tokens but 1.23x TypeScript's and 1.11x Go's. Runs 10 and 11 reran all 17 SSPUR cells against the same Python, TypeScript and Go cells, after edits through a file the agent writes, canonical storage of unambiguous foreign spellings, failing tests that print the values they compared, and a core spec cut to 556 tokens. **SSPUR is cheaper than Python and at parity with TypeScript and Go, not ahead of them**, with all four languages passing 246/246 hidden tests:
-
-| Sonnet 5.5, 17 cells | SSPUR run 11 | SSPUR run 10 | SSPUR run 9 | Python | TypeScript | Go |
-|---|---|---|---|---|---|---|
-| Total tokens | 1,871,312 | 2,083,773 | 2,409,267 | 2,896,024 | 1,965,069 | 2,171,132 |
-| API calls | 58 | 63 | 70 | 88 | 61 | 66 |
-| SSPUR run 11 / language, total | | 0.90x | 0.78x | **0.65x** | **0.95x** | **0.86x** |
-| SSPUR run 11 / language, median per cell | | 0.99x | 0.97x | 0.59x | 1.01x | 1.00x |
-| Hidden tests | 246/246 | 246/246 | 246/246 | 246/246 | 246/246 | 246/246 |
-| Reference source size (cl100k) | 12,087 | 12,087 | 12,087 | 12,790 | 13,745 | 17,526 |
-
-The run 11 totals against TypeScript and Go are below 1.0x, but the medians are not, and SSPUR is cheaper than TypeScript on only 6 of 17 cells: that is parity. Run 11 also excludes 20 pilot cells from four attempts that were restarted after a spec or prompt fix, which favors the counted run; averaging every attempt gives 0.99x TypeScript.
-
-SSPUR source is the smallest of the four, but by 400 to 1,400 tokens per task, which cannot decide a run where one API call carries about 30,000 tokens of context. What decides it is calls: TypeScript and Go reach the same 3-call loop as SSPUR without reading any reference, while Python agents take 4 to 7 calls. On the 1,117-definition codebase, `sspur start NAME...` returns the spec plus exactly the definitions, tests and callers the edit needs; it took 3 calls in runs 9 and 10 (0.74x TypeScript) and 4 in run 11 (0.80x Python, 0.99x TypeScript, 0.47x Go; Go's number is flattered by shell friction, see the report).
-
-The per-model Python comparison, from runs 4 to 8:
-
-| Model and tasks | SSPUR / Python total tokens | API calls SSPUR / Python | Hidden tests SSPUR / Python |
-|---|---|---|---|
-| Sonnet 5.5, 8 tasks (a1 to a8) | **0.70x** (median 0.61x) | 26 / 38 | 95/95 / 95/95 |
-| Opus 5.5, the same 8 tasks | **0.76x** (median 0.76x) | 28 / 38 | 95/95 / 95/95 |
-| Haiku 4.5, the same 8 tasks | **0.83x** (median 0.88x), 2.31x before two rounds of fixes | 71 / 93 | 95/95 / 84/95 |
-| Sonnet 5.5, 8 tasks from neutral sources (b1 to b8) | **0.66x** (median 0.60x) | 29 / 45 | 141/141 / 141/141 |
-| Sonnet 5.5, one codebase of 1,117 definitions, 4 changes | **0.82x** over 2 runs (1.34x when first measured) | 4 / 5 | 10/10 / 10/10 |
-| Optional regex and JSON task (a9) | worse for every model: Sonnet 0.75x after a spec fix (1.96x before), Opus 1.37x, Haiku 5.2x | | |
-
-Where the savings come from: when the agent follows the loop, a task takes 3 calls (`start`, one `edit --test`, done), where a Python agent takes 4 to 7 (read, several targeted edits, run pytest, sometimes fix). SSPUR agents read about as much from tools as Python agents (1.0x to 1.3x for Sonnet and Opus), because the spec costs tokens. The savings are the calls not made, each of which re-reads 19k to 26k tokens of harness context. Where SSPUR loses, it is always a run of rejected edits: syntax from other languages, escaping inside JSON and regex strings, or an effect that ripples to callers. Against TypeScript and Go that loop is not an advantage, because Sonnet already writes both in 3 calls with no reference to read.
-
-### Caveats
-
-These numbers are real, but they are narrower than a headline makes them sound:
-
-- **The Python result is not a general result.** Run 11's TypeScript and Go ratios (0.95x and 0.86x, medians 1.01x and 1.00x) are inside the plus or minus 20% run-to-run band, so the honest statement about them is "no measured advantage". Do not read 0.65x against Python as 0.65x against whatever you use today.
-- **Most cells ran once.** Python's own totals moved by up to 24% between identical runs, and Haiku varies far more (one task took 61 calls, then 8). Only the large-codebase result has two runs (they agree within 0.3%).
-- **Reruns were targeted.** The Haiku 0.83x, the neutral-task 0.66x and several fixes rerun only the SSPUR cells that did worst, against the same Python cells. Cells chosen for doing badly have room to improve on a second try, so part of each improvement is regression to the mean. The Python cells were not rerun.
-- **I wrote the language, the spec, the a-tasks and the harness.** The b-tasks come from neutral sources (LeetCode, an RFC, the AWK book and others) to check for that, and landed close to the a-task result, but they were adapted by the same model family that solved them.
-- **The large codebase is one task.** It is generated and repetitive, which makes grep unusually effective for both languages. SSPUR moved from 1.34x to 0.82x on it through tool changes made while looking at its transcripts.
-- **Totals include the harness.** Every call re-reads about 26k tokens of Claude Code subagent context (19k for Haiku), so fewer calls dominate the totals. The full report also gives net tokens and tool I/O without that overhead.
-- **Output tokens are estimated** with tiktoken `cl100k_base`, about 15% off Claude's tokenizer, but output is under 1% of the total.
-- **The benchmark uses the CLI, not MCP**, because the harness cannot attach an MCP server to a subagent. The tools are the same; one run of the large task through MCP alone also passed in 4 calls, outside the harness.
-- **The compact spec has no services, packages, concurrency or C**, and no task exercised them, so this benchmark says nothing about agents writing that code.
-- **Haiku 4.5 does not follow the one-edit loop.** After one rejected edit it falls back to one definition per call and re-checks after success. The fix hints brought it under Python on these tasks, but it still writes less valid SSPUR than Sonnet and Opus.
+The savings come from calls not made. When the agent follows the loop above, a task takes 3 calls, and each call it saves re-reads about 26k tokens of harness context. SSPUR loses when edits keep getting rejected: syntax from other languages, escaping inside strings, or an effect that ripples to callers. The [full report](../design/agent-benchmarks.md) has every run and cell, and the caveats, which matter: most cells ran once, I wrote the language and most of the tasks, and the compact spec covers no services, packages, concurrency or C.

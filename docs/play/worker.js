@@ -33,7 +33,7 @@ self.onmessage = async (e) => {
   } catch (err) {
     const msg = panic
       ? "internal error: " + panic
-      : err instanceof RangeError
+      : err instanceof RangeError || /too much recursion|call stack/i.test(String(err && err.message))
         ? "runtime error: stack overflow: a browser gives the page a much smaller stack than sspur run has, so recursion here goes only a few hundred calls deep"
         : "internal error: " + String((err && err.message) || err);
     self.postMessage({ id: m.id, error: msg, dead: true });

@@ -167,6 +167,7 @@ async function main() {
   }
 
   async function go(op) {
+    if (op === "run" && !/^(pub\s+)?fn\s+main\b/m.test(editor.text())) op = "test";
     const box = $("output");
     tab("output");
     box.replaceChildren(el("div", "line quiet", op === "run" ? "Running..." : "Testing..."));
@@ -183,7 +184,6 @@ async function main() {
       } else if (op === "run") {
         for (const l of r.output) box.appendChild(el("div", "line " + l.stream, l.text));
         if (r.status === "trap") box.appendChild(el("div", "line err", r.message));
-        if (r.status === "trap" && /no 'main' function/.test(r.message)) box.appendChild(el("div", "line quiet", "This program has no main. Press Test to run its tests and examples."));
         if (r.status === "exit") box.appendChild(el("div", "line quiet", `exited with code ${r.code}`));
         box.appendChild(el("div", "line quiet", `done in ${ms} ms`));
       } else {
@@ -193,6 +193,7 @@ async function main() {
           row.appendChild(el("span", null, t.name + (t.ok ? "" : ": " + t.message)));
           box.appendChild(row);
         }
+        if (!/^(pub\s+)?fn\s+main\b/m.test(editor.text())) box.appendChild(el("div", "line quiet", "No main, so Run ran the tests."));
         box.appendChild(el("div", "line " + (r.failed ? "err" : "quiet"), `${r.passed} passed, ${r.failed} failed (${ms} ms)`));
       }
     } catch (e) {
@@ -213,14 +214,20 @@ async function main() {
   }
 
   async function share() {
-    const url = location.origin + location.pathname + "#code=" + (await encode(editor.text()));
+    const link = encode(editor.text()).then((c) => location.origin + location.pathname + "#code=" + c);
+    // Safari only allows a clipboard write started inside the click, so hand it the pending link.
+    const copied = typeof ClipboardItem !== "undefined" && navigator.clipboard && navigator.clipboard.write
+      ? navigator.clipboard.write([new ClipboardItem({ "text/plain": link.then((u) => new Blob([u], { type: "text/plain" })) })])
+      : link.then((u) => navigator.clipboard.writeText(u));
+    copied.catch(() => {});
+    const url = await link;
     history.replaceState(null, "", url);
     const field = $("link");
     field.value = url;
     field.hidden = false;
     field.select();
     try {
-      await navigator.clipboard.writeText(url);
+      await copied;
       $("engine").textContent = "Link copied";
     } catch {
       $("engine").textContent = "Copy the link below";

@@ -309,6 +309,7 @@ export function createEditor({ parent, doc, dark, api, onChange, commands }) {
     state: EditorState.create({
       doc,
       extensions: [
+        ...(matchMedia("(max-width: 720px)").matches ? [EditorView.lineWrapping] : []),
         lineNumbers(),
         highlightActiveLineGutter(),
         highlightSpecialChars(),

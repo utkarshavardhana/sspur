@@ -14,6 +14,7 @@ concurrency:
 
 env:
   MDBOOK_VERSION: 0.5.4
+  BINARYEN_VERSION: 123
 
 jobs:
   build:
@@ -28,11 +29,31 @@ jobs:
           curl -fsSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$RUNNER_TEMP/mdbook"
           echo "$RUNNER_TEMP/mdbook" >> "$GITHUB_PATH"
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen and wasm-opt
+        run: |
+          v="$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')"
+          curl -fsSL "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${v}/wasm-bindgen-${v}-x86_64-unknown-linux-musl.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/wasm-bindgen-${v}-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz" | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+
       - name: Configure Pages
         uses: actions/configure-pages@v6
 
       - name: Build
         run: mdbook build docs
+
+      - name: Build the playground
+        run: tools/build_playground.sh docs/book/play
+
+      - name: Playground smoke test
+        run: node tools/playground_test.mjs docs/book/play
 
       - name: Check internal links
         run: python3 tools/check_site_links.py docs/book

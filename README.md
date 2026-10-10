@@ -290,4 +290,6 @@ SSPUR is dual-licensed under either of
 
 at your option. Unless you explicitly state otherwise, any contribution you submit for inclusion in SSPUR is dual-licensed as above, without any additional terms or conditions.
 
+Copies and derived works must keep the copyright notice and the [NOTICE](NOTICE) file. The licenses cover the code, not the SSPUR name: a fork needs its own name.
+
 Copyright © 2026 Utkarsha Vardhana.

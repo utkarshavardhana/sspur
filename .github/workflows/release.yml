@@ -64,7 +64,7 @@ jobs:
         run: |
           name="sspur-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "dist/$name"
-          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE NOTICE "dist/$name/"
           if [ "$RUNNER_OS" = Windows ]; then
             cp "target/${{ matrix.target }}/release/sspur.exe" "dist/$name/"
             archive="$name.zip"

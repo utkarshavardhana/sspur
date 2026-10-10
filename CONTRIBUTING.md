@@ -36,6 +36,17 @@ The test suite is heavy (it compiles a lot of C). If memory is tight, limit para
 
 It uses `target/release/sspur` by default; set `SSPUR_BIN` to check another binary. A change that makes native output differ from the interpreter is a bug in the native compiler, not in the test.
 
+## Documentation
+
+The site is an mdBook in `docs/` (`docs/book.toml`). Build it and check its links with:
+
+```
+mdbook build docs
+python3 tools/check_site_links.py docs/book
+```
+
+Code shown in the docs lives in `docs/snippets/`, never inline. The tutorial test (`cargo test --release -p sspur-cli --test tutorial`) runs every transcript (`*.out`) there against the compiler, fails if a page in `get-started/`, `handbook/`, `tutorials/`, `config/` or the cheat sheet has a code block that isn't an include of a snippet, if a `.ssp` snippet is never run, and if `docs/reference/errors.md` misses a diagnostic code the compiler can emit. When you change compiler output, update the transcripts it breaks.
+
 ## Verification
 
 - `sspur verify file.ssp` proves contracts with Z3.

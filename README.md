@@ -5,7 +5,7 @@
 
 **A programming language for AI agents to write, read, and maintain.**
 
-Documentation, a 10-minute tutorial and a guide for AI agents: **[utkarshavardhana.github.io/sspur](https://utkarshavardhana.github.io/sspur/)**
+Documentation: **[utkarshavardhana.github.io/sspur](https://utkarshavardhana.github.io/sspur/)**, with [Get Started](https://utkarshavardhana.github.io/sspur/get-started/five-minutes.html), the [Handbook](https://utkarshavardhana.github.io/sspur/handbook/index.html), the [Reference](https://utkarshavardhana.github.io/sspur/reference/language.html) and [Tutorials](https://utkarshavardhana.github.io/sspur/tutorials/index.html).
 
 SSPUR is a statically typed, effect-tracked language whose primary users are AI coding agents rather than people. Programs are stored as a typed, content-addressed graph of definitions. Agents change code through atomic, typechecked operations instead of text diffs, and the compiler treats contracts, effects, and tests as first-class data. The surface syntax is designed to spend as few tokens as possible while still compiling to native code that outperforms idiomatic C++.
 
@@ -44,6 +44,9 @@ Most languages are designed around a human at a keyboard. SSPUR starts from a di
 
 **Language**
 - Records, sum types, generics, pattern matching, decision tables, and refinement types
+- Traits with default methods, bounds such as `[T: Ord + Show]`, operators as traits (`impl Add for Money`), and `derive Eq, Ord, Show, Hash, Json`, all resolved statically
+- Lambdas, `_` placeholders, and block lambdas (`xs.map(x => do` and an indented block)
+- Packages: `sspur.toml`, `pub` exports, `use lib.{f, T}`, and a lock that pins each dependency by the hash of its exports
 - Algebraic effects with handlers and one-shot `resume`, generators with `yield`
 - Errors as typed effects (`raise`, `catch`), with exhaustiveness checking
 - Structured concurrency with `par`, `Atomic[Int]`, and channels, with data races rejected by the type checker
@@ -65,7 +68,6 @@ Most languages are designed around a human at a keyboard. SSPUR starts from a di
 - C interop in both directions: `extern fn`, `sspur bind` for C headers, and `sspur export-c` to ship SSPUR as a C library
 - `kernel fn` GPU kernels: Metal with exact `F32` and identical traps, queued launches, shared memory and barriers, deterministic atomics, 2D grids and inlined helper fns, plus OpenCL C, SPIR-V and PTX through `sspur gpu`
 - `sspur deploy` to generate infrastructure and least-privilege IAM policies from a service's effects, run the service locally, migrate data, hot swap versions, and replay recorded traffic
-- `kernel fn` GPU kernels (Metal, with OpenCL, SPIR-V and PTX output)
 - Concurrent editing by many agents with typechecked merges, replica sync, and a shared build cache
 
 ## Performance
@@ -181,7 +183,7 @@ sspur deps update                           # semantic diff; refused if it break
 sspur q sig textutils.clip                  # a dependency's signature, without its body
 ```
 
-See [`examples/packages/`](examples/packages) and [ADR 0026](docs/adr/0026-packages.md).
+See the [Packages](https://utkarshavardhana.github.io/sspur/handbook/packages.html) chapter of the handbook, [`examples/packages/`](examples/packages) and [ADR 0026](docs/adr/0026-packages.md).
 
 More examples:
 
@@ -211,26 +213,21 @@ The recommended loop is one call per change: read what you need with `sspur q`, 
 
 ## Documentation
 
-Everything below is also published as a searchable site at [utkarshavardhana.github.io/sspur](https://utkarshavardhana.github.io/sspur/), together with [the tutorial](https://utkarshavardhana.github.io/sspur/tutorial.html) and [SSPUR for AI agents](https://utkarshavardhana.github.io/sspur/agents.html). The site source is in [`site/`](site/).
+The documentation is an mdBook in [`docs/`](docs/), published at [utkarshavardhana.github.io/sspur](https://utkarshavardhana.github.io/sspur/). Every code block in the handbook and tutorials is a file in [`docs/snippets/`](docs/snippets/) that CI runs against the current compiler.
 
-| Document | Contents |
+| Section | Contents |
 |---|---|
-| [Vision](docs/design/00-vision.md) | Why SSPUR exists and the principles behind it |
-| [Core semantics](docs/design/01-core-semantics.md) | Types, effects, contracts, memory, concurrency |
-| [Graph model](docs/design/02-graph-model.md) | Content-addressed definitions, operations, the query API |
-| [Text projection](docs/design/03-text-projection.md) | The token-optimized source format |
-| [Deploy model](docs/design/04-deploy-model.md) | Services, stores, effects as permissions |
-| [Systems layer](docs/design/05-systems-layer.md) | Systems programming features and the C++ parity matrix |
-| [AI-native constructs](docs/design/06-ai-native-constructs.md) | `Guess`, taint types, decision tables, and other agent-oriented types |
-| [Language reference](docs/reference/language.md) | The complete reference |
-| [Agent reference](docs/agent/agent-spec.md) | The compact reference served by `sspur spec` |
-| [MCP setup](docs/agent/mcp.md) | `sspur mcp` for Claude Code, Claude Desktop and other MCP clients, and the Claude Code plugin |
-| [Roadmap](docs/design/roadmap.md) | Phases and exit criteria |
-| [Design decisions](docs/adr/) | Architecture decision records for every major change |
+| [Get Started](https://utkarshavardhana.github.io/sspur/get-started/five-minutes.html) | SSPUR in 5 minutes, pages for [TypeScript](https://utkarshavardhana.github.io/sspur/get-started/from-typescript.html), [Python](https://utkarshavardhana.github.io/sspur/get-started/from-python.html) and [Go and Rust](https://utkarshavardhana.github.io/sspur/get-started/from-go-rust.html) programmers, [SSPUR for AI agents](https://utkarshavardhana.github.io/sspur/get-started/agents.html) and [installation](https://utkarshavardhana.github.io/sspur/get-started/installation.html) |
+| [Handbook](https://utkarshavardhana.github.io/sspur/handbook/index.html) | The language in eleven pages, from the basics to traits, concurrency and packages |
+| [Reference](https://utkarshavardhana.github.io/sspur/reference/language.html) | The [full language reference](docs/reference/language.md) (what `sspur spec --full` prints), the [standard library](https://utkarshavardhana.github.io/sspur/reference/stdlib.html), [effects](https://utkarshavardhana.github.io/sspur/reference/effects.html), [error codes](https://utkarshavardhana.github.io/sspur/reference/errors.html), the [command line](https://utkarshavardhana.github.io/sspur/reference/cli.html), the [agent reference](docs/agent/agent-spec.md) and [JSON schemas](https://utkarshavardhana.github.io/sspur/reference/schema.html) |
+| [Tutorials](https://utkarshavardhana.github.io/sspur/tutorials/index.html) | A CRUD service, migrations and hot swap, calling C, bare metal, GPU kernels, and a multi-agent codebase |
+| [Project Configuration](https://utkarshavardhana.github.io/sspur/config/sspur-toml.html) | `sspur.toml`, `sspur.lock`, build options and environment variables |
+| [Cheat Sheet](https://utkarshavardhana.github.io/sspur/cheat-sheet.html) | The everyday syntax on one page |
+| [Design and Performance](https://utkarshavardhana.github.io/sspur/design/index.html) | The [design documents](docs/design/), the [decision records](docs/adr/), and the native and agent benchmarks |
 
 ## Project status
 
-SSPUR is at version 0.2 and under active development. The language and tools are usable, but the syntax and standard library may still change between releases.
+SSPUR is at version 0.3 and under active development. The language and tools are usable, but the syntax and standard library may still change between releases.
 
 | Phase | Status |
 |---|---|

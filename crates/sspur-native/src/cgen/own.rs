@@ -108,7 +108,7 @@ impl Cx<'_> {
             return None;
         }
         let p0 = f.params[0].name.as_str();
-        let ExprKind::Match(s, arms) = &f.body.kind else { return None };
+        let ExprKind::Match(s, arms, _) = &f.body.kind else { return None };
         if !is_name(s, p0) {
             return None;
         }
@@ -309,7 +309,7 @@ pub(super) fn tail_calls(e: &Expr, name: &str, out: &mut Spans) {
                 tail_calls(b, name, out);
             }
         }
-        ExprKind::Match(_, arms) => arms.iter().for_each(|a| tail_calls(&a.body, name, out)),
+        ExprKind::Match(_, arms, _) => arms.iter().for_each(|a| tail_calls(&a.body, name, out)),
         ExprKind::Block(stmts) => {
             if let Some(Stmt::Expr(x)) = stmts.last() {
                 tail_calls(x, name, out);

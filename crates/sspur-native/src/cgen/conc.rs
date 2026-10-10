@@ -116,7 +116,9 @@ impl Cx<'_> {
         self.scopes.push(HashMap::new());
         let mut conds = Vec::new();
         let mut binds = Vec::new();
-        if let Err(e) = self.pattern(p, &item, &et, &mut conds, &mut binds) {
+        let r = self.pattern(p, &item, &et, &mut conds, &mut binds);
+        let pre = std::mem::take(&mut self.pat_decls);
+        if let Err(e) = r {
             self.scopes.pop();
             return Err(e);
         }
@@ -138,7 +140,7 @@ impl Cx<'_> {
         let body = self.expr(body);
         self.scopes.pop();
         let cond = if conds.is_empty() { "1".to_string() } else { conds.join(" && ") };
-        Ok(format!("{{ SsChan* {c} = {cv}; {ec} {item}; while (ss_recv({c}, &{item}, st)) {{ if ({cond}) {{ {decl}(void)({}); }} }} }} ", body?))
+        Ok(format!("{{ SsChan* {c} = {cv}; {ec} {item}; while (ss_recv({c}, &{item}, st)) {{ {pre}if ({cond}) {{ {decl}(void)({}); }} }} }} ", body?))
     }
 
     pub(super) fn conc_global(&mut self, name: &str, args: &[Expr], t: &Type) -> G<Option<String>> {

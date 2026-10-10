@@ -134,7 +134,7 @@ fn map_kids(e: &Expr, f: &mut dyn FnMut(&Expr) -> Expr) -> Expr {
         ExprKind::Binary(o, a, b) => ExprKind::Binary(*o, Box::new(f(a)), Box::new(f(b))),
         ExprKind::Range(a, b) => ExprKind::Range(Box::new(f(a)), Box::new(f(b))),
         ExprKind::If(c, t, x) => ExprKind::If(Box::new(f(c)), Box::new(f(t)), x.as_ref().map(|x| Box::new(f(x)))),
-        ExprKind::Match(s, arms) => ExprKind::Match(Box::new(f(s)), map_arms(arms, f)),
+        ExprKind::Match(s, arms, k) => ExprKind::Match(Box::new(f(s)), map_arms(arms, f), *k),
         ExprKind::Catch(s, arms) => ExprKind::Catch(Box::new(f(s)), map_arms(arms, f)),
         ExprKind::Handle(s, arms) => ExprKind::Handle(Box::new(f(s)), map_arms(arms, f)),
         ExprKind::Block(stmts) => ExprKind::Block(stmts.iter().map(|s| map_stmt(s, f)).collect()),
@@ -221,7 +221,7 @@ fn binders(e: &Expr) -> HashSet<String> {
     visit::walk_expr(e, &mut |x| {
         match &x.kind {
             ExprKind::Lambda { params, .. } => out.extend(params.iter().cloned()),
-            ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) | ExprKind::Handle(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, &mut out)),
+            ExprKind::Match(_, arms, _) | ExprKind::Catch(_, arms) | ExprKind::Handle(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, &mut out)),
             ExprKind::Block(st) => {
                 for s in st {
                     match s {
@@ -259,11 +259,11 @@ fn subst(e: &Expr, x: &str, r: &Expr) -> Expr {
     match &e.kind {
         ExprKind::Name(n) if n == x => r.clone(),
         ExprKind::Lambda { params, .. } if params.iter().any(|p| p == x) => e.clone(),
-        ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
+        ExprKind::Match(s, arms, _) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
             let arms = arms.iter().map(|a| if pat_binds(&a.pat, x) { a.clone() } else { Arm { pat: a.pat.clone(), guard: a.guard.as_ref().map(|g| subst(g, x, r)), body: subst(&a.body, x, r) } }).collect();
             let s = Box::new(subst(s, x, r));
             let kind = match &e.kind {
-                ExprKind::Match(..) => ExprKind::Match(s, arms),
+                ExprKind::Match(_, _, k) => ExprKind::Match(s, arms, *k),
                 ExprKind::Catch(..) => ExprKind::Catch(s, arms),
                 _ => ExprKind::Handle(s, arms),
             };
@@ -325,7 +325,7 @@ fn head_is(e: &Expr, x: &str) -> bool {
     match &e.kind {
         ExprKind::Name(n) => n == x,
         ExprKind::Method { recv, .. } | ExprKind::Field(recv, _) | ExprKind::Index(recv, _) | ExprKind::Unary(_, recv) => head_is(recv, x),
-        ExprKind::Binary(_, a, _) | ExprKind::Range(a, _) | ExprKind::If(a, _, _) | ExprKind::Match(a, _) => head_is(a, x),
+        ExprKind::Binary(_, a, _) | ExprKind::Range(a, _) | ExprKind::If(a, _, _) | ExprKind::Match(a, _, _) => head_is(a, x),
         ExprKind::Call(f, args) => matches!(f.kind, ExprKind::Name(_)) && args.first().is_some_and(|a| head_is(a, x)),
         ExprKind::Record { fields, .. } => fields.first().is_some_and(|(_, v)| head_is(v, x)),
         ExprKind::List(xs) | ExprKind::Tuple(xs) => xs.first().is_some_and(|v| head_is(v, x)),

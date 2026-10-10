@@ -90,6 +90,8 @@ fn irrefutable(p: &Pat) -> bool {
     match p {
         Pat::Wild | Pat::Bind(_) => true,
         Pat::Tuple(xs) => xs.iter().all(irrefutable),
+        Pat::Or(xs) => xs.iter().any(irrefutable),
+        Pat::List { head, rest: Some(_), tail } => head.is_empty() && tail.is_empty(),
         _ => false,
     }
 }
@@ -103,7 +105,7 @@ fn tail_resumes(e: &Expr) -> bool {
         _ if is_resume(e) => true,
         ExprKind::Block(stmts) => matches!(stmts.last(), Some(Stmt::Expr(x)) if tail_resumes(x)) && !stmts[..stmts.len() - 1].iter().any(|s| matches!(s, Stmt::Expr(x) | Stmt::Let(_, x) if is_resume(x))),
         ExprKind::If(_, t, Some(f)) => tail_resumes(t) && tail_resumes(f),
-        ExprKind::Match(_, arms) => arms.iter().all(|a| tail_resumes(&a.body)),
+        ExprKind::Match(_, arms, _) => arms.iter().all(|a| tail_resumes(&a.body)),
         _ => false,
     }
 }
@@ -117,7 +119,7 @@ fn has_post(e: &Expr) -> bool {
             _ => false,
         }),
         ExprKind::If(_, t, f) => has_post(t) || f.as_ref().is_some_and(|f| has_post(f)),
-        ExprKind::Match(_, arms) => arms.iter().any(|a| has_post(&a.body)),
+        ExprKind::Match(_, arms, _) => arms.iter().any(|a| has_post(&a.body)),
         _ => false,
     }
 }
@@ -138,22 +140,16 @@ fn strip_resume(e: &Expr) -> Expr {
             **t = strip_resume(t);
             **f = strip_resume(f);
         }
-        ExprKind::Match(_, arms) => arms.iter_mut().for_each(|a| a.body = strip_resume(&a.body)),
+        ExprKind::Match(_, arms, _) => arms.iter_mut().for_each(|a| a.body = strip_resume(&a.body)),
         _ => {}
     }
     e
 }
 
 fn pat_binds(p: &Pat, out: &mut HashSet<String>) {
-    match p {
-        Pat::Bind(n) => {
-            out.insert(n.clone());
-        }
-        Pat::Tuple(xs) => xs.iter().for_each(|x| pat_binds(x, out)),
-        Pat::Ctor { args: CtorArgs::Positional(xs), .. } => xs.iter().for_each(|x| pat_binds(x, out)),
-        Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().for_each(|(_, x)| pat_binds(x, out)),
-        _ => {}
-    }
+    let mut names = Vec::new();
+    p.binds(&mut names);
+    out.extend(names);
 }
 
 fn binders(e: &Expr) -> HashSet<String> {
@@ -161,7 +157,7 @@ fn binders(e: &Expr) -> HashSet<String> {
     walk_expr(e, &mut |x| {
         match &x.kind {
             ExprKind::Lambda { params, .. } => out.extend(params.iter().cloned()),
-            ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) | ExprKind::Handle(_, arms) => arms.iter().for_each(|a| pat_binds(&a.pat, &mut out)),
+            ExprKind::Match(_, arms, _) | ExprKind::Catch(_, arms) | ExprKind::Handle(_, arms) => arms.iter().for_each(|a| pat_binds(&a.pat, &mut out)),
             ExprKind::Block(stmts) => {
                 for s in stmts {
                     match s {
@@ -217,7 +213,7 @@ fn free_in(e: &Expr, bound: &mut Vec<String>, out: &mut HashSet<String>) {
             bound.extend(params.iter().cloned());
             free_in(body, bound, out);
         }
-        ExprKind::Match(x, arms) | ExprKind::Catch(x, arms) | ExprKind::Handle(x, arms) => {
+        ExprKind::Match(x, arms, _) | ExprKind::Catch(x, arms) | ExprKind::Handle(x, arms) => {
             free_in(x, bound, out);
             for a in arms {
                 let m = bound.len();
@@ -489,7 +485,7 @@ impl Lower<'_> {
                 };
                 *f = Some(Box::new(fe));
             }
-            ExprKind::Match(_, arms) => {
+            ExprKind::Match(_, arms, _) => {
                 for a in arms.iter_mut() {
                     let mut h = HashSet::new();
                     pat_binds(&a.pat, &mut h);
@@ -811,7 +807,7 @@ impl Lower<'_> {
                 Some(f) => Some(Box::new(self.tr(f, sc)?)),
                 None => None,
             }),
-            ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) => {
+            ExprKind::Match(s, arms, _) | ExprKind::Catch(s, arms) => {
                 let s2 = Box::new(self.tr(s, sc)?);
                 let mut out = Vec::new();
                 for a in arms {
@@ -821,7 +817,7 @@ impl Lower<'_> {
                     };
                     out.push(Arm { pat: a.pat.clone(), guard, body: self.tr(&a.body, sc)? });
                 }
-                if matches!(e.kind, ExprKind::Match(..)) { ExprKind::Match(s2, out) } else { ExprKind::Catch(s2, out) }
+                if matches!(e.kind, ExprKind::Match(..)) { ExprKind::Match(s2, out, MatchForm::Arms) } else { ExprKind::Catch(s2, out) }
             }
             ExprKind::Record { ctor, fields } => ExprKind::Record { ctor: ctor.clone(), fields: fields.iter().map(|(n, x)| Ok((n.clone(), self.tr(x, sc)?))).collect::<Result<_, String>>()? },
             ExprKind::List(xs) => ExprKind::List(self.list(xs, sc)?),
@@ -879,7 +875,7 @@ impl Lower<'_> {
                 } else {
                     let t = self.fresh("x");
                     let arms = vec![Arm { pat: p.clone(), guard: None, body }, Arm { pat: Pat::Wild, guard: None, body: ex(ExprKind::Unit) }];
-                    Ev::Inline(vec![Pat::Bind(t.clone())], ex(ExprKind::Match(Box::new(ex(ExprKind::Name(t))), arms)))
+                    Ev::Inline(vec![Pat::Bind(t.clone())], ex(ExprKind::Match(Box::new(ex(ExprKind::Name(t))), arms, MatchForm::Arms)))
                 };
                 let ev = match ev {
                     Ev::Inline(ps, b) if !binders(it).is_disjoint(&arm_free(&Arm { pat: p.clone(), guard: None, body: orig.clone() })) => {

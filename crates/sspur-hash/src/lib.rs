@@ -292,7 +292,7 @@ impl<'a> Hasher<'a> {
                             add(n);
                         }
                     }
-                    ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) | ExprKind::Handle(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, &mut add)),
+                    ExprKind::Match(_, arms, _) | ExprKind::Catch(_, arms) | ExprKind::Handle(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, &mut add)),
                     ExprKind::Table(rows) => rows.iter().flat_map(|r| r.cells.iter()).for_each(|c| {
                         if let Cell::Pat(p) = c {
                             pat_names(p, &mut add)
@@ -775,8 +775,9 @@ impl<'a> Hasher<'a> {
                     None => enc.tag(b'u'),
                 }
             }
-            ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
+            ExprKind::Match(s, arms, _) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
                 enc.tag(match e.kind {
+                    ExprKind::Match(_, _, MatchForm::IfIs) => b'J',
                     ExprKind::Match(..) => b'M',
                     ExprKind::Catch(..) => b'K',
                     _ => b'H',
@@ -970,11 +971,45 @@ impl<'a> Hasher<'a> {
     }
 
     fn pat(&self, enc: &mut Enc, p: &Pat, group: &HashMap<String, usize>) {
+        self.pat_in(enc, p, group, false)
+    }
+
+    /// `again`: the names were bound by an earlier alternative of an or-pattern, so a
+    /// binding is encoded as a reference to that local.
+    fn pat_in(&self, enc: &mut Enc, p: &Pat, group: &HashMap<String, usize>, again: bool) {
+        let sub = |enc: &mut Enc, x: &Pat| self.pat_in(enc, x, group, again);
         match p {
             Pat::Wild => enc.tag(b'_'),
+            Pat::Bind(n) if again => {
+                enc.tag(b'X');
+                enc.uint(enc.locals.iter().rev().position(|l| l == n).unwrap_or(usize::MAX) as u64);
+            }
             Pat::Bind(n) => {
                 enc.tag(b'x');
                 enc.locals.push(n.clone());
+            }
+            Pat::Or(alts) => {
+                enc.tag(b'|');
+                enc.uint(alts.len() as u64);
+                for (i, a) in alts.iter().enumerate() {
+                    self.pat_in(enc, a, group, again || i > 0);
+                }
+            }
+            Pat::List { head, rest, tail } => {
+                enc.tag(b'[');
+                enc.uint(head.len() as u64);
+                head.iter().for_each(|x| sub(enc, x));
+                match rest {
+                    None => enc.tag(0),
+                    Some(r) => {
+                        enc.tag(if r.is_some() { 2 } else { 1 });
+                        if let Some(r) = r {
+                            sub(enc, &Pat::Bind(r.clone()));
+                        }
+                        enc.uint(tail.len() as u64);
+                        tail.iter().for_each(|x| sub(enc, x));
+                    }
+                }
             }
             Pat::Int(n) => {
                 enc.tag(b'i');
@@ -988,7 +1023,7 @@ impl<'a> Hasher<'a> {
             Pat::Tuple(xs) => {
                 enc.tag(b't');
                 enc.uint(xs.len() as u64);
-                xs.iter().for_each(|x| self.pat(enc, x, group));
+                xs.iter().for_each(|x| sub(enc, x));
             }
             Pat::Ctor { name, args } => {
                 enc.tag(b'c');
@@ -1001,7 +1036,7 @@ impl<'a> Hasher<'a> {
                     CtorArgs::Positional(xs) => {
                         enc.tag(1);
                         enc.uint(xs.len() as u64);
-                        xs.iter().for_each(|x| self.pat(enc, x, group));
+                        xs.iter().for_each(|x| sub(enc, x));
                     }
                     CtorArgs::Record(fs) => {
                         enc.tag(2);
@@ -1010,7 +1045,7 @@ impl<'a> Hasher<'a> {
                         enc.uint(sorted.len() as u64);
                         for (f, sp) in sorted {
                             enc.str(f);
-                            self.pat(enc, sp, group);
+                            sub(enc, sp);
                         }
                     }
                 }
@@ -1036,7 +1071,8 @@ fn pat_names(p: &Pat, add: &mut impl FnMut(&str)) {
                 CtorArgs::None => {}
             }
         }
-        Pat::Tuple(xs) => xs.iter().for_each(|x| pat_names(x, add)),
+        Pat::Tuple(xs) | Pat::Or(xs) => xs.iter().for_each(|x| pat_names(x, add)),
+        Pat::List { head, tail, .. } => head.iter().chain(tail).for_each(|x| pat_names(x, add)),
         _ => {}
     }
 }

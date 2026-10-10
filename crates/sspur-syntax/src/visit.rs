@@ -38,7 +38,7 @@ pub fn children(e: &Expr) -> Vec<&Expr> {
                 out.push(f);
             }
         }
-        ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
+        ExprKind::Match(s, arms, _) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
             out.push(s);
             for a in arms {
                 if let Some(g) = &a.guard {
@@ -135,7 +135,7 @@ pub fn walk_expr_mut(e: &mut Expr, f: &mut impl FnMut(&mut Expr)) {
                 walk_expr_mut(x, f);
             }
         }
-        ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
+        ExprKind::Match(s, arms, _) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
             walk_expr_mut(s, f);
             for a in arms {
                 if let Some(g) = &mut a.guard {

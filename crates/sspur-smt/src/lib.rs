@@ -593,6 +593,13 @@ impl<'a> Enc<'a> {
             (Pat::Tuple(ps), _) => ps.iter().for_each(|p| self.bind_pat(p, None)),
             (Pat::Ctor { args: CtorArgs::Positional(ps), .. }, _) => ps.iter().for_each(|p| self.bind_pat(p, None)),
             (Pat::Ctor { args: CtorArgs::Record(fs), .. }, _) => fs.iter().for_each(|(_, p)| self.bind_pat(p, None)),
+            (p @ (Pat::Or(_) | Pat::List { .. }), _) => {
+                let mut names = Vec::new();
+                p.binds(&mut names);
+                for n in names {
+                    self.env.last_mut().unwrap().insert(n, Bind::Lazy);
+                }
+            }
             _ => {}
         }
     }
@@ -734,7 +741,7 @@ impl<'a> Enc<'a> {
                 };
                 self.merge(&ct, av, bv, e)
             }
-            ExprKind::Match(s, arms) => {
+            ExprKind::Match(s, arms, _) => {
                 if !self.goals.is_empty() {
                     self.fail();
                     return self.fresh_e(e);

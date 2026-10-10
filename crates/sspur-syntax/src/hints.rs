@@ -37,6 +37,15 @@ pub fn syntax_hint(src: &str, e: &SyntaxError) -> Option<String> {
     if e.code == "E_LEX_STRING" && e.msg.contains('{') {
         return h("'{' starts an interpolation; a literal '{' is '\\{'");
     }
+    if e.code == "E_PARSE_IS" {
+        return h("put the pattern test first, 'if e is p and cond then', or parenthesize the value: 'if (a and b) is true then'");
+    }
+    if e.code == "E_PARSE_PATTERN" && e.msg.contains("at most one '..'") {
+        return h("keep one '..' per list pattern: '[first, ..rest]', '[..init, last]' or '[first, .., last]'");
+    }
+    if word == "is" {
+        return h("'is' tests a pattern right after 'if': 'if e is p then a else b'; elsewhere use 'match'");
+    }
     let prev = src[..line_start].trim_end_matches('\n').rsplit('\n').next().unwrap_or("");
     if e.code == "E_PARSE_BLOCK" && prev.contains("=>") {
         return h("indent a lambda's block 2 deeper than the line the lambda starts on; its last line is the value, then ')'");

@@ -956,7 +956,7 @@ impl Parser {
                     return self.err("E_PARSE_ARMS", "expected at least one '|' arm");
                 }
                 let kind = if is_match {
-                    ExprKind::Match(Box::new(scrut), arms)
+                    ExprKind::Match(Box::new(scrut), arms, MatchForm::Arms)
                 } else {
                     ExprKind::Catch(Box::new(scrut), arms)
                 };
@@ -1020,8 +1020,59 @@ impl Parser {
         }
     }
 
-    fn if_rest(&mut self, start: Span, if_indent: u32) -> PResult<Expr> {
+    /// `e is p` or `e is p and guard` after `if` (and the foreign `let p = e`), as the
+    /// scrutinee, pattern and guard; `None` for a plain condition.
+    fn if_cond(&mut self) -> PResult<Result<(Expr, Pat, Option<Expr>), Expr>> {
+        if matches!(self.peek(), Tok::Ident(w) if w == "let") && matches!(self.peek_at(1), Tok::Ident(_) | Tok::Int(_) | Tok::Str(_) | Tok::Kw("true" | "false") | Tok::Sym("(" | "[" | "_" | "-")) {
+            self.bump();
+            let p = self.pat()?;
+            self.expect_sym("=")?;
+            let scrut = self.expr()?;
+            self.note("if let p = e -> if e is p");
+            return Ok(Ok((scrut, p, None)));
+        }
+        let save = self.pos;
         let c = self.expr()?;
+        if !matches!(self.peek(), Tok::Ident(w) if w == "is") {
+            return Ok(Err(c));
+        }
+        let loose = match &c.kind {
+            ExprKind::Binary(op, ..) => op.prec() < 4,
+            ExprKind::Unary(UnOp::Not, _) | ExprKind::If(..) | ExprKind::Match(..) | ExprKind::Catch(..) | ExprKind::Handle(..) | ExprKind::Lambda { implicit: false, .. } => true,
+            _ => false,
+        };
+        if loose && !self.parenthesized(save, self.pos) {
+            return self.err("E_PARSE_IS", "'is' would test the whole condition before it");
+        }
+        self.bump();
+        let p = self.pat()?;
+        let guard = if self.eat_kw("and") { Some(self.expr()?) } else { None };
+        Ok(Ok((c, p, guard)))
+    }
+
+    /// Whether the tokens `from..to` are one parenthesized group.
+    fn parenthesized(&self, from: usize, to: usize) -> bool {
+        if to < from + 2 || !matches!(self.toks[from].tok, Tok::Sym("(")) {
+            return false;
+        }
+        let mut depth = 0;
+        for (i, t) in self.toks[from..to].iter().enumerate() {
+            match t.tok {
+                Tok::Sym("(") => depth += 1,
+                Tok::Sym(")") => {
+                    depth -= 1;
+                    if depth == 0 && from + i + 1 != to {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        depth == 0
+    }
+
+    fn if_rest(&mut self, start: Span, if_indent: u32) -> PResult<Expr> {
+        let c = self.if_cond()?;
         self.expect_kw("then")?;
         let t = self.branch()?;
         let is_elif = |t: &Tok| matches!(t, Tok::Ident(w) if w == "elif");
@@ -1041,7 +1092,15 @@ impl Parser {
             None
         };
         self.line_indent = if_indent;
-        Ok(Expr::new(ExprKind::If(Box::new(c), Box::new(t), e), start.to(self.prev_span())))
+        let span = start.to(self.prev_span());
+        Ok(match c {
+            Err(c) => Expr::new(ExprKind::If(Box::new(c), Box::new(t), e), span),
+            Ok((scrut, pat, guard)) => {
+                let other = e.map_or_else(|| Expr::new(ExprKind::Unit, span), |e| *e);
+                let arms = vec![Arm { pat, guard, body: t }, Arm { pat: Pat::Wild, guard: None, body: other }];
+                Expr::new(ExprKind::Match(Box::new(scrut), arms, MatchForm::IfIs), span)
+            }
+        })
     }
 
     fn path_assign_ahead(&self, mut i: usize) -> bool {
@@ -1379,8 +1438,71 @@ impl Parser {
         Ok(vec![Stmt::Expr(self.expr()?)])
     }
 
+    /// A pattern, with `|` between alternatives.
     fn pat(&mut self) -> PResult<Pat> {
+        let first = self.pat_one()?;
+        if !self.is_sym("|") || self.doubled("|") {
+            return Ok(first);
+        }
+        let mut alts = Vec::new();
+        let mut push = |p: Pat| match p {
+            Pat::Or(xs) => alts.extend(xs),
+            p => alts.push(p),
+        };
+        push(first);
+        while self.is_sym("|") && !self.doubled("|") {
+            self.bump();
+            push(self.pat_one()?);
+        }
+        Ok(Pat::Or(alts))
+    }
+
+    fn list_pat(&mut self) -> PResult<Pat> {
+        self.expect_sym("[")?;
+        let (mut head, mut rest, mut tail) = (Vec::new(), None, Vec::new());
+        while !self.is_sym("]") {
+            let spread = match self.peek() {
+                Tok::Sym("..") => Some(None),
+                Tok::Sym("...") => Some(Some("...rest -> ..rest")),
+                Tok::Sym("*") if matches!(self.peek_at(1), Tok::Ident(_)) => Some(Some("*rest -> ..rest")),
+                _ => None,
+            };
+            if let Some(note) = spread {
+                if rest.is_some() {
+                    return self.err("E_PARSE_PATTERN", "a list pattern has at most one '..'");
+                }
+                self.bump();
+                if let Some(n) = note {
+                    self.note(n);
+                }
+                let name = match self.peek().clone() {
+                    Tok::Ident(n) if !is_upper(&n) => {
+                        self.bump();
+                        Some(n)
+                    }
+                    Tok::Sym("_") => {
+                        self.bump();
+                        None
+                    }
+                    _ => None,
+                };
+                rest = Some(name);
+            } else if rest.is_some() {
+                tail.push(self.pat()?);
+            } else {
+                head.push(self.pat()?);
+            }
+            if !self.eat_sym(",") {
+                break;
+            }
+        }
+        self.expect_sym("]")?;
+        Ok(Pat::List { head, rest, tail })
+    }
+
+    fn pat_one(&mut self) -> PResult<Pat> {
         match self.peek().clone() {
+            Tok::Sym("[") => self.list_pat(),
             Tok::Sym("_") => {
                 self.bump();
                 Ok(Pat::Wild)
@@ -1862,13 +1984,7 @@ impl Parser {
 }
 
 fn pat_binds(p: &Pat, out: &mut Vec<String>) {
-    match p {
-        Pat::Bind(n) => out.push(n.clone()),
-        Pat::Tuple(xs) => xs.iter().for_each(|x| pat_binds(x, out)),
-        Pat::Ctor { args: CtorArgs::Positional(xs), .. } => xs.iter().for_each(|x| pat_binds(x, out)),
-        Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().for_each(|(_, x)| pat_binds(x, out)),
-        _ => {}
-    }
+    p.binds(out)
 }
 
 pub fn has_placeholder(e: &Expr) -> bool {
@@ -1896,7 +2012,7 @@ fn tail_return(e: &mut Expr) -> bool {
             _ => false,
         },
         ExprKind::If(_, t, Some(f)) => tail_return(t) | tail_return(f),
-        ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) => arms.iter_mut().fold(false, |h, a| tail_return(&mut a.body) | h),
+        ExprKind::Match(_, arms, _) | ExprKind::Catch(_, arms) => arms.iter_mut().fold(false, |h, a| tail_return(&mut a.body) | h),
         _ => false,
     }
 }

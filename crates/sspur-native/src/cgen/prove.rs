@@ -99,22 +99,16 @@ fn plain_var(c: &str) -> bool {
 }
 
 pub(super) fn pat_names(p: &Pat, out: &mut HashSet<String>) {
-    match p {
-        Pat::Bind(n) => {
-            out.insert(n.clone());
-        }
-        Pat::Tuple(ps) => ps.iter().for_each(|p| pat_names(p, out)),
-        Pat::Ctor { args: CtorArgs::Positional(ps), .. } => ps.iter().for_each(|p| pat_names(p, out)),
-        Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().for_each(|(_, p)| pat_names(p, out)),
-        _ => {}
-    }
+    let mut names = Vec::new();
+    p.binds(&mut names);
+    out.extend(names);
 }
 
 fn binders_expr(e: &Expr, out: &mut HashSet<String>) {
     visit::walk_expr(e, &mut |x| {
         match &x.kind {
             ExprKind::Lambda { params, .. } => out.extend(params.iter().cloned()),
-            ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, out)),
+            ExprKind::Match(_, arms, _) | ExprKind::Catch(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, out)),
             ExprKind::Block(stmts) => binders_stmts(stmts, out),
             ExprKind::Table(rows) => rows.iter().flat_map(|r| &r.cells).for_each(|c| {
                 if let Cell::Pat(p) = c {

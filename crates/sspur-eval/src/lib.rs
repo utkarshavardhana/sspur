@@ -137,6 +137,8 @@ fn pat_rebinds(p: &Pat, env: &Env) -> bool {
         Pat::Tuple(ps) => ps.iter().any(|p| pat_rebinds(p, env)),
         Pat::Ctor { args: CtorArgs::Positional(ps), .. } => ps.iter().any(|p| pat_rebinds(p, env)),
         Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().any(|(_, p)| pat_rebinds(p, env)),
+        Pat::Or(ps) => ps.iter().any(|p| pat_rebinds(p, env)),
+        Pat::List { head, rest, tail } => head.iter().chain(tail).any(|p| pat_rebinds(p, env)) || matches!(rest, Some(Some(r)) if env.cell(r).is_some()),
         _ => false,
     }
 }
@@ -380,7 +382,7 @@ impl Interp {
                 }
                 _ => None,
             },
-            ExprKind::Match(s, arms) => {
+            ExprKind::Match(s, arms, _) => {
                 let v = self.eval(s, env).ok()?;
                 for a in arms {
                     let inner = Env::child(env);
@@ -926,7 +928,7 @@ impl Interp {
                     Ok(Clause::Done(Value::Unit))
                 }
             }
-            ExprKind::Match(s, arms) => {
+            ExprKind::Match(s, arms, _) => {
                 let v = self.eval(s, env)?;
                 for a in arms {
                     let inner = Env::child(env);
@@ -1206,7 +1208,7 @@ impl Interp {
                     Ok(Value::Unit)
                 }
             }
-            ExprKind::Match(s, arms) => {
+            ExprKind::Match(s, arms, _) => {
                 let v = self.eval(s, env)?;
                 match self.match_arms(&v, arms, env)? {
                     Some(r) => Ok(r),
@@ -1512,6 +1514,19 @@ impl Interp {
             (Pat::Str(a), Value::Str(b)) => a.as_str() == &**b,
             (Pat::Bool(a), Value::Bool(b)) => a == b,
             (Pat::Tuple(ps), Value::Tuple(vs)) => ps.len() == vs.len() && ps.iter().zip(vs.iter()).all(|(p, v)| self.bind_pat(p, v, env)),
+            (Pat::Or(alts), _) => alts.iter().any(|a| self.bind_pat(a, v, env)),
+            (Pat::List { head, rest, tail }, Value::List(xs)) => {
+                let (h, t, n) = (head.len(), tail.len(), xs.len());
+                let fits = if rest.is_some() { n >= h + t } else { n == h };
+                if !(fits && head.iter().zip(xs.iter()).all(|(p, x)| self.bind_pat(p, x, env)) && tail.iter().zip(&xs[n - t..]).all(|(p, x)| self.bind_pat(p, x, env))) {
+                    return false;
+                }
+                if let Some(Some(r)) = rest {
+                    let mid = if h == 0 && t == 0 { v.clone() } else { Value::List(Rc::new(xs[h..n - t].to_vec())) };
+                    self.own_define(env, r, mid);
+                }
+                true
+            }
             (Pat::Ctor { name, args }, _) => match (name.as_str(), args, v) {
                 ("some", CtorArgs::Positional(ps), Value::Opt(Some(x))) => self.bind_pat(&ps[0], x, env),
                 ("none", _, Value::Opt(None)) => true,

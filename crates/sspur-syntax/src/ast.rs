@@ -381,7 +381,7 @@ pub enum ExprKind {
     Unary(UnOp, Box<Expr>),
     Range(Box<Expr>, Box<Expr>),
     If(Box<Expr>, Box<Expr>, Option<Box<Expr>>),
-    Match(Box<Expr>, Vec<Arm>),
+    Match(Box<Expr>, Vec<Arm>, MatchForm),
     Catch(Box<Expr>, Vec<Arm>),
     Handle(Box<Expr>, Vec<Arm>),
     Block(Vec<Stmt>),
@@ -441,6 +441,66 @@ pub enum Pat {
     Bool(bool),
     Tuple(Vec<Pat>),
     Ctor { name: String, args: CtorArgs },
+    /// `p1 | p2`: the first alternative that matches; every alternative binds the same names.
+    Or(Vec<Pat>),
+    /// `[a, b]`, `[a, ..rest]`, `[..init, z]`, `[a, .., z]`: `head` elements, then with `rest` any
+    /// number of elements (bound as a list when named), then `tail` elements.
+    List { head: Vec<Pat>, rest: Option<Option<String>>, tail: Vec<Pat> },
+}
+
+impl Pat {
+    /// The names this pattern binds, in order (an or-pattern's first alternative).
+    pub fn binds(&self, out: &mut Vec<String>) {
+        match self {
+            Pat::Bind(n) => out.push(n.clone()),
+            Pat::Tuple(xs) | Pat::Ctor { args: CtorArgs::Positional(xs), .. } => xs.iter().for_each(|x| x.binds(out)),
+            Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().for_each(|(_, x)| x.binds(out)),
+            Pat::Or(alts) => {
+                if let Some(a) = alts.first() {
+                    a.binds(out)
+                }
+            }
+            Pat::List { head, rest, tail } => {
+                head.iter().for_each(|x| x.binds(out));
+                if let Some(Some(r)) = rest {
+                    out.push(r.clone());
+                }
+                tail.iter().for_each(|x| x.binds(out));
+            }
+            _ => {}
+        }
+    }
+
+    /// Every sub-pattern, this one first.
+    pub fn walk(&self, f: &mut impl FnMut(&Pat)) {
+        f(self);
+        match self {
+            Pat::Tuple(xs) | Pat::Or(xs) | Pat::Ctor { args: CtorArgs::Positional(xs), .. } => xs.iter().for_each(|x| x.walk(f)),
+            Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().for_each(|(_, x)| x.walk(f)),
+            Pat::List { head, tail, .. } => head.iter().chain(tail).for_each(|x| x.walk(f)),
+            _ => {}
+        }
+    }
+
+    /// Every sub-pattern, mutably, this one first.
+    pub fn walk_mut(&mut self, f: &mut impl FnMut(&mut Pat)) {
+        f(self);
+        match self {
+            Pat::Tuple(xs) | Pat::Or(xs) | Pat::Ctor { args: CtorArgs::Positional(xs), .. } => xs.iter_mut().for_each(|x| x.walk_mut(f)),
+            Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter_mut().for_each(|(_, x)| x.walk_mut(f)),
+            Pat::List { head, tail, .. } => head.iter_mut().chain(tail.iter_mut()).for_each(|x| x.walk_mut(f)),
+            _ => {}
+        }
+    }
+}
+
+/// How a `match` was written: as arms, or as `if e is p then a else b` (two arms, the
+/// second `_`, whose body is `()` when there was no `else`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum MatchForm {
+    #[default]
+    Arms,
+    IfIs,
 }
 
 #[derive(Clone, Debug, PartialEq)]

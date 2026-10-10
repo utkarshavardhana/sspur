@@ -42,7 +42,7 @@ pub fn apply(d: &mut Def, fix: &Fix) -> bool {
         Fix::PatCtor { from, to } => {
             for e in def_exprs(d) {
                 walk_expr_mut(e, &mut |x| match &mut x.kind {
-                    ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) => arms.iter_mut().for_each(|a| done |= rename_pat(&mut a.pat, from, to)),
+                    ExprKind::Match(_, arms, _) | ExprKind::Catch(_, arms) => arms.iter_mut().for_each(|a| done |= rename_pat(&mut a.pat, from, to)),
                     ExprKind::Block(stmts) => {
                         for s in stmts {
                             if let Stmt::Let(p, _) | Stmt::For(p, _, _) = s {
@@ -159,7 +159,8 @@ fn rename_pat(p: &mut Pat, from: &str, to: &str) -> bool {
             }
             hit
         }
-        Pat::Tuple(xs) => xs.iter_mut().fold(false, |h, x| rename_pat(x, from, to) | h),
+        Pat::Tuple(xs) | Pat::Or(xs) => xs.iter_mut().fold(false, |h, x| rename_pat(x, from, to) | h),
+        Pat::List { head, tail, .. } => head.iter_mut().chain(tail.iter_mut()).fold(false, |h, x| rename_pat(x, from, to) | h),
         _ => false,
     }
 }
@@ -179,7 +180,7 @@ fn taken_names(d: &mut Def) -> Vec<String> {
                     }
                 }
             }
-            ExprKind::Match(_, arms) | ExprKind::Catch(_, arms) | ExprKind::Handle(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, &mut out)),
+            ExprKind::Match(_, arms, _) | ExprKind::Catch(_, arms) | ExprKind::Handle(_, arms) => arms.iter().for_each(|a| pat_names(&a.pat, &mut out)),
             _ => {}
         });
     }
@@ -190,13 +191,7 @@ fn taken_names(d: &mut Def) -> Vec<String> {
 }
 
 fn pat_names(p: &Pat, out: &mut Vec<String>) {
-    match p {
-        Pat::Bind(n) => out.push(n.clone()),
-        Pat::Tuple(xs) => xs.iter().for_each(|x| pat_names(x, out)),
-        Pat::Ctor { args: CtorArgs::Positional(xs), .. } => xs.iter().for_each(|x| pat_names(x, out)),
-        Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().for_each(|(_, x)| pat_names(x, out)),
-        _ => {}
-    }
+    p.binds(out)
 }
 
 #[derive(PartialEq)]
@@ -262,7 +257,7 @@ fn collect_children<'a>(e: &'a mut Expr, out: &mut Vec<&'a mut Expr>) {
                 out.push(f);
             }
         }
-        ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
+        ExprKind::Match(s, arms, _) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
             out.push(s);
             for a in arms {
                 if let Some(g) = &mut a.guard {

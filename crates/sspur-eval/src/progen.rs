@@ -233,6 +233,13 @@ impl Gen {
         self.out.push_str(&format!("fn {p}_gapp[A, e](x: A, f: A -> A ! e) -> A ! e\n= f(f(x))\n\n"));
         self.out.push_str(&format!("fn {p}_lg(a: Int) -> Int ! log\n= do\n  log(\"lg {{a}}\")\n  a * 2 + 1\n\n"));
         self.sig(&format!("{p}_lg"), &[T::Int], T::Int, &["log"]);
+        let (k1, k2) = (self.r.range(-3, 9), self.r.range(1, 5));
+        self.out.push_str(&format!("fn {p}_lfold(xs: List[Int]) -> Int\n= match xs\n  | [] => {k1}\n  | [x] => x % 1000\n  | [x, y, ..rest] => (x - y) % 1000 + {p}_lfold(rest)\n\n"));
+        self.sig(&format!("{p}_lfold"), &[T::List], T::Int, &[]);
+        self.out.push_str(&format!("fn {p}_lends(xs: List[Int]) -> Int\n= match xs\n  | [0] | [{k2}] => {k1}\n  | [first, last] | [first, .., last] => first % 100 - last % 100\n  | [x] => x % 7\n  | [] => -1\n\n"));
+        self.sig(&format!("{p}_lends"), &[T::List], T::Int, &[]);
+        self.out.push_str(&format!("fn {p}_linit(xs: List[Int]) -> List[Int]\n= match xs\n  | [..init, _] if init.len > {k2} => init\n  | [_, ..rest] => rest\n  | [] => [{k1}]\n\n"));
+        self.sig(&format!("{p}_linit"), &[T::List], T::List, &[]);
         let op = ["x * 0.5 + 1.0", "x * x - 2.0", "(x + 1.0) / 3.0", "x - x * 0.25"][self.r.below(4) as usize];
         self.out.push_str(&format!("fn {p}_fl(x: F64, k: Int) -> F64\n= if k <= 0 then x else {p}_fl({op}, k - 1)\n\n"));
         self.sig(&format!("{p}_fl"), &[T::F64, T::Int], T::F64, &[]);
@@ -842,7 +849,78 @@ impl Gen {
         let name = self.fresh("m");
         let c = self.c.clone();
         let p = self.p.clone();
-        match self.r.below(6) {
+        let int_var = |n: &str| Var { name: n.to_string(), ty: T::Int, mutable: false, assignable: false, index_of: None, eff: vec![] };
+        match self.r.below(9) {
+            6 => {
+                let l = self.list(cx, 2);
+                let (x, y, rest) = (self.fresh("q"), self.fresh("q"), self.fresh("q"));
+                self.line(ind, &format!("{name} = match {l}"));
+                let e0 = self.int(cx, 1);
+                cx.vars.push(int_var(&x));
+                let e1 = self.int(cx, 2);
+                cx.vars.push(int_var(&y));
+                cx.vars.push(Var { name: rest.clone(), ty: T::List, mutable: false, assignable: false, index_of: None, eff: vec![] });
+                let e2 = self.int(cx, 2);
+                cx.vars.truncate(cx.vars.len() - 3);
+                let k = self.r.range(-2, 4);
+                match self.r.below(4) {
+                    0 => {
+                        self.line(ind + 1, &format!("| [] => {e0}"));
+                        self.line(ind + 1, &format!("| [{x}] => {e1}"));
+                        self.line(ind + 1, &format!("| [{x}, {y}, ..{rest}] => {e2}"));
+                    }
+                    1 => {
+                        self.line(ind + 1, &format!("| [{k}, ..{rest}] | [_, {k}, ..{rest}] => {e0} + {rest}.len"));
+                        self.line(ind + 1, &format!("| [{x}, .., {y}] => {e1} - {y}"));
+                        self.line(ind + 1, &format!("| _ => {e0}"));
+                    }
+                    2 => {
+                        self.line(ind + 1, &format!("| [..{rest}, {y}, {x}] if {x} > {k} => {e2}"));
+                        self.line(ind + 1, &format!("| [{x}] | [_, {x}] => {e1}"));
+                        self.line(ind + 1, &format!("| [_, _, ..] | [] => {e0}"));
+                    }
+                    _ => {
+                        let s = self.expr(cx, T::Sum, 1);
+                        self.line(ind + 1, &format!("| [] => {e0}"));
+                        self.line(ind + 1, &format!("| [{x}, ..] => match ({x} % 3, {s})"));
+                        self.line(ind + 2, &format!("| (0, {c}A{{x: {y}}}) | (1, {c}B{{y: {y}}}) => {y} + {x}"));
+                        self.line(ind + 2, &format!("| (-1 | 2 | -2, _) => {x}"));
+                        self.line(ind + 2, &format!("| (_, {c}C) => {k}"));
+                        self.line(ind + 2, &format!("| _ => {x} * 2"));
+                    }
+                }
+            }
+            7 => {
+                let s = self.expr(cx, T::Sum, 2);
+                let x = self.fresh("q");
+                cx.vars.push(int_var(&x));
+                let e1 = self.int(cx, 2);
+                cx.vars.pop();
+                let e2 = self.int(cx, 1);
+                let n = self.int(cx, 1);
+                let (k1, k2) = (self.r.range(-3, 2), self.r.range(3, 6));
+                self.line(ind, &format!("{name} = match {s}"));
+                self.line(ind + 1, &format!("| {c}A{{x: {x}}} | {c}B{{y: {x}}} => {e1}"));
+                self.line(ind + 1, &format!("| {c}C => match {n} % 8"));
+                self.line(ind + 2, &format!("| {k1} | {k2} | 7 => {e2}"));
+                self.line(ind + 2, "| _ => 1");
+            }
+            8 => {
+                let x = self.fresh("q");
+                let k = self.r.range(-5, 5);
+                let (head, ty) = if self.r.chance(50) {
+                    (format!("{}.first", self.list(cx, 2)), "some")
+                } else {
+                    (self.expr(cx, T::Sum, 2), "sum")
+                };
+                cx.vars.push(int_var(&x));
+                let e1 = self.int(cx, 2);
+                cx.vars.pop();
+                let e2 = self.int(cx, 1);
+                let pat = if ty == "some" { format!("some({x})") } else { format!("{c}A{{x: {x}}} | {c}B{{x: {x}}}") };
+                let guard = if self.r.chance(50) { format!(" and {x} > {k}") } else { String::new() };
+                self.line(ind, &format!("{name} = if {head} is {pat}{guard} then {e1} else {e2}"));
+            }
             5 => {
                 let lg = self.fresh("lg");
                 let m = self.fresh("s");

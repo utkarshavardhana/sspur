@@ -1498,6 +1498,9 @@ struct Snapshot {
 }
 
 struct Cx<'a> {
+    /// Declarations an or-pattern's bindings need ahead of the condition that sets them;
+    /// whoever calls `pattern` emits them before the test.
+    pat_decls: String,
     check: &'a CheckOutput,
     eligible: &'a HashSet<String>,
     alias_refines: &'a HashMap<String, Expr>,
@@ -1568,6 +1571,7 @@ struct Cx<'a> {
 impl<'a> Cx<'a> {
     fn new(check: &'a CheckOutput, eligible: &'a HashSet<String>, alias_refines: &'a HashMap<String, Expr>, field_refines: &'a FieldRefines, smt: &'a sspur_smt::Oracle) -> Self {
         Cx {
+            pat_decls: String::new(),
             check,
             eligible,
             alias_refines,
@@ -2974,7 +2978,7 @@ impl<'a> Cx<'a> {
                 };
                 Ok(format!("(({cv}) ? ({av}) : ({bv}))"))
             }
-            ExprKind::Match(s, arms) => self.match_expr(s, arms, &t),
+            ExprKind::Match(s, arms, _) => self.match_expr(s, arms, &t),
             ExprKind::Block(stmts) => self.block(stmts),
             ExprKind::Record { ctor, fields } => {
                 let owner = match ctor {
@@ -3264,7 +3268,9 @@ impl<'a> Cx<'a> {
         for a in arms {
             let mut conds = Vec::new();
             let mut binds = Vec::new();
-            self.pattern(&a.pat, &var, &et, &mut conds, &mut binds)?;
+            let r = self.pattern(&a.pat, &var, &et, &mut conds, &mut binds);
+            arms_code.push_str(&std::mem::take(&mut self.pat_decls));
+            r?;
             self.scopes.push(HashMap::new());
             let mut decl = String::new();
             for (n, expr, bt) in binds {
@@ -3300,7 +3306,9 @@ impl<'a> Cx<'a> {
                     Cell::Pat(p) => {
                         let mut conds = Vec::new();
                         let mut binds = Vec::new();
-                        if let Err(e) = self.pattern(p, &format!("a{i}"), t, &mut conds, &mut binds) {
+                        let r = self.pattern(p, &format!("a{i}"), t, &mut conds, &mut binds);
+                        open.push_str(&std::mem::take(&mut self.pat_decls));
+                        if let Err(e) = r {
                             self.scopes.pop();
                             return Err(e);
                         }
@@ -4148,6 +4156,55 @@ impl<'a> Cx<'a> {
             Pat::Int(k) => conds.push(format!("({v} == {})", lit(*k))),
             Pat::Bool(b) => conds.push(format!("({v} == {})", i64::from(*b))),
             Pat::Str(sl) => conds.push(format!("(cmp_S({v}, str_lit({}, {})) == 0)", c_lit(sl), sl.len())),
+            Pat::Or(alts) => {
+                let mut names = Vec::new();
+                p.binds(&mut names);
+                let mut temps: Vec<(String, String, Type)> = Vec::new();
+                let mut parts = Vec::new();
+                for (i, a) in alts.iter().enumerate() {
+                    let (mut c, mut b) = (Vec::new(), Vec::new());
+                    self.pattern(a, v, t, &mut c, &mut b)?;
+                    if i == 0 {
+                        for n in &names {
+                            let bt = b.iter().find(|x| &x.0 == n).map(|x| x.2.clone()).ok_or("or-pattern alternatives bind different names")?;
+                            let (tmp, ct, zero) = (self.fresh("ob"), self.cty(&bt)?, self.zero(&bt)?);
+                            write!(self.pat_decls, "{ct} {tmp} = {zero}; ").unwrap();
+                            temps.push((n.clone(), tmp, bt));
+                        }
+                    }
+                    let mut sets = Vec::new();
+                    for (n, tmp, _) in &temps {
+                        let e = b.iter().find(|x| &x.0 == n).map(|x| x.1.clone()).ok_or("or-pattern alternatives bind different names")?;
+                        sets.push(format!("{tmp} = {e}"));
+                    }
+                    if !sets.is_empty() {
+                        c.push(format!("({}, 1)", sets.join(", ")));
+                    }
+                    parts.push(if c.is_empty() { "1".to_string() } else { format!("({})", c.join(" && ")) });
+                }
+                conds.push(format!("({})", parts.join(" || ")));
+                binds.extend(temps.into_iter().map(|(n, tmp, bt)| (n, tmp, bt)));
+            }
+            Pat::List { head, rest, tail } => {
+                let et = elem(t, "List").ok_or("bad list pattern")?;
+                let (h, k) = (head.len(), tail.len());
+                conds.push(if rest.is_some() { format!("({v}.len >= {})", h + k) } else { format!("({v}.len == {h})") });
+                for (i, x) in head.iter().enumerate() {
+                    self.pattern(x, &format!("{v}.data[{i}]"), &et, conds, binds)?;
+                }
+                for (j, x) in tail.iter().enumerate() {
+                    self.pattern(x, &format!("{v}.data[{v}.len - {}]", k - j), &et, conds, binds)?;
+                }
+                if let Some(Some(r)) = rest {
+                    let e = if h + k == 0 {
+                        v.to_string()
+                    } else {
+                        let lc = self.cty(t)?;
+                        format!("(({lc}){{{v}.len - {}, {v}.data + {h}, {v}.hdr}})", h + k)
+                    };
+                    binds.push((r.clone(), e, t.clone()));
+                }
+            }
             Pat::Tuple(ps) => {
                 let Type::Tuple(ts) = t else { return Err("bad tuple pattern".into()) };
                 for (i, (p, t)) in ps.iter().zip(ts).enumerate() {
@@ -4205,7 +4262,9 @@ impl<'a> Cx<'a> {
         for a in arms {
             let mut conds = Vec::new();
             let mut binds = Vec::new();
-            self.pattern(&a.pat, &s_, &st, &mut conds, &mut binds)?;
+            let r = self.pattern(&a.pat, &s_, &st, &mut conds, &mut binds);
+            s.push_str(&std::mem::take(&mut self.pat_decls));
+            r?;
             self.scopes.push(HashMap::new());
             let mut decl = String::new();
             for (n, expr, bt) in binds {
@@ -4446,8 +4505,13 @@ impl<'a> Cx<'a> {
                 let tmp = self.fresh("lt");
                 let mut conds = Vec::new();
                 let mut binds = Vec::new();
-                self.pattern(p, &tmp, &t, &mut conds, &mut binds)?;
+                let r = self.pattern(p, &tmp, &t, &mut conds, &mut binds);
+                let decls = std::mem::take(&mut self.pat_decls);
+                r?;
                 let mut out = format!("__auto_type {tmp} = {v}; ");
+                if !decls.is_empty() {
+                    write!(out, "{decls}(void)({}); ", conds.join(" && ")).unwrap();
+                }
                 for (n, expr, bt) in binds {
                     if self.drop_fn(&bt).is_some() {
                         let d = self.owned_decl(&n, &bt, &expr)?;
@@ -4558,6 +4622,7 @@ impl<'a> Cx<'a> {
                 let mut binds = Vec::new();
                 let item = self.fresh("fx");
                 let r = self.pattern(p, &item, &et, &mut conds, &mut binds);
+                let pre = std::mem::take(&mut self.pat_decls);
                 if let Err(e) = r {
                     self.scopes.pop();
                     return Err(e);
@@ -4570,7 +4635,7 @@ impl<'a> Cx<'a> {
                 let body = self.expr(body);
                 self.scopes.pop();
                 let cond = if conds.is_empty() { "1".to_string() } else { conds.join(" && ") };
-                Ok(format!("{{ __auto_type {l} = {lv}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ __auto_type {item} = {l}.data[{i}]; if ({cond}) {{ {decl}(void)({}); }} }} }} ", body?))
+                Ok(format!("{{ __auto_type {l} = {lv}; for (int64_t {i} = 0; {i} < {l}.len; {i}++) {{ __auto_type {item} = {l}.data[{i}]; {pre}if ({cond}) {{ {decl}(void)({}); }} }} }} ", body?))
             }
             Stmt::Expr(e) => Ok(format!("(void)({}); ", self.expr(e)?)),
             Stmt::Fn(_) => Ok(String::new()),
@@ -4710,13 +4775,9 @@ fn is_name(e: &Expr, m: &str) -> bool {
 }
 
 fn pat_binds(p: &Pat, m: &str) -> bool {
-    match p {
-        Pat::Bind(n) => n == m,
-        Pat::Tuple(xs) => xs.iter().any(|x| pat_binds(x, m)),
-        Pat::Ctor { args: CtorArgs::Positional(xs), .. } => xs.iter().any(|x| pat_binds(x, m)),
-        Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().any(|(_, x)| pat_binds(x, m)),
-        _ => false,
-    }
+    let mut names = Vec::new();
+    p.binds(&mut names);
+    names.iter().any(|n| n == m)
 }
 
 const MAP_READS: &[&str] = &["get", "has", "len"];
@@ -4736,7 +4797,7 @@ fn linear(e: &Expr, m: &str, tail: bool) -> bool {
         ExprKind::Field(recv, f) if is_name(recv, m) => f == "len",
         ExprKind::Lambda { body, .. } => !mentions(body, m),
         ExprKind::If(c, t, f) => linear(c, m, false) && linear(t, m, tail) && f.as_ref().is_none_or(|f| linear(f, m, tail)),
-        ExprKind::Match(s, arms) => {
+        ExprKind::Match(s, arms, _) => {
             linear(s, m, false)
                 && arms.iter().all(|a| !pat_binds(&a.pat, m) && a.guard.as_ref().is_none_or(|g| linear(g, m, false)) && linear(&a.body, m, tail))
         }

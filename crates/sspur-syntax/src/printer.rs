@@ -401,23 +401,16 @@ pub fn expr(e: &Expr, ind: usize) -> String {
         ExprKind::Unary(UnOp::Ref, x) => format!("&{}", operand(x, 10, ind)),
         ExprKind::Unary(UnOp::RefMut, x) => format!("&mut {}", operand(x, 10, ind)),
         ExprKind::Range(a, b) => format!("{}..{}", operand(a, 6, ind), operand(b, 6, ind)),
-        ExprKind::If(c, t, Some(f)) if matches!(&t.kind, ExprKind::Block(st) if !matches!(st.as_slice(), [Stmt::Assign(..)])) => {
-            format!("if {} then {}\n{}else {}", expr(c, ind), branch(t, ind + 2), pad(ind + 2), branch(f, ind + 2))
-        }
-        ExprKind::If(c, t, Some(f)) if matches!(t.kind, ExprKind::If(..) | ExprKind::Lambda { .. }) && !expr(t, ind + 4).contains('\n') => {
-            format!("if {} then ({}) else {}", expr(c, ind), expr(t, ind + 4), branch(f, ind))
-        }
-        ExprKind::If(c, t, Some(f)) if matches!(t.kind, ExprKind::If(..) | ExprKind::Match(..) | ExprKind::Catch(..) | ExprKind::Handle(..) | ExprKind::Lambda { .. }) => {
-            format!("if {} then do\n{}{}\n{}else {}", expr(c, ind), pad(ind + 4), expr(t, ind + 4), pad(ind + 2), branch(f, ind + 2))
-        }
-        ExprKind::If(c, t, f) => {
-            let mut s = format!("if {} then {}", expr(c, ind), branch(t, ind));
-            if let Some(f) = f {
-                s.push_str(&format!(" else {}", branch(f, ind)));
+        ExprKind::If(c, t, f) => if_form(&expr(c, ind), t, f.as_deref(), ind),
+        ExprKind::Match(s, arms, MatchForm::IfIs) if arms.len() == 2 && arms[1].pat == Pat::Wild && arms[1].guard.is_none() => {
+            let mut c = format!("{} is {}", operand(s, 4, ind), pat(&arms[0].pat));
+            if let Some(g) = &arms[0].guard {
+                c.push_str(&format!(" and {}", operand(g, 2, ind)));
             }
-            s
+            let f = (arms[1].body.kind != ExprKind::Unit).then_some(&arms[1].body);
+            if_form(&c, &arms[0].body, f, ind)
         }
-        ExprKind::Match(s, arms) => format!("match {}{}", arms_head(s, ind), print_arms(arms, ind)),
+        ExprKind::Match(s, arms, _) => format!("match {}{}", arms_head(s, ind), print_arms(arms, ind)),
         ExprKind::Catch(s, arms) => format!("catch {}{}", arms_head(s, ind), print_arms(arms, ind)),
         ExprKind::Handle(s, arms) => format!("handle {}{}", arms_head(s, ind), print_arms(arms, ind)),
         ExprKind::Block(stmts) => {
@@ -441,6 +434,21 @@ pub fn expr(e: &Expr, ind: usize) -> String {
             let items: Vec<String> = ups.iter().map(|(p, v)| format!("{} := {}", path(p, ind), expr(v, ind))).collect();
             format!("{} with {}", operand(base, 1, ind), items.join(", "))
         }
+    }
+}
+
+fn if_form(c: &str, t: &Expr, f: Option<&Expr>, ind: usize) -> String {
+    let nested = matches!(t.kind, ExprKind::If(..) | ExprKind::Match(_, _, MatchForm::IfIs) | ExprKind::Lambda { .. });
+    match f {
+        Some(f) if matches!(&t.kind, ExprKind::Block(st) if !matches!(st.as_slice(), [Stmt::Assign(..)])) => {
+            format!("if {c} then {}\n{}else {}", branch(t, ind + 2), pad(ind + 2), branch(f, ind + 2))
+        }
+        Some(f) if nested && !expr(t, ind + 4).contains('\n') => format!("if {c} then ({}) else {}", expr(t, ind + 4), branch(f, ind)),
+        Some(f) if nested || matches!(t.kind, ExprKind::Match(..) | ExprKind::Catch(..) | ExprKind::Handle(..)) => {
+            format!("if {c} then do\n{}{}\n{}else {}", pad(ind + 4), expr(t, ind + 4), pad(ind + 2), branch(f, ind + 2))
+        }
+        Some(f) => format!("if {c} then {} else {}", branch(t, ind), branch(f, ind)),
+        None => format!("if {c} then {}", branch(t, ind)),
     }
 }
 
@@ -556,6 +564,18 @@ pub fn pat(p: &Pat) -> String {
                 })
                 .collect();
             format!("{}{{{}}}", name, items.join(", "))
+        }
+        Pat::Or(alts) => alts.iter().map(|a| match a {
+            Pat::Or(_) => format!("({})", pat(a)),
+            _ => pat(a),
+        }).collect::<Vec<_>>().join(" | "),
+        Pat::List { head, rest, tail } => {
+            let mut items: Vec<String> = head.iter().map(pat).collect();
+            if let Some(r) = rest {
+                items.push(format!("..{}", r.as_deref().unwrap_or("")));
+                items.extend(tail.iter().map(pat));
+            }
+            format!("[{}]", items.join(", "))
         }
     }
 }

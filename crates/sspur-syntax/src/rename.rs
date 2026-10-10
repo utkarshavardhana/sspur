@@ -225,6 +225,13 @@ impl Renamer<'_> {
                 binds.insert(n.clone());
             }
             Pat::Tuple(xs) => xs.iter_mut().for_each(|x| self.pat(x, binds)),
+            Pat::Or(xs) => xs.iter_mut().for_each(|x| self.pat(x, binds)),
+            Pat::List { head, rest, tail } => {
+                if let Some(Some(r)) = rest {
+                    binds.insert(r.clone());
+                }
+                head.iter_mut().chain(tail.iter_mut()).for_each(|x| self.pat(x, binds));
+            }
             Pat::Ctor { name, args } => {
                 self.hit(name);
                 match args {
@@ -285,7 +292,7 @@ impl Renamer<'_> {
                     scope.pop();
                 }
             }
-            ExprKind::Match(s, arms) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
+            ExprKind::Match(s, arms, _) | ExprKind::Catch(s, arms) | ExprKind::Handle(s, arms) => {
                 self.expr(s, scope);
                 for a in arms {
                     let mut binds = HashSet::new();

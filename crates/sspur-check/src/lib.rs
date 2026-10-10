@@ -3,6 +3,7 @@ mod builtins;
 pub mod own;
 mod deploy;
 mod json;
+mod pats;
 mod statics;
 mod traits;
 pub mod elab;
@@ -171,6 +172,8 @@ struct Checker {
     frames: Vec<Frame>,
     diags: Vec<Diag>,
     cur_def: Option<String>,
+    /// Where pattern diagnostics point: the arm being checked.
+    pat_span: Span,
     cur_ret: Option<Type>,
     lambda_depth: u32,
     in_test: bool,
@@ -284,6 +287,7 @@ pub fn check_skipping(m: &Module, skip: &HashSet<String>) -> CheckOutput {
         frames: vec![],
         diags: vec![],
         cur_def: None,
+        pat_span: Span::default(),
         cur_ret: None,
         lambda_depth: 0,
         in_test: false,
@@ -564,6 +568,8 @@ fn irrefutable(p: &Pat) -> bool {
     match p {
         Pat::Wild | Pat::Bind(_) => true,
         Pat::Tuple(xs) => xs.iter().all(irrefutable),
+        Pat::Or(xs) => xs.iter().any(irrefutable),
+        Pat::List { head, rest: Some(_), tail } => head.is_empty() && tail.is_empty(),
         _ => false,
     }
 }
@@ -2105,11 +2111,14 @@ impl Checker {
                     }
                 }
             }
-            ExprKind::Match(s, arms) => {
+            ExprKind::Match(s, arms, form) => {
                 let st = self.infer(s, None);
                 let out = exp.cloned().unwrap_or_else(|| self.fresh());
                 let before = self.diags.len();
                 self.check_arms(&st, arms, &out);
+                if !self.diags[before..].iter().any(Diag::is_error) {
+                    self.report_unreachable(&st, arms, *form);
+                }
                 if arms.last().is_some_and(|a| matches!(a.body.kind, ExprKind::Match(..))) && self.diags[before..].iter().any(Diag::is_error) {
                     let i = self.diags[before..].iter().position(Diag::is_error).unwrap() + before;
                     self.diags[i].hint = Some("a match inside an arm takes every arm below it; move the inner match into a helper fn".into());
@@ -2618,6 +2627,7 @@ impl Checker {
         let frame = self.frames.pop().unwrap();
         let ctor_ty = arms.iter().find_map(|a| match &a.pat {
             Pat::Ctor { name, .. } => self.ctors.get(name).map(|c| c.ty.clone()),
+            Pat::Or(alts) => alts.iter().find_map(|p| if let Pat::Ctor { name, .. } = p { self.ctors.get(name).map(|c| c.ty.clone()) } else { None }),
             _ => None,
         });
         let err_ty = match ctor_ty {
@@ -2635,7 +2645,11 @@ impl Checker {
                 }
             }
         };
+        let before = self.diags.len();
         self.check_arms(&err_ty, arms, &bt);
+        if !self.diags[before..].iter().any(Diag::is_error) {
+            self.report_unreachable(&err_ty, arms, MatchForm::Arms);
+        }
         self.pending_types.push(((span.start, span.end, 9), err_ty.clone()));
         let err_ty = self.resolve(&err_ty);
         let atom = format!("fail[{err_ty}]");
@@ -2787,7 +2801,9 @@ impl Checker {
     fn check_arms(&mut self, st: &Type, arms: &[Arm], out: &Type) {
         for a in arms {
             self.scopes.push(HashMap::new());
+            self.pat_span = a.body.span;
             self.check_pat(&a.pat, st);
+            self.pat_span = Span::default();
             if let Some(g) = &a.guard {
                 let gt = self.infer(g, Some(&Type::bool()));
                 self.expect(&Type::bool(), &gt, g.span);
@@ -2797,48 +2813,6 @@ impl Checker {
             self.expect(out, &bt, a.body.span);
             self.scopes.pop();
         }
-    }
-
-    fn missing_cases(&self, st: &Type, arms: &[Arm]) -> Vec<String> {
-        let unguarded: Vec<&Pat> = arms.iter().filter(|a| a.guard.is_none()).map(|a| &a.pat).collect();
-        if unguarded.iter().any(|p| irrefutable(p)) {
-            return vec![];
-        }
-        let covered = |name: &str| {
-            unguarded.iter().any(|p| match p {
-                Pat::Ctor { name: n, args } if n == name => match args {
-                    CtorArgs::None => true,
-                    CtorArgs::Positional(xs) => xs.iter().all(irrefutable),
-                    CtorArgs::Record(fs) => fs.iter().all(|(_, p)| irrefutable(p)),
-                },
-                Pat::Bool(b) => (if *b { "true" } else { "false" }) == name,
-                _ => false,
-            })
-        };
-        if let Type::Tuple(ts) = self.resolve(st) {
-            return self.missing_tuple_cases(&ts, &unguarded);
-        }
-        let needed: Vec<String> = match self.resolve(st) {
-            Type::Con(n, _) if n == "Bool" => vec!["true".into(), "false".into()],
-            Type::Con(n, _) if n == "Opt" => vec!["some(_)".into(), "none".into()],
-            Type::Con(n, _) if n == "Res" => vec!["ok(_)".into(), "err(_)".into()],
-            Type::Con(n, _) => match self.types.get(&n) {
-                Some(TypeInfo { kind: TypeKind::Sum(vs), .. }) => vs.clone(),
-                _ => vec!["_".into()],
-            },
-            _ => vec!["_".into()],
-        };
-        needed
-            .into_iter()
-            .filter(|n| {
-                let key = n.split('(').next().unwrap();
-                n == "_" || !covered(key)
-            })
-            .map(|n| match self.ctors.get(&n) {
-                Some(CtorInfo { fields: Some(_), .. }) => format!("{n}{{..}}"),
-                _ => n,
-            })
-            .collect()
     }
 
     fn type_has(&self, t: &Type, name: &str) -> bool {
@@ -2976,58 +2950,6 @@ impl Checker {
         }
     }
 
-    fn missing_tuple_cases(&self, ts: &[Type], arms: &[&Pat]) -> Vec<String> {
-        let spaces: Vec<Vec<String>> = ts.iter().map(|t| self.ctor_space(t).unwrap_or_else(|| vec!["_".into()])).collect();
-        let total: usize = spaces.iter().map(Vec::len).product();
-        if total > 4096 {
-            return vec!["_".into()];
-        }
-        let covers = |p: &Pat, c: &str| match p {
-            Pat::Wild | Pat::Bind(_) => true,
-            Pat::Bool(b) => (if *b { "true" } else { "false" }) == c,
-            Pat::Ctor { name, args } => {
-                name == c
-                    && match args {
-                        CtorArgs::None => true,
-                        CtorArgs::Positional(xs) => xs.iter().all(irrefutable),
-                        CtorArgs::Record(fs) => fs.iter().all(|(_, p)| irrefutable(p)),
-                    }
-            }
-            _ => false,
-        };
-        let mut missing = Vec::new();
-        for idx in 0..total {
-            let mut rem = idx;
-            let combo: Vec<&String> = spaces
-                .iter()
-                .map(|s| {
-                    let c = &s[rem % s.len()];
-                    rem /= s.len();
-                    c
-                })
-                .collect();
-            let hit = arms.iter().any(|p| match p {
-                Pat::Tuple(ps) if ps.len() == combo.len() => ps.iter().zip(&combo).all(|(p, c)| covers(p, c)),
-                _ => false,
-            });
-            if !hit {
-                let shown: Vec<String> = combo
-                    .iter()
-                    .map(|c| match self.ctors.get(*c) {
-                        Some(CtorInfo { fields: Some(_), .. }) => format!("{c}{{..}}"),
-                        _ if c.as_str() == "some" || c.as_str() == "ok" || c.as_str() == "err" => format!("{c}(_)"),
-                        _ => (*c).clone(),
-                    })
-                    .collect();
-                missing.push(format!("({})", shown.join(", ")));
-                if missing.len() >= 5 {
-                    break;
-                }
-            }
-        }
-        missing
-    }
-
     fn check_pat(&mut self, p: &Pat, ty: &Type) {
         match p {
             Pat::Wild => {}
@@ -3038,6 +2960,22 @@ impl Checker {
             Pat::Int(_) => self.expect(ty, &Type::int(), Span::default()),
             Pat::Str(_) => self.expect(ty, &Type::str(), Span::default()),
             Pat::Bool(_) => self.expect(ty, &Type::bool(), Span::default()),
+            Pat::Or(alts) => self.check_or_pat(alts, ty),
+            Pat::List { head, rest, tail } => {
+                let et = self.fresh();
+                let lt = Type::list(et.clone());
+                if !self.unify(&lt, ty) {
+                    let t = self.resolve(ty);
+                    self.push_diag("E_PATTERN_TYPE", "error", self.pat_span, format!("a list pattern cannot match {t}"), Some("list patterns like '[x, ..rest]' match a List".into()), vec![]);
+                }
+                for x in head.iter().chain(tail) {
+                    self.check_pat(x, &et);
+                }
+                if let Some(Some(r)) = rest {
+                    let t = self.resolve(&lt);
+                    self.bind(r, t, false);
+                }
+            }
             Pat::Tuple(xs) => {
                 let ts: Vec<Type> = xs.iter().map(|_| self.fresh()).collect();
                 if !self.unify(&Type::Tuple(ts.clone()), ty) {
@@ -3116,6 +3054,61 @@ impl Checker {
                     }
                 }
             }
+        }
+    }
+
+    /// Checks every alternative against `ty` in a scope of its own, then binds the names
+    /// they share; each must bind the same names with the same types (E_PATTERN_OR_BINDS).
+    fn check_or_pat(&mut self, alts: &[Pat], ty: &Type) {
+        let mut first: Option<(String, Vec<(String, Type)>)> = None;
+        for a in alts {
+            self.scopes.push(HashMap::new());
+            self.check_pat(a, ty);
+            let scope = self.scopes.pop().unwrap();
+            let mut names = Vec::new();
+            a.binds(&mut names);
+            let binds: Vec<(String, Type)> = names.iter().filter_map(|n| scope.get(n).map(|l| (n.clone(), l.ty.clone()))).collect();
+            let Some((p0, b0)) = &first else {
+                first = Some((printer::pat(a), binds));
+                continue;
+            };
+            let here = printer::pat(a);
+            let lacks = |xs: &[(String, Type)], ys: &[(String, Type)]| xs.iter().find(|(n, _)| !ys.iter().any(|(m, _)| m == n)).map(|(n, _)| n.clone());
+            if let Some(n) = lacks(b0, &binds) {
+                self.push_diag("E_PATTERN_OR_BINDS", "error", self.pat_span, format!("'{p0}' binds '{n}' but the alternative '{here}' does not"), Some(format!("bind '{n}' in every alternative, or write '_' for it in all of them")), vec![]);
+            } else if let Some(n) = lacks(&binds, b0) {
+                self.push_diag("E_PATTERN_OR_BINDS", "error", self.pat_span, format!("'{here}' binds '{n}' but the alternative '{p0}' does not"), Some(format!("bind '{n}' in every alternative, or write '_' for it in all of them")), vec![]);
+            } else {
+                for (n, t) in &binds {
+                    let t0 = b0.iter().find(|(m, _)| m == n).map(|(_, t)| t.clone()).unwrap();
+                    if !self.unify(&t0, t) {
+                        let (a0, a1) = (self.resolve(&t0), self.resolve(t));
+                        self.push_diag("E_PATTERN_OR_BINDS", "error", self.pat_span, format!("'{n}' is {a0} in '{p0}' but {a1} in '{here}'"), Some(format!("bind '{n}' to values of one type in every alternative, or split the arm in two")), vec![]);
+                    }
+                }
+            }
+        }
+        if let Some((_, binds)) = first {
+            for (n, t) in binds {
+                let t = self.resolve(&t);
+                self.bind(&n, t, false);
+            }
+        }
+    }
+
+    /// Warns about arms (and alternatives) that earlier arms already cover.
+    fn report_unreachable(&mut self, st: &Type, arms: &[Arm], form: MatchForm) {
+        for u in self.unreachable_arms(st, arms) {
+            let a = &arms[u.arm];
+            let (msg, hint) = match (u.alt, form) {
+                (None, MatchForm::IfIs) => ("the pattern always matches, so the else branch never runs".to_string(), "bind it directly: 'p = e', then use the names".to_string()),
+                (None, _) => (format!("arm {} '| {}' can never match: the arms above cover it", u.arm + 1, printer::pat(&a.pat)), "remove it, or move it above the arm that covers it".to_string()),
+                (Some(j), _) => {
+                    let Pat::Or(alts) = &a.pat else { continue };
+                    (format!("alternative '{}' of arm {} can never match: earlier patterns cover it", printer::pat(&alts[j]), u.arm + 1), "remove that alternative".to_string())
+                }
+            };
+            self.push_diag("W_ARM_UNREACHABLE", "warning", a.body.span, msg, Some(hint), vec![]);
         }
     }
 
@@ -3269,7 +3262,7 @@ fn resume_tail(e: &Expr, bad: &mut Vec<Span>) {
                 resume_tail(f, bad);
             }
         }
-        ExprKind::Match(s, arms) => {
+        ExprKind::Match(s, arms, _) => {
             resume_uses(s, bad);
             for a in arms {
                 if let Some(g) = &a.guard {
@@ -3348,6 +3341,16 @@ fn cell_matches(c: &Cell, name: &str, p: &Point) -> Option<bool> {
     match c {
         Cell::Any => Some(true),
         Cell::Cond(e) => eval_cond(e, name, p),
+        Cell::Pat(Pat::Or(alts)) => {
+            let rs: Vec<Option<bool>> = alts.iter().map(|a| cell_matches(&Cell::Pat(a.clone()), name, p)).collect();
+            if rs.contains(&Some(true)) {
+                Some(true)
+            } else if rs.iter().all(|r| *r == Some(false)) {
+                Some(false)
+            } else {
+                None
+            }
+        }
         Cell::Pat(pat) => match (pat, p) {
             (Pat::Wild | Pat::Bind(_), _) => Some(true),
             (Pat::Int(a), Point::Int(b)) => Some(a == b),

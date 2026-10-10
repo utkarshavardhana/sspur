@@ -334,7 +334,7 @@ impl Cx<'_> {
                 locals.truncate(mark);
                 ok
             }
-            ExprKind::Match(x, arms) => {
+            ExprKind::Match(x, arms, _) => {
                 if !self.par_expr(x, locals, lam, sc, visiting) {
                     return false;
                 }

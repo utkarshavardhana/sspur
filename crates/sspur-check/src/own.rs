@@ -805,7 +805,7 @@ impl<'a> A<'a> {
                 self.st = Self::join(&s1, &self.st);
                 if matches!(kt, K::Plain) { kf } else { kt }
             }
-            ExprKind::Match(s, arms) => {
+            ExprKind::Match(s, arms, _) => {
                 let ks = self.expr(s, Use::Read);
                 if let K::Res(t) = &ks {
                     self.err_hint("E_RES_MATCH", s.span, format!("cannot match on resource {t}"), Some("read its fields, or destructure it with a let pattern"));
@@ -1015,6 +1015,17 @@ impl<'a> A<'a> {
             Pat::Tuple(xs) => xs.iter().for_each(|x| self.bind_pat(x, &K::Plain, mutable, span)),
             Pat::Ctor { args: CtorArgs::Positional(xs), .. } => xs.iter().for_each(|x| self.bind_pat(x, &K::Plain, mutable, span)),
             Pat::Ctor { args: CtorArgs::Record(fs), .. } => fs.iter().for_each(|(_, x)| self.bind_pat(x, &K::Plain, mutable, span)),
+            Pat::Or(alts) => {
+                if let Some(a) = alts.first() {
+                    self.bind_pat(a, &K::Plain, mutable, span)
+                }
+            }
+            Pat::List { head, rest, tail } => {
+                head.iter().chain(tail).for_each(|x| self.bind_pat(x, &K::Plain, mutable, span));
+                if let Some(Some(r)) = rest {
+                    self.declare(r, K::Plain, mutable);
+                }
+            }
             _ => {}
         }
     }

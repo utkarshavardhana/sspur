@@ -88,7 +88,7 @@ Compiling C++ with `-O3` instead of `-O2` doesn't change these results.
 
 ## Installation
 
-SSPUR runs on macOS (arm64, x86_64) and Linux (x86_64, aarch64). Native compilation needs `clang` at run time. On macOS it comes with the Xcode Command Line Tools (`xcode-select --install`); on Debian or Ubuntu, `sudo apt install clang`.
+SSPUR runs on macOS (arm64, x86_64), Linux (x86_64, aarch64) and Windows (x86_64, arm64). Native compilation needs `clang` at run time. On macOS it comes with the Xcode Command Line Tools (`xcode-select --install`); on Debian or Ubuntu, `sudo apt install clang`.
 
 ### Homebrew
 
@@ -105,6 +105,16 @@ curl -fsSL https://raw.githubusercontent.com/utkarshavardhana/sspur/main/install
 ```
 
 Set `SSPUR_VERSION=0.2.1` to pin a version, or `SSPUR_INSTALL_DIR` to install somewhere else.
+
+### Windows
+
+In PowerShell, this downloads the release zip, verifies its checksum, installs `sspur.exe` into `%LOCALAPPDATA%\sspur\bin` and adds it to your user `PATH`:
+
+```powershell
+irm https://raw.githubusercontent.com/utkarshavardhana/sspur/main/install.ps1 | iex
+```
+
+Or unpack `sspur-vX.Y.Z-x86_64-pc-windows-msvc.zip` from a release. Native compilation needs LLVM (`winget install LLVM.LLVM`) and the Visual Studio Build Tools; see [installation](https://utkarshavardhana.github.io/sspur/get-started/installation.html#windows).
 
 ### Prebuilt binaries
 

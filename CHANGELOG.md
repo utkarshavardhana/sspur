@@ -4,6 +4,10 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+- Windows support (x86_64, and arm64 release builds). Native code compiles with LLVM's `clang` into a DLL that sspur loads: the runtime's GC heap reserves and commits with `VirtualAlloc`/`VirtualFree`, `par` and the parallel pool run on Win32 threads with SRW locks and condition variables, files go through the C runtime with UTF-8 paths, and `run_cmd` uses `CreateProcessW`. The Windows C is produced by rewriting the POSIX runtime, so the C generated on macOS and Linux is byte-identical to before. The interpreter's `extern` calls follow the Win64 calling convention, `export-c` writes a `.lib` (or a `.dll` and its import library) plus the header, `bind` maps `long` to 32 bits, and `sspur deploy local` builds its host with a small Winsock HTTP client instead of libcurl. The cache is `%LOCALAPPDATA%\sspur`.
+- Releases ship `sspur-vX.Y.Z-x86_64-pc-windows-msvc.zip` and `aarch64-pc-windows-msvc.zip` with their checksums in `SHA256SUMS`, an `install.ps1` (`irm https://raw.githubusercontent.com/utkarshavardhana/sspur/main/install.ps1 | iex`) and a Scoop manifest; CI runs the build, strict native tests, clippy and the corpus check on `windows-latest`.
+
 ## [0.4.0] - 2026-10-10
 
 ### Added

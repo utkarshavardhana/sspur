@@ -342,7 +342,8 @@ test t_ok = chunk(2) == 2 and g(12, 18) == 6 and unwrap(\"5\") == 5
 
 fn assert_trap_parity(tag: &str, src: &str, expected: &[&str]) {
     let path = std::env::temp_dir().join(format!("sspur_{tag}_{}.ssp", std::process::id()));
-    std::fs::write(&path, src).unwrap();
+    // @SELF@ names a file that opens on every platform (Windows cannot open a directory as a file).
+    std::fs::write(&path, src.replace("@SELF@", &path.display().to_string().replace('\\', "/"))).unwrap();
     let mut outputs = Vec::new();
     for mode in ["--interp", "--release"] {
         let out = std::process::Command::new(env!("CARGO_BIN_EXE_sspur")).arg("test").arg(mode).arg(&path).output().unwrap();
@@ -485,7 +486,7 @@ fn zlocal(t: Int) -> Int
 fn fmode(m: Str) -> Bool ! fs
 = open_file(\"/\", m).is_ok
 fn fneg(n: Int) -> Bool ! fs
-= with_file(\"/\", \"r\", f => f.read(n).is_ok).or(false)
+= with_file(\"@SELF@\", \"r\", f => f.read(n).is_ok).or(false)
 test t_fmode = fmode(\"rw\")
 test t_fneg = fneg(-1)
 fn vsum(n: Int) -> Int

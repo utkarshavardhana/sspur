@@ -138,7 +138,7 @@ fn native_kernels_match_the_interpreter_on_gpu_and_cpu() {
         let interp = run(&["run", "--interp"], &path, &[]);
         assert!(interp.0, "{name}: {}", interp.2);
         let gpu = run(&["run"], &path, &[("SSPUR_GPU_TRACE", "1")]);
-        assert_eq!(interp.1, gpu.1, "{name}: GPU tier differs");
+        assert_eq!(interp.1, gpu.1, "{name}: GPU tier differs: {}", gpu.2);
         let cpu = run(&["run"], &path, &[("SSPUR_GPU", "0"), ("SSPUR_GPU_TRACE", "1")]);
         assert_eq!(interp.1, cpu.1, "{name}: CPU fallback differs");
         assert!(!cpu.2.contains(": metal"), "{name}: SSPUR_GPU=0 still used the GPU");

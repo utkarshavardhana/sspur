@@ -1281,7 +1281,7 @@ fn build(src: &str, opt: &str, links: &[String], lto: flags::Lto, names: &HashMa
     }
     let _ = std::fs::rename(&c, dir.join(format!("{}.c", &key[..32])));
     flags::drop_link_leftovers(&tmp);
-    std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
+    flags::publish(&tmp, &lib)?;
     Ok(lib)
 }
 
@@ -1381,7 +1381,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashM
                         return Err(c_failure(&err, &text_of, names));
                     }
                     for &i in batches[b] {
-                        std::fs::rename(wd.join(format!("{}.o", keys[i])), &objs[i]).map_err(|e| e.to_string())?;
+                        flags::publish(&wd.join(format!("{}.o", keys[i])), &objs[i])?;
                     }
                     Ok(())
                 })();
@@ -1411,7 +1411,12 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashM
             link.arg(ld).arg(flags::lto_cache_flag(&cache));
         }
     }
-    let out = link.args(["-shared", "-o"]).arg(&tmp).args(&objs).args(&links).args(flags::sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"))?;
+    let rsp = lib.with_extension(format!("{build}.rsp"));
+    link.args(["-shared", "-o"]).arg(&tmp);
+    flags::inputs(&mut link, &objs, &rsp)?;
+    let out = link.args(&links).args(flags::sys_libs()).output().map_err(|e| format!("cannot run {cc}: {e}"));
+    let _ = std::fs::remove_file(&rsp);
+    let out = out?;
     if !out.status.success() {
         return Err(format!("link failed: {}", String::from_utf8_lossy(&out.stderr).lines().find(|l| !l.trim().is_empty()).unwrap_or("").chars().take(240).collect::<String>()));
     }
@@ -1419,7 +1424,7 @@ fn build_split(src: &str, opt: &str, plan: &Plan, lto: flags::Lto, names: &HashM
         eprintln!("split: linked, {:?}", t0.elapsed());
     }
     flags::drop_link_leftovers(&tmp);
-    std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
+    flags::publish(&tmp, &lib)?;
     let _ = std::fs::write(&memo, format!("{lkey}.{}", std::env::consts::DLL_EXTENSION));
     Ok(lib)
 }

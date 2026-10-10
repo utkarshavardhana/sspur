@@ -18,7 +18,7 @@ TIMEOUT = int(os.environ.get("CORPUS_TIMEOUT", "120"))
 
 def run(args):
     try:
-        return subprocess.run([BIN, *args], capture_output=True, text=True, timeout=TIMEOUT)
+        return subprocess.run([BIN, *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(args, 124, "", "timeout")
 
@@ -32,16 +32,16 @@ def main():
     with tempfile.TemporaryDirectory(prefix="sspur-corpus-") as tmp:
         tasks = {}
         for tf in ("tasks.json", "tasks2.json"):
-            with open(os.path.join(CORPUS, tf)) as f:
+            with open(os.path.join(CORPUS, tf), encoding="utf-8") as f:
                 tasks[tf] = {t["id"]: t for t in json.load(f)}
-        with open(os.path.join(CORPUS, "corpus.jsonl")) as f:
+        with open(os.path.join(CORPUS, "corpus.jsonl"), encoding="utf-8") as f:
             programs = [json.loads(line) for line in f if line.strip()]
         for prog in programs:
             d, t = prog["run"], tasks[prog["tasks"]][prog["id"]]
             hidden = "\n\n".join(f"test hidden_{i} = {x}" for i, x in enumerate(t["tests"]))
             src = t.get("prelude", "") + "\n\n" + prog["src"] + "\n\n" + hidden + "\n"
             path = os.path.join(tmp, f"{os.path.basename(d)}_{t['id']}.ssp")
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(src)
             if run(["check", path]).returncode != 0:
                 continue

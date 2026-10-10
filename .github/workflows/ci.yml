@@ -92,7 +92,7 @@ jobs:
         shell: bash
     env:
       RUST_BACKTRACE: "1"
-      Z3_VERSION: 4.13.4
+      Z3_VERSION: 4.8.12
     steps:
       - name: Keep LF line endings
         run: git config --global core.autocrlf false

@@ -320,7 +320,7 @@ pub fn build_host(c_src: &str, dir: &Path) -> Result<PathBuf, String> {
     if !out.status.success() {
         return Err(format!("{cc} failed:\n{}", String::from_utf8_lossy(&out.stderr).lines().take(20).collect::<Vec<_>>().join("\n")));
     }
-    std::fs::rename(&tmp, &bin).map_err(|e| e.to_string())?;
+    sspur_native::cgen::flags::publish(&tmp, &bin)?;
     Ok(bin)
 }
 

@@ -48,10 +48,14 @@ fn resolve(lib: Option<&str>, sym: &str) -> Result<usize, String> {
     for n in &names {
         let Ok(l) = (unsafe { Library::new(n) }) else { continue };
         loaded = true;
-        if let Ok(p) = unsafe { l.get::<*const ()>(sym.as_bytes()) } {
-            let a = *p as usize;
-            std::mem::forget(l);
-            return Ok(a);
+        // The CRT exports a few C99 names only with a leading underscore (hypotf is an inline over _hypotf).
+        let crt = n == "ucrtbase.dll" || n == "msvcrt.dll";
+        for s in std::iter::once(sym.to_string()).chain(crt.then(|| format!("_{sym}"))) {
+            if let Ok(p) = unsafe { l.get::<*const ()>(s.as_bytes()) } {
+                let a = *p as usize;
+                std::mem::forget(l);
+                return Ok(a);
+            }
         }
     }
     match lib {

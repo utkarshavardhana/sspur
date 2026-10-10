@@ -614,7 +614,8 @@ fn runs(p: &Path, args: &[&str]) -> Option<String> {
 fn candidates(env: &str, names: &[&str]) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::env::var_os(env).map(PathBuf::from).into_iter().collect();
     for n in names {
-        v.push(PathBuf::from(n));
+        // Windows only appends .exe to names without an extension, which "ld.lld" has.
+        v.push(if cfg!(windows) { crate::cgen::flags::on_path(n).unwrap_or_else(|| PathBuf::from(n)) } else { PathBuf::from(n) });
     }
     v
 }
@@ -707,6 +708,6 @@ mod tests {
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         let r = Command::new(&exe).output().unwrap();
         let _ = std::fs::remove_file(&exe);
-        assert_eq!(String::from_utf8_lossy(&r.stdout), "ok 3000000\n");
+        assert_eq!(String::from_utf8_lossy(&r.stdout).replace("\r\n", "\n"), "ok 3000000\n");
     }
 }

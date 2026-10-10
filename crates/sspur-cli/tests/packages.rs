@@ -227,7 +227,7 @@ fn git_dependencies_come_from_a_local_bare_repository() {
     let out = w.ok("app", &["add", &format!("{url}@v0.1.0")]);
     assert!(out.starts_with("added geo 0.1.0 #"), "{out}");
     let lock = std::fs::read_to_string(w.dir.join("app/sspur.lock")).unwrap();
-    assert!(lock.contains(&format!("source = \"git+{url}\"")) && lock.contains("ref = \"v0.1.0\"") && lock.contains("rev = \""), "{lock}");
+    assert!(lock.contains(&format!("source = \"git+{}\"", url.replace('\\', "\\\\"))) && lock.contains("ref = \"v0.1.0\"") && lock.contains("rev = \""), "{lock}");
     assert_eq!(w.ok("app", &["run", "lib.ssp"]), "16");
     w.write("work/lib.ssp", &TEXT.replace("w * w", "w * w * w"));
     git(&work, &["commit", "-qam", "v2"]);

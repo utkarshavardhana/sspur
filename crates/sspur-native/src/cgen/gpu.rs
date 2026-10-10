@@ -1151,7 +1151,7 @@ pub fn shim() -> Result<PathBuf, String> {
         }
     }
     let _ = std::fs::remove_file(&src);
-    std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
+    super::flags::publish(&tmp, &lib)?;
     Ok(lib)
 }
 

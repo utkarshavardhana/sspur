@@ -652,6 +652,9 @@ void ss_trap(int64_t c) {
 }
 "#;
 
+// Windows stdio translates \n to \r\n in text mode; output must match the other platforms byte for byte.
+const WIN_RT: &str = "#include <io.h>\n#include <fcntl.h>\n__attribute__((constructor)) static void ss_binary(void) { _setmode(1, _O_BINARY); _setmode(2, _O_BINARY); }\n";
+
 pub fn llvm_cc() -> PathBuf {
     std::env::var_os("SSPUR_LLVM_CC")
         .map(PathBuf::from)
@@ -664,7 +667,7 @@ pub fn build(ir: &Ir, out: &Path, opt: &str) -> R<PathBuf> {
     let ll = dir.join("prog.ll");
     let rt = dir.join("rt.c");
     std::fs::write(&ll, &ir.text).map_err(|e| e.to_string())?;
-    std::fs::write(&rt, RT).map_err(|e| e.to_string())?;
+    std::fs::write(&rt, if cfg!(windows) { format!("{RT}{WIN_RT}") } else { RT.to_string() }).map_err(|e| e.to_string())?;
     let cc = llvm_cc();
     let o = Command::new(&cc).args([opt, "-w", "-o"]).arg(out).arg(&ll).arg(&rt).args(crate::cgen::flags::sys_libs()).output().map_err(|e| format!("cannot run {}: {e}", cc.display()))?;
     if !o.status.success() {

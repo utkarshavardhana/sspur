@@ -42,7 +42,9 @@ fn bind_generates_externs_from_a_header() {
     let h = root().join("crates/sspur-cli/tests/ffi/sample.h");
     let (out, err, ok) = sspur(&d, &["bind", h.to_str().unwrap(), "--lib", "sample"]);
     assert!(ok, "{err}");
-    assert_eq!(out, BOUND);
+    // long is 32 bits on Windows (LLP64).
+    let want = if cfg!(windows) { BOUND.replace("is_even(n: Int)", "is_even(n: I32)") } else { BOUND.to_string() };
+    assert_eq!(out, want);
     std::fs::write(d.join("bound.ssp"), &out).unwrap();
     let (out, err, ok) = sspur(&d, &["check", "bound.ssp"]);
     assert!(ok, "{out}{err}");

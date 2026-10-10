@@ -134,8 +134,11 @@ pub fn on_path(name: &str) -> Option<PathBuf> {
         if p.is_file() {
             return Some(p);
         }
-        let e = p.with_extension(std::env::consts::EXE_EXTENSION);
-        (cfg!(windows) && p.extension().is_none() && e.is_file()).then_some(e)
+        // Append rather than with_extension: "ld.lld" already has an extension.
+        let mut e = p.into_os_string();
+        e.push(std::env::consts::EXE_SUFFIX);
+        let e = PathBuf::from(e);
+        (cfg!(windows) && e.is_file()).then_some(e)
     };
     let p = Path::new(name);
     if p.components().count() > 1 {
@@ -206,6 +209,30 @@ pub(super) fn build_pgo(src: &str, opt: &str, links: &[String], o: &BuildOpts) -
         return Err(format!("{cc} failed: {}", String::from_utf8_lossy(&out.stderr).lines().take(6).collect::<Vec<_>>().join(" | ")));
     }
     drop_link_leftovers(&tmp);
-    std::fs::rename(&tmp, &lib).map_err(|e| e.to_string())?;
+    publish(&tmp, &lib)?;
     Ok(lib)
+}
+
+/// Windows caps a command line at 32767 characters, so a long list of inputs goes to clang in a response file.
+pub fn inputs(cmd: &mut Command, files: &[PathBuf], rsp: &Path) -> Result<(), String> {
+    if cfg!(windows) && files.iter().map(|f| f.as_os_str().len() + 3).sum::<usize>() > 16000 {
+        let text: String = files.iter().map(|f| format!("\"{}\"\n", f.display().to_string().replace('\\', "/"))).collect();
+        std::fs::write(rsp, text).map_err(|e| e.to_string())?;
+        cmd.arg(format!("@{}", rsp.display()));
+    } else {
+        cmd.args(files);
+    }
+    Ok(())
+}
+
+/// Moves a finished build into the cache. A concurrent build of the same key may have won, and Windows cannot replace a loaded library or running program, so an existing destination counts as done.
+pub fn publish(tmp: &Path, dst: &Path) -> Result<(), String> {
+    match std::fs::rename(tmp, dst) {
+        Ok(()) => Ok(()),
+        Err(_) if dst.exists() => {
+            let _ = std::fs::remove_file(tmp);
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }

@@ -246,8 +246,10 @@ fn copy_file(from: &str, to: &str) -> Value {
     if let Err(e) = dst.set_permissions(permissions(mode)) {
         return err(to, e);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     drop((dst, mode));
+    #[cfg(target_family = "wasm")]
+    let _ = (dst, mode);
     Value::Res(Ok(Rc::new(Value::Unit)))
 }
 
@@ -1027,6 +1029,28 @@ pub(crate) fn std_float(name: &str, x: f64, a: Vec<Value>) -> R {
 }
 
 mod cm {
+    #[cfg(target_family = "wasm")]
+    pub use wasm::*;
+
+    /// The C math library, from the `libm` crate where there is no libc.
+    #[cfg(target_family = "wasm")]
+    mod wasm {
+        macro_rules! libm_fns {
+            ($($n:ident = $f:ident($($a:ident),*);)*) => {$(
+                pub unsafe extern "C" fn $n($($a: f64),*) -> f64 {
+                    libm::$f($($a),*)
+                }
+            )*};
+        }
+        libm_fns! {
+            sinh = sinh(x); cosh = cosh(x); tanh = tanh(x); asinh = asinh(x); acosh = acosh(x); atanh = atanh(x);
+            cbrt = cbrt(x); exp2 = exp2(x); expm1 = expm1(x); log1p = log1p(x); erf = erf(x); erfc = erfc(x);
+            tgamma = tgamma(x); lgamma = lgamma(x); fmod = fmod(x, y); remainder = remainder(x, y);
+            copysign = copysign(x, y); nextafter = nextafter(x, y); fdim = fdim(x, y); fma = fma(x, y, z);
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     unsafe extern "C" {
         fn sinh(x: f64) -> f64;
         fn cosh(x: f64) -> f64;

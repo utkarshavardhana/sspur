@@ -47,9 +47,11 @@ struct Fs {
     exit: Option<i64>,
 }
 
+type Clock = fn() -> (f64, f64);
+
 thread_local! {
     static FS: RefCell<Fs> = RefCell::new(Fs::default());
-    static CLOCK: RefCell<Option<fn() -> (f64, f64)>> = const { RefCell::new(None) };
+    static CLOCK: RefCell<Option<Clock>> = const { RefCell::new(None) };
     static SLEPT: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
 }
 

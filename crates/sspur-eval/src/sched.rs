@@ -245,6 +245,18 @@ impl Interp {
         Ok(Value::Unit)
     }
 
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn chan_recv(&self, c: &ChanCell) -> R<Option<Value>> {
+        if let Some(v) = c.q.borrow_mut().pop_front() {
+            return Ok(Some(v));
+        }
+        if c.closed.get() {
+            return Ok(None);
+        }
+        trap(if self.st().later > 0 { PAR_SEQUENTIAL } else { DEADLOCK })
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn chan_recv(&self, c: &ChanCell) -> R<Option<Value>> {
         loop {
             if let Some(v) = c.q.borrow_mut().pop_front() {
@@ -253,23 +265,17 @@ impl Interp {
             if c.closed.get() {
                 return Ok(None);
             }
-            #[cfg(target_family = "wasm")]
-            return trap(if self.st().later > 0 { PAR_SEQUENTIAL } else { DEADLOCK });
-            #[cfg(not(target_family = "wasm"))]
             let me = {
                 let mut s = self.st();
                 let cur = s.current;
                 s.blocked.push(cur);
                 s.current
             };
-            #[cfg(not(target_family = "wasm"))]
-            {
-                c.waiters.borrow_mut().push_back(me);
-                self.switch(Some(me));
-                if self.st().dead.remove(&me) {
-                    c.waiters.borrow_mut().retain(|t| *t != me);
-                    return trap(DEADLOCK);
-                }
+            c.waiters.borrow_mut().push_back(me);
+            self.switch(Some(me));
+            if self.st().dead.remove(&me) {
+                c.waiters.borrow_mut().retain(|t| *t != me);
+                return trap(DEADLOCK);
             }
         }
     }

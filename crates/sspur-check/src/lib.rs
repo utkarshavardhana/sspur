@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 pub use deploy::{db_op, HTTP_METHODS};
 pub use types::{Row, Type};
 pub use traits::{ImplOut, TraitOut};
-pub use builtins::{BARE_NAMES, STD_GLOBAL_NAMES};
+pub use builtins::{BARE_NAMES, GLOBALS, METHODS, STD_GLOBALS, STD_GLOBAL_NAMES, STD_METHODS, STD_TYPES};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Diag {

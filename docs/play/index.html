@@ -9,8 +9,11 @@
   <link rel="stylesheet" href="play.css">
   <script>
     (function () {
-      var own = localStorage.getItem("sspur-play-theme");
-      var book = (localStorage.getItem("mdbook-theme") || "").replace(/"/g, "");
+      var own = null, book = "";
+      try {
+        own = localStorage.getItem("sspur-play-theme");
+        book = (localStorage.getItem("mdbook-theme") || "").replace(/"/g, "");
+      } catch (e) {}
       var dark = own ? own === "dark" : book ? /^(coal|navy|ayu)$/.test(book) : matchMedia("(prefers-color-scheme: dark)").matches;
       if (dark) document.documentElement.classList.add("dark");
     })();
@@ -61,7 +64,7 @@
   <footer class="status">
     <span id="engine">Loading...</span>
     <span class="spacer"></span>
-    <span id="tokens"></span>
+    <span id="tokens" title="A rough estimate of about four characters per token, not the tokenizers the token benchmark uses"></span>
     <span id="cursor"></span>
   </footer>
   <script type="module" src="main.js"></script>

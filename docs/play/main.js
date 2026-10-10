@@ -6,6 +6,22 @@ const $ = (id) => document.getElementById(id);
 const STORE = "sspur-play-source";
 const THEME = "sspur-play-theme";
 
+// Storage can be off (private windows, strict settings); the page works without it.
+const store = {
+  get: (k) => {
+    try {
+      return localStorage.getItem(k);
+    } catch {
+      return null;
+    }
+  },
+  set: (k, v) => {
+    try {
+      localStorage.setItem(k, v);
+    } catch {}
+  },
+};
+
 // A worker that answers requests in order and can be replaced when it hangs or crashes.
 class Engine {
   constructor(module) {
@@ -42,9 +58,9 @@ class Engine {
 }
 
 function prefersDark() {
-  const own = localStorage.getItem(THEME);
+  const own = store.get(THEME);
   if (own) return own === "dark";
-  const book = localStorage.getItem("mdbook-theme");
+  const book = store.get("mdbook-theme");
   if (book) return ["coal", "navy", "ayu"].includes(book.replace(/"/g, ""));
   return matchMedia("(prefers-color-scheme: dark)").matches;
 }
@@ -69,7 +85,7 @@ async function main() {
   const pick = $("examples");
   examples.forEach((ex, i) => pick.appendChild(new Option(ex.name, String(i))));
   const shared = await fromHash(location.hash).catch(() => null);
-  const initial = shared ?? localStorage.getItem(STORE) ?? examples[0].source;
+  const initial = shared ?? store.get(STORE) ?? examples[0].source;
 
   let seq = 0;
   let timer = 0;
@@ -85,7 +101,7 @@ async function main() {
     api,
     commands: { run: () => go("run"), test: () => go("test"), format, share },
     onChange(text) {
-      localStorage.setItem(STORE, text);
+      store.set(STORE, text);
       if (location.hash) history.replaceState(null, "", location.pathname);
       $("link").hidden = true;
       clearTimeout(timer);
@@ -224,7 +240,7 @@ async function main() {
   };
   $("theme").onclick = () => {
     dark = !dark;
-    localStorage.setItem(THEME, dark ? "dark" : "light");
+    store.set(THEME, dark ? "dark" : "light");
     document.documentElement.classList.toggle("dark", dark);
     editor.setDark(dark);
   };

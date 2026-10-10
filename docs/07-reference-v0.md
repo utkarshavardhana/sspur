@@ -49,9 +49,15 @@ fn name[A, e](p: A, f: A -> A ! e) -> A ! e
 - The return type is required unless it's `Unit`. Uppercase type parameters are types; lowercase ones are effect rows.
 - The body is one expression, or `do` followed by an indented block. The value of the last statement is the result.
 - `x.f(a)` calls `f(x, a)`. User functions win when the first parameter type fits `x`; otherwise the builtin method is used. `x.f` with no parentheses is a field access if `x` has field `f`, otherwise a zero-argument method call.
-- Lambdas: `x => e`, `(a, b) => e`, `() => e`. Lambda bodies are a single expression, and blocks are not allowed inside parentheses, so move multi-line logic into a named `fn`.
+- Lambdas: `x => e`, `(a, b) => e`, `() => e`. A body of several statements is `do` and a block, as for a function, indented deeper than the line the lambda starts on; the last line is the value, and the closing `)` follows it (ADR 0028):
+  ```
+  ys = xs.map(x => do
+    y = x * 2
+    if y > 10 then y else 0)
+  ```
+  A block lambda captures, performs effects and fuses like a one-line one. A `)` on its own line, `x =>` with no `do`, and `x => {` + block + `}` are accepted and stored in the form above. `return` is not allowed inside a lambda (`E_RETURN_IN_LAMBDA`), except as its last line, where `return e` is stored as `e`.
 - `_` inside a call argument or a list element makes a one-parameter lambda. Every `_` in that argument or element is the same parameter: `xs.map(_.price * _.qty)` means `xs.map(x => x.price * x.qty)`, and `[_ + 1, _ * 2]` is a list of two functions. Tuples are not boundaries: `sort_by((-_.1, _.0))` is one lambda returning a tuple.
-- A function name can be passed as a value: `xs.map(fizzbuzz)`, `xs.fold(Leaf, insert)`.
+- A function name can be passed as a value: `xs.map(fizzbuzz)`, `xs.fold(Leaf, insert)`. So can a trait method where the parameter type is known, `xs.map(area)`, `xs.fold(0, add)`: it resolves to the impl for that type (see Traits).
 - There's no overloading and there are no default arguments. Uppercase type parameters can have trait bounds, `[T: Ord + Show]` (see Traits).
 
 ## Traits
@@ -86,7 +92,7 @@ test t = Circle{r: 1.0}.describe == "shape: 3.14" and Vec2{x: 1, y: 2} + Vec2{x:
 - `impl Name for Type` is followed by indented method definitions, written with `Self` or the type. Generic types take parameters, with optional bounds: `impl[T: Show] Show for Box[T]`. An impl must give every method without a default (`E_IMPL_MISSING`), only the trait's methods (`E_IMPL_EXTRA`), with the trait's signatures (`E_IMPL_SIG`), and is for a whole type, not `Box[Int]` (`E_IMPL_TARGET`). Trait parameters are given in the impl: `impl Index[Int, F64] for Row`.
 - Coherence: one impl per (trait, type) in a program (`E_IMPL_DUP`, also against a `derive` or a built-in impl), and an impl lives in the package of its trait or of its type (`E_IMPL_ORPHAN`; wrap a foreign type in a newtype to implement a foreign trait for it).
 - Bounds `[T: Ord]`, `[T: Eq + Show]` and `[R: Index[Int, F64]]` are checked where the function is defined: its body may only use the bounded traits' methods and operators on `T` (`E_TRAIT_MISSING`, `E_OPERATOR`). A call is checked at the call site, which names the missing impl (`E_TRAIT_MISSING: max_of needs T: Ord, but Point does not implement Ord`). An unknown trait is `E_TRAIT_UNKNOWN`, a wrong number of trait arguments `E_TRAIT_ARGS`, and a type parameter that can't be inferred `E_TRAIT_AMBIGUOUS` (an empty list defaults to `Unit` when `Unit` meets the bounds).
-- Resolution is static. Every call of a trait method or overloaded operator becomes a call of the impl for the type at that site, and every function with bounds is compiled once per type it is called with (`max_of__Int`, `max_of__Point`), in the interpreter and in native code alike. A bounded function that calls itself at a growing type is `E_TRAIT_RECURSION`.
+- Resolution is static. Every call of a trait method or overloaded operator becomes a call of the impl for the type at that site (a method passed as a value, `xs.map(area)`, becomes a lambda that calls the impl for the element type; where the parameter type is not known yet, as in `g = area`, write `x => x.area`), and every function with bounds is compiled once per type it is called with (`max_of__Int`, `max_of__Point`), in the interpreter and in native code alike. A bounded function that calls itself at a growing type is `E_TRAIT_RECURSION`.
 
 | Trait | Method | Operators | Built-in impls |
 |---|---|---|---|
@@ -134,7 +140,7 @@ test t = Circle{r: 1.0}.describe == "shape: 3.14" and Vec2{x: 1, y: 2} + Vec2{x:
   | _ => 0.0
   ```
   Patterns: `_`, a name, literals, tuples `(a, 0)`, `Ctor`, `Ctor{field, field: pat}`, `some(p)`, `none`, `ok(p)`, `err(p)`. A non-exhaustive match is a compile error.
-- `return e` exits the function early (not allowed inside lambdas).
+- `return e` exits the function early (not allowed inside lambdas, except as a lambda's last line, where it means `e`).
 - `par(a, b, ...)` runs each argument as a concurrent task and returns the tuple of results (see Concurrency).
 - `?` or `?name` is a typed hole. The compiler reports its expected type and the in-scope values that fit.
 
@@ -505,7 +511,7 @@ The parser accepts these common spellings and stores the canonical form:
 - `if c then` with the branch body indented on the following lines (no `do` needed), and `else` at the start of the next line
 - `for x in xs do`
 - `=` or `=>` at the end of a line, followed by an indented body
-- blocks and multi-line lambdas inside parentheses
+- a block lambda's `)` on its own line, `x =>` and a block without `do`, and `x => {` + block + `}`
 - `'single quoted'` strings
 - keyword expressions as operands, e.g. `total + catch f(x)` followed by its arms
 

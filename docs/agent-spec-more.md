@@ -16,7 +16,7 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 - `raise Ctor{..}`; `catch e` + arms; arms have the type of `e`, so a test compares inside: `catch f(x) == [] | Missing{sku} => .. | _ => false`. Covering every variant removes `fail[E]`.
 - `effect ask() -> Int` (callers `! ask`); `handle e` + `| ask() => resume(21)` (once; `| return(r) =>`). `yield(x)` (`! yield[T]`) makes a generator for `for`.
 - `Item{sku: "a", qty: 1}`, `Item{sku, qty}`; `x with qty := 2, a.b := 3, xs[0] := v`.
-- Lambdas `x => e`, `(a, b) => e` (one expression). `_` makes the innermost call argument a lambda: `sort_by((-_.n, _.name))`; in `f(g(_.a))` it binds inside `g`, so write `x => f(g(x.a))`.
+- Lambdas `x => e`, `(a, b) => e`, or `x => do` + a block indented past the lambda's line, its last line the value and `)` right after; `return` is not allowed inside. `_` makes the innermost call argument a lambda: `sort_by((-_.n, _.name))`; in `f(g(_.a))` it binds inside `g`, so write `x => f(g(x.a))`.
 - `"n={n} {x.name}"` interpolates, so a literal `{` is `\{` (`"\{\"a\":1}"`). Escapes: `\n \t \" \\ \{`, so regex `\d` is `"\\d"`. `+` joins Str and List.
 - Low to high (no `&& || !`): `or, and, not, == != < <= > >=, .., + -, * / %, **`, unary `-`. Int `/` truncates; overflow, `/ 0` and bad `xs[i]` trap.
 
@@ -31,7 +31,7 @@ Block lines: `x = e`, `(a, b) = e`, `var x = e`, `x := e`, `for x in xs` or `whi
 
 ## Traits
 - `trait Sh` + indented `fn area(x: Self) -> F64` lines; `= e` (same or next line) is a default. The first parameter is `Self`, and a method's effects bound its impls'.
-- `impl Sh for Circle` + indented fns with bodies (`Self` or `Circle` in signatures); a generic type: `impl[T: Show] Show for Box[T]`. Call `c.area`, `c.area()` or `area(c)`.
+- `impl Sh for Circle` + indented fns with bodies (`Self` or `Circle` in signatures); a generic type: `impl[T: Show] Show for Box[T]`. Call `c.area`, `c.area()` or `area(c)`; pass `xs.map(area)` where the parameter type is known.
 - Bounds `fn f[T: Ord + Show](xs: List[T])` are checked in `f`; a call with a type that lacks an impl is `E_TRAIT_MISSING`. Bounded fns are compiled per type.
 - Built in: `Eq eq`, `Ord cmp` (negative, 0, positive; `< <= > >=`), `Show show`, `Hash hash`, `Json to_json`, `Add Sub Mul Div` (`+ - * /`; `fn add(a: Self, b: Self) -> Self`), `Neg neg` (`-x`), `Index[K, V] index` (`x[k]`). Numbers, `Str`, `Bool`, lists, tuples, `Opt`, `Map` have them; `==`, `sort` and `.str` stay structural.
 - `type P = {..} derive Eq, Ord, Show, Hash, Json` adds structural impls (variants order by name).

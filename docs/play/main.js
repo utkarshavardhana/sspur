@@ -180,7 +180,7 @@ async function main() {
         box.appendChild(el("div", "line " + (r.failed ? "err" : "quiet"), `${r.passed} passed, ${r.failed} failed (${ms} ms)`));
       }
     } catch (e) {
-      box.replaceChildren(el("div", "line err", e.message === "stopped" ? "Stopped." : "internal error: " + e.message));
+      box.replaceChildren(el("div", "line err", e.message === "stopped" ? "Stopped." : e.message));
     } finally {
       $("stop").hidden = true;
       $("run").disabled = $("test").disabled = false;

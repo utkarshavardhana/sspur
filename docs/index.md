@@ -10,6 +10,8 @@
 {{#include snippets/get-started/cart.out}}
 ```
 
+[Try it in the playground](play/index.html): it checks and runs SSPUR in your browser, with nothing to install.
+
 <div class="sspur-cards">
 
 <div class="sspur-card">
@@ -22,6 +24,7 @@
 <li><a href="get-started/from-go-rust.html">For Go and Rust programmers</a></li>
 <li><a href="get-started/agents.html">For AI agents</a></li>
 <li><a href="get-started/installation.html">Installation</a></li>
+<li><a href="play/index.html">Playground</a></li>
 </ul>
 </div>
 

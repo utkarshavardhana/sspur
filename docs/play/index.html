@@ -7,7 +7,6 @@
   <meta name="description" content="Write, check, run and test SSPUR programs in the browser.">
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="play.css">
-  <link rel="modulepreload" href="editor.bundle.js">
   <script>
     (function () {
       var own = localStorage.getItem("sspur-play-theme");
@@ -50,6 +49,7 @@
           <li><code>fs</code> works on a file system in memory that starts empty, with <code>/</code> and <code>/tmp</code>, on every run. Symlinks aren't supported.</li>
           <li><code>env</code> is empty and <code>args()</code> is <code>[]</code>. <code>read_line</code> sees no input.</li>
           <li><code>time</code> uses the browser's clock. <code>sleep_ms</code> moves the clock forward instead of waiting.</li>
+          <li>Recursion goes a few hundred calls deep rather than 20,000, because a browser gives the page a much smaller stack.</li>
           <li><code>par</code> tasks run one after another, which gives the same results unless a task waits on a channel that a later task fills.</li>
           <li><code>proc</code>, <code>extern fn</code> (C interop), named time zones, packages, services and native code aren't available. They report an error instead of running.</li>
         </ul>

@@ -45,6 +45,8 @@ mdbook build docs
 python3 tools/check_site_links.py docs/book
 ```
 
+The playground (`docs/play/` and `crates/sspur-wasm`) is built into the site by `tools/build_playground.sh`, after `mdbook build docs`. It needs the `wasm32-unknown-unknown` target and `wasm-bindgen-cli` at the version in `Cargo.lock`, which the script installs if they're missing, and npm for the editor bundle; `wasm-opt` is used when it's on the `PATH`. `node tools/playground_test.mjs` runs every example through the wasm build, and with `SSPUR_BIN` set it compares the results with `sspur run --interp`. To try the page, serve `docs/book` with `python3 -m http.server` and open `/play/`.
+
 Code shown in the docs lives in `docs/snippets/`, never inline. The tutorial test (`cargo test --release -p sspur-cli --test tutorial`) runs every transcript (`*.out`) there against the compiler, fails if a page in `get-started/`, `handbook/`, `tutorials/`, `config/` or the cheat sheet has a code block that isn't an include of a snippet, if a `.ssp` snippet is never run, and if `docs/reference/errors.md` misses a diagnostic code the compiler can emit. When you change compiler output, update the transcripts it breaks.
 
 ## Verification

@@ -5,7 +5,7 @@
 
 **A programming language for AI agents to write, read, and maintain.**
 
-Documentation: **[utkarshavardhana.github.io/sspur](https://utkarshavardhana.github.io/sspur/)**, with [Get Started](https://utkarshavardhana.github.io/sspur/get-started/five-minutes.html), the [Handbook](https://utkarshavardhana.github.io/sspur/handbook/index.html), the [Reference](https://utkarshavardhana.github.io/sspur/reference/language.html) and [Tutorials](https://utkarshavardhana.github.io/sspur/tutorials/index.html).
+Documentation: **[utkarshavardhana.github.io/sspur](https://utkarshavardhana.github.io/sspur/)**, with [Get Started](https://utkarshavardhana.github.io/sspur/get-started/five-minutes.html), the [Handbook](https://utkarshavardhana.github.io/sspur/handbook/index.html), the [Reference](https://utkarshavardhana.github.io/sspur/reference/language.html) and [Tutorials](https://utkarshavardhana.github.io/sspur/tutorials/index.html). To try it without installing anything, open the **[Playground](https://utkarshavardhana.github.io/sspur/play/)**, which runs the checker and the interpreter in your browser.
 
 SSPUR is a statically typed, effect-tracked language whose primary users are AI coding agents rather than people. Programs are stored as a typed, content-addressed graph of definitions. Agents change code through atomic, typechecked operations instead of text diffs, and the compiler treats contracts, effects, and tests as first-class data. The surface syntax is designed to spend as few tokens as possible while still compiling to native code that outperforms idiomatic C++.
 
@@ -227,6 +227,7 @@ The documentation is an mdBook in [`docs/`](docs/), published at [utkarshavardha
 
 | Section | Contents |
 |---|---|
+| [Playground](https://utkarshavardhana.github.io/sspur/play/) | Check, run, test and format programs in the browser, with completions, hover types and quick fixes from the compiler. Its source is [`docs/play/`](docs/play/) and [`crates/sspur-wasm`](crates/sspur-wasm/); `tools/build_playground.sh` builds it |
 | [Get Started](https://utkarshavardhana.github.io/sspur/get-started/five-minutes.html) | SSPUR in 5 minutes, pages for [TypeScript](https://utkarshavardhana.github.io/sspur/get-started/from-typescript.html), [Python](https://utkarshavardhana.github.io/sspur/get-started/from-python.html) and [Go and Rust](https://utkarshavardhana.github.io/sspur/get-started/from-go-rust.html) programmers, [SSPUR for AI agents](https://utkarshavardhana.github.io/sspur/get-started/agents.html) and [installation](https://utkarshavardhana.github.io/sspur/get-started/installation.html) |
 | [Handbook](https://utkarshavardhana.github.io/sspur/handbook/index.html) | The language in eleven pages, from the basics to traits, concurrency and packages |
 | [Reference](https://utkarshavardhana.github.io/sspur/reference/language.html) | The [full language reference](docs/reference/language.md) (what `sspur spec --full` prints), the [standard library](https://utkarshavardhana.github.io/sspur/reference/stdlib.html), [effects](https://utkarshavardhana.github.io/sspur/reference/effects.html), [error codes](https://utkarshavardhana.github.io/sspur/reference/errors.html), the [command line](https://utkarshavardhana.github.io/sspur/reference/cli.html), the [agent reference](docs/agent/agent-spec.md) and [JSON schemas](https://utkarshavardhana.github.io/sspur/reference/schema.html) |
@@ -264,12 +265,13 @@ See the [roadmap](docs/design/roadmap.md) for details and exit criteria.
 | `crates/sspur-cli` | The `sspur` command, MCP server, deployer |
 | `crates/sspur-deploy` | The deployer: CloudFormation and IAM from effects, migrations, the local Lambda and DynamoDB emulator, replay |
 | `crates/sspur-hash` | Name resolution and content hashing of definitions |
+| `crates/sspur-wasm` | The checker, formatter and interpreter compiled to WebAssembly for the playground |
 | `docs/` | The documentation site (mdBook, `docs/book.toml`): handbook, reference, tutorials, design docs and ADRs, the agent spec that `sspur spec` embeds, the JSON schemas, and `docs/snippets/`, the checked code every page includes |
 | `examples/` | Small complete programs: hello, a CRUD service, C interop, packages |
 | `tests/` | Suite programs, the ownership soundness suite, bare-metal, GPU and fuzz regression tests |
 | `bench/` | Benchmarks: `native/` against C++, `agent/` and `eval/` for agents, `incremental/`, `llvm/`, and `tokens/`, the Phase 1 token count |
 | `packaging/` | The Homebrew formula template and the Claude Code plugin (`packaging/claude-code/`) |
-| `tools/` | The corpus differential check and the site link check run by CI |
+| `tools/` | The corpus differential check, the site link check, and the playground build and its smoke test, all run by CI |
 
 ## Contributing
 

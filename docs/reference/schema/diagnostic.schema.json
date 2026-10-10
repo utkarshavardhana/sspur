@@ -2,17 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sspur.dev/schema/diagnostic.json",
   "title": "SSPUR diagnostic",
+  "description": "One line of `sspur check --json`, and the items of `diags` in edit and apply results.",
   "type": "object",
-  "required": ["code", "at", "msg"],
+  "required": ["code", "severity", "span", "msg"],
   "additionalProperties": false,
   "properties": {
-    "code": {"type": "string", "pattern": "^[EWI]_[A-Z0-9_]+$"},
-    "at": {"type": "object", "required": ["node"], "properties": {
-      "node": {"type": "string", "pattern": "^#[a-z2-7]{4,52}$"},
-      "ast": {"type": "array", "items": {"type": "integer", "minimum": 0}}}},
-    "msg": {"type": "string", "maxLength": 200},
-    "expected": {"type": "string"},
-    "actual": {"type": "string"},
-    "fix": {"type": "array", "items": {"$ref": "https://sspur.dev/schema/ops.json#/$defs/op"}}
+    "code": {"type": "string", "pattern": "^[EWAN]_[A-Z0-9_]+$", "description": "See docs/reference/errors.md"},
+    "severity": {"enum": ["error", "warning", "audit", "hole"]},
+    "def": {"type": "string", "description": "The definition the diagnostic belongs to"},
+    "span": {"type": "array", "prefixItems": [{"type": "integer", "minimum": 0}, {"type": "integer", "minimum": 0}], "items": false, "description": "Byte offsets [start, end] in the source"},
+    "msg": {"type": "string"},
+    "hint": {"type": "string", "description": "The fix, in words"},
+    "fix": {"type": "array", "items": {"$ref": "https://sspur.dev/schema/ops.json#/$defs/op"}, "description": "Ops that apply the fix"}
   }
 }

@@ -1,6 +1,6 @@
 # Error codes
 
-Every diagnostic has a code. `E_` is an error, `W_` a warning and `A_` an audit note that records something you asked for on purpose. Most errors also print a `hint:` line with the exact fix, and `sspur check --json` carries `fix` ops that an agent can apply as they are (see the [diagnostic schema](schema.md)).
+Every diagnostic has a code. `E_` is an error, `W_` a warning, `N_` a spelling from another language that `sspur edit` rewrites for you, and `A_` an audit note that records something you asked for on purpose. Most errors also print a `hint:` line with the exact fix, and `sspur check --json` carries `fix` ops that an agent can apply as they are (see the [diagnostic schema](schema.md)).
 
 This page lists every code the compiler can emit, grouped by area. The test suite compares it with the compiler's source, so a new code can't ship without a row here.
 
@@ -33,6 +33,12 @@ This page lists every code the compiler can emit, grouped by area. The test suit
 | `E_PARSE_TRAILING` | Tokens left over after a complete definition | Remove them, or start a new line |
 | `E_PARSE_USE` | A malformed `use` line | `use lib` or `use lib.{f, T}` |
 | `E_PARSE_VARIANT` | A sum variant that isn't a capitalized name | `type S = A \| B{f: Int}` |
+
+## Foreign spellings
+
+| Code | Meaning | Fix |
+|---|---|---|
+| `N_FOREIGN` | A spelling from another language that has one meaning in SSPUR (`&&`, `len(x)`, `None`, `.length`, a missing effect), or a `_` that would bind one call further out than it reads | `sspur edit` stores the SSPUR form and lists it after `stored as:`; in a file, apply the diagnostic's `fix` |
 
 ## Names and types
 

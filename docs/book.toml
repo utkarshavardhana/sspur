@@ -3,7 +3,7 @@ title = "SSPUR"
 description = "A programming language for AI agents to write, read, and maintain."
 authors = ["Utkarsha Vardhana"]
 language = "en"
-src = "src"
+src = "."
 
 [build]
 build-dir = "book"

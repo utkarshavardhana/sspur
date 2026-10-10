@@ -2,43 +2,41 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sspur.dev/schema/ops.json",
   "title": "SSPUR transaction",
+  "description": "What `sspur apply` and the MCP tool `apply` accept. A transaction applies completely or not at all.",
   "type": "object",
-  "required": ["base", "ops"],
+  "required": ["ops"],
   "properties": {
-    "base": {"$ref": "#/$defs/hash", "description": "Root the ops apply to"},
-    "agent": {"type": "string"},
-    "reason": {"type": "string"},
+    "base": {"$ref": "#/$defs/hash", "description": "The root the ops were written against; defaults to HEAD when the transaction starts"},
+    "agent": {"type": "string", "description": "Who made the change, recorded in the log"},
+    "reason": {"type": "string", "description": "Why, recorded in the log"},
+    "merge": {"type": "boolean", "description": "Settle a pending sync pull; allows resolve ops"},
     "ops": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/op"}}
   },
   "$defs": {
-    "hash": {"type": "string", "pattern": "^#[a-z2-7]{4,52}$"},
-    "path": {"type": "string", "pattern": "^[a-z_][a-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"},
-    "ref": {"oneOf": [{"$ref": "#/$defs/hash"}, {"$ref": "#/$defs/path"}]},
-    "src": {"type": "string", "description": "SSP-T source of one definition"},
-    "astPath": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+    "hash": {"type": "string", "pattern": "^#?[a-z2-7]{4,52}$"},
+    "path": {"type": "string", "description": "A definition name; an impl is named 'impl Trait for Type'"},
+    "src": {"type": "string", "description": "SSPUR source of exactly one definition"},
     "op": {
       "oneOf": [
         {"type": "object", "required": ["op", "path", "src"], "additionalProperties": false,
          "properties": {"op": {"const": "add"}, "path": {"$ref": "#/$defs/path"}, "src": {"$ref": "#/$defs/src"}}},
         {"type": "object", "required": ["op", "path", "src"], "additionalProperties": false,
          "properties": {"op": {"const": "replace"}, "path": {"$ref": "#/$defs/path"}, "src": {"$ref": "#/$defs/src"}}},
-        {"type": "object", "required": ["op", "target", "at", "with"], "additionalProperties": false,
-         "properties": {"op": {"const": "patch"}, "target": {"$ref": "#/$defs/ref"}, "at": {"$ref": "#/$defs/astPath"}, "with": {"type": "string"}}},
-        {"type": "object", "required": ["op", "hole", "expr"], "additionalProperties": false,
-         "properties": {"op": {"const": "fill"}, "hole": {"type": "string", "pattern": "^\\?[a-z0-9_]*$"}, "expr": {"type": "string"}}},
-        {"type": "object", "required": ["op", "target", "contract"], "additionalProperties": false,
-         "properties": {"op": {"const": "refine"}, "target": {"$ref": "#/$defs/ref"},
-           "contract": {"type": "object", "properties": {
-             "pre": {"type": "string"}, "post": {"type": "string"}, "dec": {"type": "string"}, "cost": {"type": "string"},
-             "effects": {"type": "array", "items": {"type": "string", "pattern": "^[+-]"}}}, "minProperties": 1}}},
         {"type": "object", "required": ["op", "from", "to"], "additionalProperties": false,
          "properties": {"op": {"const": "rename"}, "from": {"$ref": "#/$defs/path"}, "to": {"$ref": "#/$defs/path"}}},
         {"type": "object", "required": ["op", "path"], "additionalProperties": false,
          "properties": {"op": {"const": "remove"}, "path": {"$ref": "#/$defs/path"}}},
+        {"type": "object", "required": ["op", "target", "contract"], "additionalProperties": false,
+         "properties": {"op": {"const": "refine"}, "target": {"$ref": "#/$defs/path"},
+           "contract": {"type": "object", "minProperties": 1, "additionalProperties": false, "properties": {
+             "pre": {"type": "string"}, "post": {"type": "string"},
+             "effects": {"type": "array", "items": {"type": "string", "pattern": "^[+-]"}}}}}},
+        {"type": "object", "required": ["op", "hole", "expr"], "additionalProperties": false,
+         "properties": {"op": {"const": "fill"}, "hole": {"type": "string", "pattern": "^\\?[a-z0-9_]*$"}, "expr": {"type": "string"}, "target": {"$ref": "#/$defs/path"}}},
         {"type": "object", "required": ["op", "target", "kind", "value"], "additionalProperties": false,
-         "properties": {"op": {"const": "attach"}, "target": {"$ref": "#/$defs/ref"}, "kind": {"enum": ["proof", "test", "req"]}, "value": {"type": "string"}}},
+         "properties": {"op": {"const": "attach"}, "target": {"$ref": "#/$defs/path"}, "kind": {"enum": ["test", "req"]}, "value": {"type": "string"}}},
         {"type": "object", "required": ["op", "path", "pick"], "additionalProperties": false,
-         "properties": {"op": {"const": "resolve"}, "path": {"$ref": "#/$defs/path"}, "pick": {"$ref": "#/$defs/hash"}}}
+         "properties": {"op": {"const": "resolve"}, "path": {"$ref": "#/$defs/path"}, "pick": {"enum": ["ours", "theirs"]}}}
       ]
     }
   }

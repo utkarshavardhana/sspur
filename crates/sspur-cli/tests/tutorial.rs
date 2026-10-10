@@ -268,7 +268,7 @@ fn exercised(ssp: &Path, outs: &[PathBuf]) -> bool {
                 cwd = normalize(&cwd.join(&args[1]));
                 return false;
             }
-            args.iter().any(|a| normalize(&cwd.join(a)) == ssp)
+            args.iter().any(|a| normalize(&cwd.join(a)) == normalize(ssp))
         })
     })
 }
@@ -310,7 +310,7 @@ fn doc_code_blocks_are_checked_files() {
                 let full = path.parent().unwrap().join(file);
                 assert!(full.is_file(), "{page}: includes missing file {file}");
                 let full = full.canonicalize().unwrap();
-                if !anchor.is_empty() && !anchor.starts_with(|c: char| c.is_ascii_digit()) {
+                if !anchor.is_empty() && !anchor.starts_with(|c: char| c.is_ascii_digit() || c == ':') {
                     let src = std::fs::read_to_string(&full).unwrap();
                     assert!(src.contains(&format!("ANCHOR: {anchor}")), "{page}: {file} has no anchor {anchor}");
                 }
@@ -341,7 +341,7 @@ fn codes_in(dir: &Path, out: &mut std::collections::BTreeSet<String>) {
         let text = std::fs::read_to_string(f).unwrap();
         for part in text.split('"').skip(1) {
             let code: String = part.chars().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_').collect();
-            if code.len() > 2 && ["E_", "W_", "A_"].iter().any(|p| code.starts_with(p)) && !code.ends_with('_') {
+            if code.len() > 2 && ["E_", "W_", "A_", "N_"].iter().any(|p| code.starts_with(p)) && !code.ends_with('_') {
                 out.insert(code);
             }
         }

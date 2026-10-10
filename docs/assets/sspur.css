@@ -15,3 +15,11 @@ code.language-sspur .hljs-subst { color: inherit; }
 .ayu code.language-sspur .hljs-title { color: #8ab4f8; }
 
 .sspur-links { display: flex; flex-wrap: wrap; gap: 0.5em 1.5em; padding: 0; list-style: none; }
+
+/* Landing page: section cards, as on typescriptlang.org/docs. */
+.sspur-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(16em, 1fr)); gap: 1.2em; margin: 2em 0; }
+.sspur-card { border: 1px solid var(--table-border-color); border-radius: 8px; padding: 0.4em 1.1em 0.8em; background: var(--table-alternate-bg); }
+.sspur-card h3 { margin: 0.5em 0 0.2em; }
+.sspur-card p { margin: 0 0 0.6em; color: var(--fg); opacity: 0.8; font-size: 0.92em; }
+.sspur-card ul { margin: 0; padding-left: 1.1em; }
+.sspur-card li { margin: 0.15em 0; }

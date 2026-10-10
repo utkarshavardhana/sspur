@@ -3,7 +3,7 @@
 Everything SSPUR does goes through one binary, `sspur`. This is its usage text, exactly as the current build prints it (CI checks this page against `sspur --help` and `sspur deploy`):
 
 ```console
-{{#include ../tutorial/cli.out}}
+{{#include ../snippets/reference/cli.out}}
 ```
 
 ## By task
@@ -26,7 +26,7 @@ Everything SSPUR does goes through one binary, `sspur`. This is its usage text, 
 
 ## Queries
 
-The query API is how an agent reads a large codebase without printing all of it. The [graph model](docs/design/02-graph-model.md#6-query-api) describes every query; these are the ones agents use most:
+The query API is how an agent reads a large codebase without printing all of it. The [graph model](../design/02-graph-model.md#6-query-api) describes every query; these are the ones agents use most:
 
 | Query | Prints |
 |---|---|

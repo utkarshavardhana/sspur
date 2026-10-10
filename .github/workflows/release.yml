@@ -25,6 +25,10 @@ jobs:
             os: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04-arm
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -51,7 +55,8 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }} -p sspur-cli
 
       - name: Smoke test
-        if: matrix.target != 'x86_64-apple-darwin'
+        if: matrix.target != 'x86_64-apple-darwin' && matrix.target != 'aarch64-pc-windows-msvc'
+        shell: bash
         run: ./target/${{ matrix.target }}/release/sspur --version
 
       - name: Package
@@ -59,19 +64,27 @@ jobs:
         run: |
           name="sspur-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/sspur" "dist/$name/"
           cp README.md CHANGELOG.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          if [ "$RUNNER_OS" = Windows ]; then
+            cp "target/${{ matrix.target }}/release/sspur.exe" "dist/$name/"
+            archive="$name.zip"
+            (cd dist && 7z a -tzip -bso0 "$archive" "$name")
+          else
+            cp "target/${{ matrix.target }}/release/sspur" "dist/$name/"
+            archive="$name.tar.gz"
+            tar -C dist -czf "dist/$archive" "$name"
+          fi
           cd dist
-          if command -v sha256sum >/dev/null; then sha256sum "$name.tar.gz"; else shasum -a 256 "$name.tar.gz"; fi > "$name.tar.gz.sha256"
-          cat "$name.tar.gz.sha256"
+          if command -v sha256sum >/dev/null; then sha256sum "$archive"; else shasum -a 256 "$archive"; fi | sed 's/ \*/  /' > "$archive.sha256"
+          cat "$archive.sha256"
 
       - uses: actions/upload-artifact@v4
         with:
           name: sspur-${{ matrix.target }}
           path: |
             dist/*.tar.gz
-            dist/*.tar.gz.sha256
+            dist/*.zip
+            dist/*.sha256
           if-no-files-found: error
 
   release:
@@ -87,14 +100,16 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Checksums and Homebrew formula
+      - name: Checksums, Homebrew formula and Scoop manifest
         run: |
           cd dist
-          cat ./*.tar.gz.sha256 | sort -k2 > SHA256SUMS
+          cat ./*.sha256 | sort -k2 > SHA256SUMS
           sha256sum -c SHA256SUMS
           cd ..
           packaging/homebrew/render.sh "${GITHUB_REF_NAME#v}" dist/SHA256SUMS > dist/sspur.rb
           cat dist/sspur.rb
+          packaging/scoop/render.sh "${GITHUB_REF_NAME#v}" dist/SHA256SUMS > dist/sspur.json
+          cat dist/sspur.json
 
       - name: Release notes
         run: |
@@ -111,4 +126,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
             --title "SSPUR ${GITHUB_REF_NAME}" --notes-file notes.md \
-            dist/*.tar.gz dist/SHA256SUMS dist/sspur.rb
+            dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/sspur.rb dist/sspur.json install.sh install.ps1

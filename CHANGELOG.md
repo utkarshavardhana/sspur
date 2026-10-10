@@ -4,6 +4,8 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-11
+
 ### Added
 - Or-patterns (ADR 0029): `| Circle{r} | Ring{r} => r`, nested anywhere (`some(0 | 1)`, `(Red | Blue, _)`); every alternative binds the same names with the same types, or it is `E_PATTERN_OR_BINDS` with a hint naming the name or the two types. Rule cells accept them too.
 - List patterns: `[]`, `[x]`, `[x, y]`, `[x, ..rest]`, `[..init, last]`, `[first, .., last]`, `[_, ..]`, with patterns as elements (`[ok(x), ..]`, `[(a, b), ..rest]`, `["GET", path]`). `rest` is a `List`; in native code it is a view of the matched list, so binding it allocates nothing. `[x, ...rest]` and `[x, *rest]` are stored as `[x, ..rest]`.
@@ -11,6 +13,9 @@ All notable changes to SSPUR are recorded here. The format follows [Keep a Chang
 - Exhaustiveness checking looks inside nested patterns, or-patterns and lists (lengths `[]` plus `[x, ..rest]` cover every list), and lists the missing cases as patterns (`some(none)`, `[_, _, ..]`, `(false, false)`). The new warning `W_ARM_UNREACHABLE` reports a `match` or `catch` arm, or an or-pattern alternative, that the arms above already cover, and an `if e is p` whose pattern always matches.
 - All of it runs in the interpreter and in native code (strict native compiles every function), is printed canonically and hashed; the program generator emits list patterns, or-patterns and `if e is p` for differential fuzzing.
 - A playground at [utkarshavardhana.github.io/sspur/play](https://utkarshavardhana.github.io/sspur/play/) runs the checker, formatter and interpreter in the browser through WebAssembly (`crates/sspur-wasm`), in Web Workers with a Stop button. It checks as you type, offers the checker's fix hints as quick fixes, completes names, fields and methods with their signatures, shows types on hover, and shares programs in the link. Files live in memory, `env` is empty, and `proc`, `extern fn` and native code report that they aren't available. The JIT, the C back end and FFI are behind the `jit` feature of `sspur-native` and the `native` feature of `sspur-eval`, on by default, so the interpreter builds for `wasm32-unknown-unknown`.
+- The docs header links to the playground, and every SSPUR example in the docs has a Run button that opens it, or the whole snippet file it comes from, in the playground.
+- A logo, used in the README, the docs, the favicon and the playground (`docs/assets/logo/`).
+- A `NOTICE` file with authorship and the project name, included in every release archive.
 
 ## [0.4.1] - 2026-10-10
 
@@ -207,7 +212,8 @@ This release covers Phases 3 to 7 of the roadmap and ADRs 0003 to 0024. SSPUR no
 - Language design spec, JSON schemas and the token benchmark.
 - Compiler core: parser, checker, content hashing, interpreter and the `sspur` CLI, with an 11-program suite.
 
-[Unreleased]: https://github.com/utkarshavardhana/sspur/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/utkarshavardhana/sspur/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/utkarshavardhana/sspur/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/utkarshavardhana/sspur/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/utkarshavardhana/sspur/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/utkarshavardhana/sspur/compare/v0.3.1...v0.3.2
